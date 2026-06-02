@@ -1,4 +1,4 @@
-<img src="https://github.com/user-attachments/assets/b3f3d40c-e77e-4769-bec8-e0db222fea19" />
+<img src="https://github.com/user-attachments/assets/73c3e46f-a74a-4d96-9c4f-ae30f28378be" />
 
 # 240-MP
 
@@ -12,11 +12,11 @@ It's built to work in conjuction with MPV which will be installed (or updated) a
 
 | Module Selection | Item Detail |
 | --- | --- |
-| <img src="https://github.com/user-attachments/assets/dc18b9b8-8a8a-4355-b592-7d3f0917a965" /> | <img src="https://github.com/user-attachments/assets/5f102c65-9176-4e69-9123-9eb942213865" /> |
+| <img src="https://github.com/user-attachments/assets/9472d55a-4617-4a7f-80c4-32aa28494048" /> | <img src="https://github.com/user-attachments/assets/4f7d8230-860a-4ace-9370-9f59f43289c0" /> |
 
 | Resume Option | Playback | Settings |
 | --- | --- | --- | 
-| <img src="https://github.com/user-attachments/assets/544834f5-c946-4e3a-9336-4063329faf84" /> | <img width="1280" height="720" alt="04-playback" src="https://github.com/user-attachments/assets/7741bb27-160b-4b4a-9c28-d28ef837c94b" /> | <img src="https://github.com/user-attachments/assets/83557c94-a2ea-4988-9d51-0937242e756a" /> |
+| <img src="https://github.com/user-attachments/assets/490e9ebd-fab2-4fd1-9959-35ebb619eff0" /> | <img src="https://github.com/user-attachments/assets/a3c768c7-6ede-4cdf-9d03-90aee7b8cdfb" /> | <img src="https://github.com/user-attachments/assets/0fd48977-8776-4334-b34e-d12256f23b97" /> |
 
 ## Features
 
@@ -254,11 +254,11 @@ If you don't have a Raspberry Pi and would like to try 240-MP, I also provide a 
 
 | Video 1 | Late Night |
 | --- | --- |
-| <img src="https://github.com/user-attachments/assets/c8d86092-d20f-4e95-ae81-cab25c9b5050" /> | <img src="https://github.com/user-attachments/assets/b45706f2-1420-4020-aa13-9006059655ef" /> |
+| <img src="https://github.com/user-attachments/assets/4ef9be8e-329b-45ac-a7ab-3b242d83c5f5" /> | <img src="https://github.com/user-attachments/assets/04f34b15-1604-47cf-87e7-d1b86e737e18" /> |
 
 | Synthwave | Terminal | T-120 |
 | --- | --- | --- |
-| <img src="https://github.com/user-attachments/assets/173f0b90-3558-4145-974c-ab900a3102e2" /> | <img src="https://github.com/user-attachments/assets/1c51963c-f4ba-4150-8d02-e92481b71890" /> | <img src="https://github.com/user-attachments/assets/7dc74a04-ff54-4ef5-a949-308b0ed5a150" /> |
+| <img src="https://github.com/user-attachments/assets/c649b87e-aec9-4b49-bd5f-36ab7078afed" /> | <img src="https://github.com/user-attachments/assets/749df541-30b9-4b32-8f12-bbd3dfd504c5" /> | <img src="https://github.com/user-attachments/assets/a1aaa0be-f1b9-4ec1-847d-6da56da74dee" /> |
 
 It also supports the display of a user supplied color scheme...
 
