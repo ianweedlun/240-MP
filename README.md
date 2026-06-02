@@ -68,7 +68,7 @@ The following steps will set up an image for your Raspberry Pi with the latest v
 
     | OS > Raspberry Pi OS (other) | Raspberry Pi OS Lite (64-bit) |
     | --- | --- |
-    | <img src="https://github.com/user-attachments/assets/f36ab2a3-ab30-44b5-afec-29be78928db9" /> | <img src="https://github.com/user-attachments/assets/9af86866-02a3-4670-8eb1-60daef77c917" /> |
+    | <img src="https://github.com/user-attachments/assets/bb9f7a47-12b7-4580-abf4-ec8ad22153ba" /> | <img src="https://github.com/user-attachments/assets/30c39fce-99f8-48c9-9ad0-2b39b52690c1" /> |
 
 2) After the write is complete, reconnect the card to your PC and update your boot/config.txt to one of the following:
 
