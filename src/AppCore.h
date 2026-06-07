@@ -4,6 +4,9 @@
 #include <QVariantList>
 #include <QJsonObject>
 #include <QMap>
+#include <QCoreApplication>
+
+class QQmlContext;
 
 struct ModuleEntry {
     QString id;
@@ -16,8 +19,11 @@ struct ModuleEntry {
 
 class AppCore : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
 public:
     explicit AppCore(const QString &appRoot, const QString &dataRoot, QObject *parent = nullptr);
+
+    QString appVersion() const { return QCoreApplication::applicationVersion(); }
 
     Q_INVOKABLE void scan_for_modules();
     Q_INVOKABLE QVariant get_settings();
@@ -33,7 +39,11 @@ public:
     Q_INVOKABLE QString homePath();
     Q_INVOKABLE QString get_module_auth_state(const QString &moduleId);
 
-    void registerBackend(const QString &moduleId, QObject *backend);
+    // Registers a module backend: stores it for action routing, exposes it to QML under
+    // contextProperty, and connects its optional signals/slots by introspection (only
+    // those the backend actually declares). The module ID is stated once, here.
+    void registerModule(const QString &moduleId, const QString &contextProperty,
+                        QObject *backend, QQmlContext *ctx);
 
 signals:
     void modulesLoaded(const QVariantList &modules);
@@ -42,9 +52,17 @@ signals:
     void dynamicOptionsReady(const QString &moduleId, const QString &key, const QVariant &options);
     void moduleAuthStateChanged(const QString &moduleId);
 
+private slots:
+    // Receive a backend's signal and re-emit it with the module ID prepended, recovering
+    // the module ID via sender() reverse-lookup. Lets registerModule connect any backend
+    // generically, with no per-module forwarding lambdas.
+    void onBackendDynamicOptions(const QString &key, const QVariant &options);
+    void onBackendAuthStateChanged();
+
 private:
     QJsonObject loadConfig() const;
     void saveConfig(const QJsonObject &config) const;
+    QString moduleIdForBackend(QObject *backend) const;
 
     QString m_appRoot;
     QString m_dataRoot;
