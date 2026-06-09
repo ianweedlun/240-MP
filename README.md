@@ -8,7 +8,11 @@ Playback experiences are handled via modules to enable new integrations without 
 
 It's built to work in conjuction with MPV which will be installed (or updated) as a dependency during the [install](#Install) steps outlined below.
 
-## Preview
+## Video Overview
+
+Watch on YouTube: https://youtu.be/r-gylGDoELY
+
+## Photos
 
 | Module Selection | Item Detail |
 | --- | --- |
