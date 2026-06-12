@@ -122,7 +122,7 @@ FocusScope {
     }
 
     Text {
-        text: "[ESC]:CANCEL  [▲▼]:NAVIGATE  [ENTER]:SELECT"
+        text: root.hints.back + ":CANCEL  " + root.hints.navigate + ":NAVIGATE  " + root.hints.select + ":SELECT"
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom

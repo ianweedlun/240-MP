@@ -171,7 +171,7 @@ FocusScope {
     // --- FOOTER ---
     Text {
         id: footer
-        text: "[ESC]:BACK [\u25B2\u25BC]:NAVIGATE [\u25C4\u25BA]:CHANGE"
+        text: root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.change + ":CHANGE"
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom

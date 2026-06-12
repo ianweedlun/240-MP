@@ -156,7 +156,7 @@ FocusScope {
     // Footer
     Text {
         id: footer
-        text: "[ESC]:BACK"
+        text: root.hints.back + ":BACK"
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom

@@ -50,7 +50,6 @@ FocusScope {
             font.pixelSize: root.sh * 0.05 //24
         }
         Text {
-            visible: pinCode !== ""
             text: "Please add items in the local files media directory"
             color: root.tertiaryColor
             font.family: root.globalFont
@@ -151,7 +150,7 @@ FocusScope {
     // Footer
     Text {
         id: footer
-        text: "[ESC]:BACK [▲▼]:NAVIGATE [ENTER]:SELECT"
+        text: root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.select + ":SELECT"
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom

@@ -25,6 +25,14 @@ brew install mpv
 
 Note: 240-MP uses mpv as an external subprocess for video playback. It does not link against libmpv at build time, so mpv only needs to be on your `PATH` when running the app.
 
+**Install SDL2 (required, gamepad input):**
+
+```bash
+brew install sdl2
+```
+
+SDL2 is a build-time dependency — `InputManager` links against it for USB game controller support (see [Gamepad input](#gamepad-input-inputcfg)).
+
 ### Get the source
 
 ```bash
@@ -62,6 +70,7 @@ On macOS all user configuration is stored at:
 ~/Library/Application Support/240-MP/
   config.json       ← app and module settings
   plex_auth.json    ← plex auth
+  input.cfg         ← optional gamepad mapping overrides (see Gamepad input below)
 ```
 
 This directory is created automatically on first run. It is separate from the app itself, so deleting or rebuilding the app will not wipe your settings.
@@ -81,6 +90,7 @@ sudo apt-get install -y \
   qml6-module-qtquick-window \
   libqt6svg6 qt6-svg-dev qt6-svg-plugins qt6-wayland \
   libdrm-dev libxkbcommon-dev libssl-dev \
+  libsdl2-dev \
   mpv
 ```
 
@@ -133,9 +143,54 @@ On Raspberry Pi OS all user configuration is stored at:
 ~/.local/share/240-MP/
   config.json      ← app and module settings
   plex_auth.json   ← plex auth
+  input.cfg        ← optional gamepad mapping overrides (see Gamepad input below)
 ```
 
 This directory is created automatically on first run. It is separate from the app itself, so deleting or rebuilding the app will not wipe your settings.
+
+## Gamepad input (input.cfg)
+
+USB game controllers should work out of the box as SDL's built-in controller database normalizes most pads (Xbox, PlayStation, 8BitDo, NES-style clones etc...) to a standard layout. 240-MP maps that stanard layout to its navigation actions:
+
+| Controller input | Action |
+|---|---|
+| D-pad / left stick | navigate (up / down / left / right) |
+| A | select |
+| B/Select | back |
+| Start | play / pause |
+| LB / RB shoulder buttons | left / right (seek during playback) |
+
+Controllers can be hotplugged at any time and during playback the same buttons drive mpv (seek, pause, quit) exactly like their keyboard equivalents.
+
+**Overriding the mapping**
+
+- Create an `input.cfg` file in the configuration directory. 
+- Add one binding per line, `<input> <action>`; 
+- Use `#` to start a comment, data is case-insensitive and you only need to include the things you want to change (anything not defined will fall back to defaults) 
+- The file is also live-reloaded while the app runs, so you can tune bindings without restarting.
+
+Inputs use SDL controller names — short (`a`, `b`, `x`, `y`, `back`, `start`, `leftshoulder`, `rightshoulder`, `dpup`, `dpdown`, `dpleft`, `dpright`, ...) or the long `SDL_CONTROLLER_BUTTON_*` forms. Analog axes take a `+`/`-` direction suffix (`lefty-`, `triggerright+`). Actions: `up`, `down`, `left`, `right`, `select`, `back`, `play_pause`, and `none` to unbind a default.
+
+**Button names are positional**, following an Xbox reference layout: `a` means the *south* face button, `b` east, `x` west, `y` north, no matter what's "printed" on the buttons on your pad. Because of that you can also write the positions directly: `south`, `east`, `west`, `north`. So `south select` makes the bottom face button select on an Xbox pad, an 8BitDo, and a PlayStation pad alike.
+
+**Footer labels** will attempt to adapt automatically and the on-screen hints show what's printed on the controller you touched last (Nintendo-type pads show B at south, PlayStation pads show X/O/SQ/TR). If your controller reports the wrong type (which is common for pads with Nintendo-style labels running in X-input mode) you can define the label you see with a `label` line in the input.cfg
+
+```
+# input.cfg — example overrides
+south                    select       # positions: south/east/west/north
+SDL_CONTROLLER_BUTTON_A  select       # long names work
+b                        back         # so do SDL short names ("b" = east)
+x                        play_pause
+rightshoulder            none         # unbind a default
+lefty-                   up           # axes take a +/- suffix
+triggerright+            play_pause
+label south B                         # force the footer label to display "B" for the south button
+label east  A                         # force the footer label to display "B" for the east button
+```
+
+Any bad lines are skipped with a warning in the log (line number included)
+
+**Exotic controllers** — if SDL doesn't recognize your pad at all, drop a community [gamecontrollerdb.txt](https://github.com/mdqinc/SDL_GameControllerDB) into the configuration directory; it will be loaded at startup before controllers are opened.
 
 ## Debugging & logs
 
@@ -215,9 +270,9 @@ These build jobs run in parallel:
 | `build-macos-arm64` | `macos-latest` (Apple Silicon) | `240-MP-<tag>-macOS-arm64.dmg` |
 | `build-linux-arm64` | `ubuntu-24.04-arm` (native arm64) | `240-MP-<tag>-linux-arm64.tar.gz` |
 
-macOS jobs: installs Qt via the Qt CDN, builds, runs `macdeployqt` to embed Qt frameworks, ad-hoc codesign, package as `.dmg`. mpv is not bundled — users install it via `brew install mpv`.
+macOS jobs: installs Qt via the Qt CDN, builds, runs `macdeployqt` to embed Qt frameworks (including `libSDL2.dylib`), ad-hoc codesign, package as `.dmg`. mpv is not bundled — users install it via `brew install mpv`.
 
-Linux arm64 job: installs Qt from apt, builds, package as `.tar.gz`. mpv is not bundled — end users install it via `apt install mpv` or by running the `install.sh` that is bundled with each release where its installed as part of the dependency list.
+Linux arm64 job: installs Qt from apt, builds, package as `.tar.gz`. mpv and SDL2 are not bundled — end users install them via `apt install mpv libsdl2-2.0-0` or by running the `install.sh` that is bundled with each release where they are installed as part of the dependency list.
 
 A final `release` job waits for all three builds, then creates a GitHub Release with all artifacts attached (including `install.sh`).
 
