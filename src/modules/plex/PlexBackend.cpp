@@ -725,6 +725,24 @@ QString PlexBackend::get_active_server_name() {
     return {};
 }
 
+// Servers the active user can switch to, in {name, machineId} form for
+// ServerSelect.qml. Mirrors getServers() filtering (managed users only see their
+// own servers) but returns synchronously from cached auth so the main menu can
+// offer an in-place server switch without a round-trip.
+QVariantList PlexBackend::get_switchable_servers() {
+    QJsonObject auth = loadAuth();
+    QJsonObject managed = auth["managed_user_tokens"].toObject();
+    bool managedActive = !managed.isEmpty();
+    QVariantList list;
+    for (const auto &v : auth["servers"].toArray()) {
+        QJsonObject s = v.toObject();
+        QString mid = s["machineId"].toString();
+        if (managedActive && !managed.contains(mid)) continue;
+        list.append(QVariantMap{{"name", s["name"].toString()}, {"machineId", mid}});
+    }
+    return list;
+}
+
 void PlexBackend::build_stream_url(const QString &ratingKey,
                                    const QString &partKey,
                                    const QString &sessionId) {

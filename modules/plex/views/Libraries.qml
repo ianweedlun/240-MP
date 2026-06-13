@@ -14,6 +14,10 @@ FocusScope {
     property var libraries: []
     property string serverName: ""
     property string userName: ""
+    // Servers the active user can switch to from the main menu. More than one
+    // means the quick-switch action (◄/►) is offered.
+    property var switchableServers: []
+    property bool canSwitchServer: switchableServers.length > 1
 
     Connections {
         target: plexBackend
@@ -35,7 +39,15 @@ FocusScope {
     Component.onCompleted: {
         browseRoot.serverName = plexBackend.get_active_server_name()
         browseRoot.userName = plexBackend.get_active_user_name()
+        browseRoot.switchableServers = plexBackend.get_switchable_servers()
         plexBackend.load_libraries()
+    }
+
+    function openServerSwitch() {
+        if (!canSwitchServer) return
+        browseRoot.navigateTo("ServerSelect.qml",
+                              { servers: switchableServers, switching: true },
+                              { currentIndex: libraryList.currentIndex })
     }
 
     focus: true
@@ -80,6 +92,8 @@ FocusScope {
 
         Keys.onUpPressed: if (currentIndex > 0) currentIndex--
         Keys.onDownPressed: if (currentIndex < count - 1) currentIndex++
+        Keys.onLeftPressed: browseRoot.openServerSwitch()
+        Keys.onRightPressed: browseRoot.openServerSwitch()
 
         Keys.onReturnPressed: {
             var lib = libraries[currentIndex]
@@ -160,6 +174,7 @@ FocusScope {
     Text {
         id: footer
         text: root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.select + ":SELECT"
+              + (browseRoot.canSwitchServer ? " " + root.hints.change + ":SERVER" : "")
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom

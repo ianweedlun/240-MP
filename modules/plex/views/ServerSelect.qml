@@ -10,6 +10,10 @@ FocusScope {
     signal goBack()
 
     property var servers: navParams.servers || []
+    // When opened from the main menu (Libraries) as a quick switch rather than as
+    // part of the initial auth flow, return to the menu on success instead of
+    // pushing a fresh Libraries onto the stack.
+    property bool switching: navParams.switching === true
 
     Connections {
         target: plexBackend
@@ -19,7 +23,11 @@ FocusScope {
         }
 
         function onAuthSuccess() {
-            serverSelectRoot.navigateTo("Libraries.qml", {})
+            if (serverSelectRoot.switching) {
+                serverSelectRoot.goBack()
+            } else {
+                serverSelectRoot.navigateTo("Libraries.qml", {})
+            }
         }
 
         function onErrorOccurred(msg) {
@@ -28,7 +36,13 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        if (servers.length > 0) serverList.currentIndex = 0
+        if (servers.length === 0) return
+        // Pre-highlight the currently active server when switching.
+        var activeName = plexBackend.get_active_server_name()
+        serverList.currentIndex = 0
+        for (var i = 0; i < servers.length; i++) {
+            if (servers[i].name === activeName) { serverList.currentIndex = i; break }
+        }
     }
 
     focus: true

@@ -18,6 +18,7 @@ public:
     Q_INVOKABLE QString  get_auth_state();
     Q_INVOKABLE QString  get_active_user_name();
     Q_INVOKABLE QString  get_active_server_name();
+    Q_INVOKABLE QVariantList get_switchable_servers();
     Q_INVOKABLE void     build_stream_url(const QString &ratingKey,
                                           const QString &partKey,
                                           const QString &sessionId);
