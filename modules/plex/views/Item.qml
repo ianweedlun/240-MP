@@ -22,8 +22,12 @@ FocusScope {
     property int audioIdx: 0
     property int subtitleIdx: 0
 
-    // Unique session ID for this playback instance
-    readonly property string sessionId: {
+    // Session ID for the current playback instance. Regenerated on every play
+    // (see Keys.onReturnPressed): reusing one lets Plex hand back a stale
+    // transcode session built with the previously selected audio/subtitle.
+    property string sessionId: newSessionId()
+
+    function newSessionId() {
         var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         var id = ""
         for (var i = 0; i < 12; i++) id += chars[Math.floor(Math.random() * chars.length)]
@@ -135,11 +139,25 @@ FocusScope {
     }
     Keys.onReturnPressed: {
         if (focusRow === 0 && detail) {
+            var audioId = detail.audioStreams && detail.audioStreams[audioIdx]
+                ? detail.audioStreams[audioIdx].id : ""
+            var subId = detail.subtitleStreams && detail.subtitleStreams[subtitleIdx]
+                ? detail.subtitleStreams[subtitleIdx].id : "0"
+
+            // Persist the picked tracks to Plex so they survive returning to
+            // this screen, and so a transcode burns the streams the user chose
+            // (the server selects from its stored default, not just inline
+            // params). subtitleStreamID "0" disables subtitles.
+            if (detail.partId) {
+                if (audioId) plexBackend.set_audio_stream(audioId, detail.partId)
+                plexBackend.set_subtitle_stream(subId, detail.partId)
+            }
+
+            // Fresh session per play so Plex builds a new transcode for this
+            // exact selection instead of reusing the prior one.
+            sessionId = newSessionId()
+
             if (detail.forceTranscode) {
-                var audioId = detail.audioStreams && detail.audioStreams[audioIdx]
-                    ? detail.audioStreams[audioIdx].id : ""
-                var subId = detail.subtitleStreams && detail.subtitleStreams[subtitleIdx]
-                    ? detail.subtitleStreams[subtitleIdx].id : "0"
                 plexBackend.request_transcode(detail.ratingKey, detail.partKey, sessionId, audioId, subId, detail.viewOffset || 0)
             } else {
                 plexBackend.build_stream_url(detail.ratingKey, detail.partKey, sessionId)
