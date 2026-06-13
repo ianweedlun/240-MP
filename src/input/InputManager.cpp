@@ -20,6 +20,19 @@ constexpr Sint16 kAxisRelease = 12000;
 // Held-direction auto-repeat, tuned to feel like keyboard repeat in lists.
 constexpr int kRepeatDelayMs    = 400;
 constexpr int kRepeatIntervalMs = 100;
+
+// Qt reports both shift keys as Qt::Key_Shift; telling them apart takes the
+// platform code. Linux keymaps (eglfs/evdev, X11, Wayland) report evdev's
+// KEY_RIGHTSHIFT, with or without the X11-style +8 offset; macOS reports
+// kVK_RightShift in the virtual key.
+bool isRightShift(const QKeyEvent *ke) {
+#ifdef Q_OS_MACOS
+    return ke->nativeVirtualKey() == 0x3C;   // kVK_RightShift
+#else
+    const quint32 sc = ke->nativeScanCode();
+    return sc == 54 || sc == 62;             // KEY_RIGHTSHIFT, +8 offset
+#endif
+}
 }
 
 InputManager::InputManager(const QString &dataRoot, QObject *parent)
@@ -463,10 +476,31 @@ bool InputManager::isDirectional(Action a) {
 
 bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     Q_UNUSED(obj)
-    if (event->type() == QEvent::KeyPress) {
-        const auto *ke = static_cast<QKeyEvent *>(event);
-        if (ke->nativeScanCode() != kSyntheticScanCode)
-            setLastInputDevice(QStringLiteral("keyboard"));
+    const QEvent::Type type = event->type();
+    if (type != QEvent::KeyPress && type != QEvent::KeyRelease)
+        return false;
+    const auto *ke = static_cast<QKeyEvent *>(event);
+
+    if (type == QEvent::KeyPress && ke->nativeScanCode() != kSyntheticScanCode)
+        setLastInputDevice(QStringLiteral("keyboard"));
+
+    // Right shift acts as Back so the keyboard works one-handed: reuse the
+    // gamepad Back path, which posts Escape into QML — or sends ESC to mpv
+    // over IPC when fullscreen mpv holds OS focus and the window can't take
+    // key events. The bare Shift event is consumed; no view binds Key_Shift.
+    //
+    // Known gap: during fullscreen playback on macOS the keyboard goes to
+    // mpv, not us, and mpv can't bind a bare modifier — so right shift only
+    // works in the player on platforms where the app keeps the keyboard
+    // (RPi/EGLFS). Same asymmetry as gamepads, minus their SDL workaround.
+    if (ke->key() == Qt::Key_Shift && isRightShift(ke)) {
+        if (!ke->isAutoRepeat()) {
+            if (type == QEvent::KeyPress)
+                deliverPress(Action::Back, false);
+            else
+                releaseAction(Action::Back);
+        }
+        return true;
     }
     return false;
 }
