@@ -29,6 +29,7 @@ FocusScope {
     property string selectedSubtitleId: navParams.selectedSubtitleId || "0"
 
     property bool stoppedReported:    false
+    property bool playbackStarted:    false
     property bool overlayVisible:     false
     property int  choiceIndex:        0
     property string resumeSetting:    "ask"
@@ -66,7 +67,7 @@ FocusScope {
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 overlayVisible = false
                 if (choiceIndex === 0) {
-                    doStartPlayback(viewOffset)
+                    beginPlayback(viewOffset)
                 } else {
                     startFromBeginning()
                 }
@@ -186,6 +187,24 @@ FocusScope {
         return { urls: allSubUrls, track: subTrack }
     }
 
+    // Starting mpv runs synchronously and, on the Pi, immediately switches VT
+    // (suspending Qt's render thread) before the LOADING frame can paint. Defer
+    // the launch one tick so the loading indicator is rendered first — mirroring
+    // the async transcode path, which already yields to the event loop. Without
+    // this, RESUME/direct-play show no loading screen on the Pi.
+    Timer {
+        id: startTimer
+        interval: 50
+        repeat: false
+        property int pendingOffset: 0
+        onTriggered: doStartPlayback(pendingOffset)
+    }
+
+    function beginPlayback(offsetMs) {
+        startTimer.pendingOffset = offsetMs
+        startTimer.restart()
+    }
+
     function doStartPlayback(offsetMs) {
         if (isTranscoding) {
             // Transcode URL already encodes the offset from Item.qml; mpv starts at stream position 0.
@@ -207,7 +226,7 @@ FocusScope {
             plexBackend.request_transcode(ratingKey, partKey, sessionId,
                                           selectedAudioId, selectedSubtitleId, 0)
         } else {
-            doStartPlayback(0)
+            beginPlayback(0)
         }
     }
 
@@ -330,7 +349,12 @@ FocusScope {
         target: mpvController
 
         function onPositionChanged(ms) {
-            if (ms > 0) playerRoot.lastKnownPositionMs = playerRoot.absPos(ms)
+            if (ms > 0) {
+                playerRoot.lastKnownPositionMs = playerRoot.absPos(ms)
+                // First position update means mpv is up and playing — drop the
+                // loading indicator (mpv's own window now covers the screen).
+                playerRoot.playbackStarted = true
+            }
         }
         function onDurationChanged(ms) {
             if (ms > 0) playerRoot.lastKnownDurationMs = ms
@@ -392,13 +416,26 @@ FocusScope {
         if (resumeSetting === "ask" && viewOffset > 0) {
             overlayVisible = true
         } else {
-            doStartPlayback(viewOffset)
+            beginPlayback(viewOffset)
         }
     }
 
     Rectangle {
         anchors.fill: parent
         color: "black"
+
+        // Shown while mpv launches and buffers the stream (before its window
+        // takes over). Hidden once the first position update arrives, or while
+        // the resume prompt is up.
+        Text {
+            text: "LOADING..."
+            // White to match mpv's own overlay text color.
+            color: "white"
+            font.family: root.globalFont
+            anchors.centerIn: parent
+            font.pixelSize: root.sh * 0.05 //24
+            visible: streamUrl !== "" && !overlayVisible && !playbackStarted
+        }
     }
 
     Rectangle {

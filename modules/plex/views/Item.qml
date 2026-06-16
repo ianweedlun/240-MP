@@ -18,6 +18,11 @@ FocusScope {
     // Focus rows: 0=play button, 1=audio, 2=subtitles
     property int focusRow: 0
 
+    // True from when PLAY is pressed until we navigate to the Player (or error
+    // out). Plex can take a few seconds to hand back a stream/transcode URL, so
+    // we show a LOADING overlay instead of leaving the screen looking frozen.
+    property bool isLaunching: false
+
     // Current stream selections (indices into stream lists)
     property int audioIdx: 0
     property int subtitleIdx: 0
@@ -102,6 +107,7 @@ FocusScope {
 
         function onErrorOccurred(msg) {
             console.log("[Item] Error: " + msg)
+            detailRoot.isLaunching = false
         }
     }
 
@@ -113,9 +119,11 @@ FocusScope {
     focus: true
 
     Keys.onUpPressed: {
+        if (isLaunching) return
         if (focusRow > 0) focusRow--
     }
     Keys.onDownPressed: {
+        if (isLaunching) return
         if (detail) {
             var maxRow = 0
             if (detail.audioStreams && detail.audioStreams.length > 0) maxRow = 1
@@ -124,6 +132,7 @@ FocusScope {
         }
     }
     Keys.onLeftPressed: {
+        if (isLaunching) return
         if (!detail) return
         if (focusRow === 1 && detail.audioStreams && detail.audioStreams.length > 1)
             audioIdx = (audioIdx - 1 + detail.audioStreams.length) % detail.audioStreams.length
@@ -131,6 +140,7 @@ FocusScope {
             subtitleIdx = (subtitleIdx - 1 + detail.subtitleStreams.length) % detail.subtitleStreams.length
     }
     Keys.onRightPressed: {
+        if (isLaunching) return
         if (!detail) return
         if (focusRow === 1 && detail.audioStreams && detail.audioStreams.length > 1)
             audioIdx = (audioIdx + 1) % detail.audioStreams.length
@@ -138,7 +148,10 @@ FocusScope {
             subtitleIdx = (subtitleIdx + 1) % detail.subtitleStreams.length
     }
     Keys.onReturnPressed: {
+        if (isLaunching) return
         if (focusRow === 0 && detail) {
+            // Show the loading overlay immediately; clears on navigate or error.
+            isLaunching = true
             var audioId = detail.audioStreams && detail.audioStreams[audioIdx]
                 ? detail.audioStreams[audioIdx].id : ""
             var subId = detail.subtitleStreams && detail.subtitleStreams[subtitleIdx]
@@ -451,5 +464,32 @@ FocusScope {
         anchors.bottomMargin: root.sh * 0.1041667 //50
         anchors.leftMargin: root.sw * 0.125 //80
         font.pixelSize: root.sh * 0.0333333 //16
+    }
+
+    // Launch overlay — covers the detail screen while Plex prepares the stream
+    // so a slow server doesn't make the app look frozen after pressing PLAY.
+    Rectangle {
+        anchors.fill: parent
+        color: root.surfaceColor
+        visible: isLaunching
+        z: 100
+
+        Text {
+            text: "LOADING..."
+            color: root.tertiaryColor
+            font.family: root.globalFont
+            anchors.centerIn: parent
+            font.pixelSize: root.sh * 0.05 //24
+        }
+
+        Text {
+            text: root.hints.back + ":CANCEL"
+            color: root.tertiaryColor
+            font.family: root.globalFont
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: root.sh * 0.1041667 //50
+            font.pixelSize: root.sh * 0.0333333 //16
+        }
     }
 }
