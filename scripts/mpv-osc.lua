@@ -294,6 +294,9 @@ local function toggle_menu()
         mp.remove_key_binding("menu-esc")
         mp.remove_key_binding("menu-bs")
     else
+        -- Tell the volume bar (media-keys.lua) to stand down — the two OSDs
+        -- share the same spot and are mutually exclusive.
+        mp.commandv("script-message", "240mp-osd-volume-hide")
         menu_visible = true
         focus_row    = 1
         draw_menu()
@@ -309,6 +312,24 @@ local function toggle_menu()
         mp.add_forced_key_binding("BS",    "menu-bs",    toggle_menu)
     end
 end
+
+-- The volume bar (media-keys.lua) broadcasts this when it appears; close the
+-- menu so the two OSDs never overlap. toggle_menu() runs the full teardown.
+mp.register_script_message("240mp-osd-menu-hide", function()
+    if menu_visible then toggle_menu() end
+end)
+
+-- media-keys.lua broadcasts this on seek / chapter changes so the nav menu
+-- pops up to show the new position. Open it if closed; otherwise just redraw
+-- and restart the auto-hide timer.
+mp.register_script_message("240mp-osd-menu-show", function()
+    if menu_visible then
+        reset_idle_timer()
+        draw_menu()
+    else
+        toggle_menu()
+    end
+end)
 
 -- Forced bindings so UP/DOWN take priority over mpv's default seek bindings
 -- on desktop (macOS/Linux with native keyboard input).

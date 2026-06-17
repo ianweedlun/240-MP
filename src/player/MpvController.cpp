@@ -168,6 +168,12 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     if (hasOscScript)
         args << QString("--script=%1").arg(oscScript);
 
+    // Media-key handling + themed volume bar — loaded for every mode so HID
+    // media keys work anytime mpv is playing, not just inside a given module.
+    const QString mediaKeysScript = m_appRoot + "/scripts/media-keys.lua";
+    if (QFile::exists(mediaKeysScript))
+        args << QString("--script=%1").arg(mediaKeysScript);
+
     if (playlistStart >= 0)
         args << QString("--playlist-start=%1").arg(playlistStart);
     if (startSeconds > 0.5f)
