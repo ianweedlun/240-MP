@@ -2,7 +2,7 @@
 
 # 240-MP
 
-240-MP is a retro VCR style frontend to play content on Raspberry Pi (preferably hooked up to a CRT TV). 
+240-MP is a retro VCR style frontend to play content on [Raspberry Pi](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing) (preferably hooked up to a CRT TV). 
 
 Playback experiences are handled via modules to enable new integrations without requiring major changes to the overall frontend. There are 3 currently included playback modules; one for [Local Files](https://github.com/anthonycaccese/240-MP/wiki/Module:-Local-Files), one for [Plex](https://github.com/anthonycaccese/240-MP/wiki/Module:-Plex) and a module similar to art/wallpaper modes on modern tvs called ([Ambient:Mode](https://github.com/anthonycaccese/240-MP/wiki/Module:-Ambient-Mode))
 
@@ -28,8 +28,9 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
 - Supported file types: `"mp4", "mkv", "avi", "mov", "m4v", "webm", "wmv", "flv", "f4v", "mpg", "mpeg", "vob"`
 - Playlist support using `m3u` and `m3u8` files
 - Folder browsing
-- Loop playback support
-- Playback history options
+- Loop playback
+- Shuffle playback
+- Playback history
 - Switch audio/subtitle tracks during playback
 
 ### Plex Module ([Wiki](https://github.com/anthonycaccese/240-MP/wiki/Module:-Plex))
@@ -56,11 +57,17 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
 ### Global
 - [Color Schemes](https://github.com/anthonycaccese/240-MP/wiki/Customizations)
 - [Keyboard & Controller](https://github.com/anthonycaccese/240-MP/wiki/Input) input support
+- Media Keys during video playback (volume +/-, mute, play/pause, stop, seek, next chapter, previous chapter)
 
 ## Install 
-
 - [On a Raspberry Pi](INSTALL.md#on-a-raspberry-pi)
 - [On macOS (ARM)](INSTALL.md#on-macos-arm)
+
+## Hardware Testing
+- [Raspberry Pi 3B](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing#raspberry-pi-3b)
+- [Raspberry Pi 3B+](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing#raspberry-pi-3b-1)
+- [Raspberry Pi 4B](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing#raspberry-pi-4b)
+- [Raspberry Pi 5](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing#raspberry-pi-5)
 
 ## FAQs
 
@@ -76,8 +83,7 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
     - 240 has a double meaning referring to the longest [VHS tape length](https://en.wikipedia.org/wiki/VHS#Tape_lengths) and my primary display target for it of [CRT TVs](https://consolemods.org/wiki/CRT:What_is_240p%3F).
     - MP also has a double meaning of "Media Player" and a play on the "SP/LP/EP/SLP" terminology that was used to refer to the recording quality for VHS recordings.
 - Does the 240 in the name mean that it outputs at 240p resolution?
-    - No and I apologize for any confusion I've caused on this, it's 240 in name only.
-    - The output resolution for the menu and video playback when using it on a CRT is 480i.
+    - The output resolution for the menu and video playback when using it on a CRT is 480i/576i (depending on your config).
 - Does 240-MP work over HDMI on a modern television too?
     - Yes! The UI was built to scale on modern televisions over HDMI as well.
     - Please make sure you use the config.txt I provide for HDMI and it will output at the proper resolution for a modern tv.

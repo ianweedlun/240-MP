@@ -10,11 +10,11 @@ However, if you already have Raspberry Pi OS set up and working on your TV then 
 
 ### Requirements
 
-- A RaspberryPi [4](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/) or [3B+](https://www.raspberrypi.com/products/raspberry-pi-3-model-b-plus/).
-    - These are the models I've tested with. The Pi 4 fits in a nice sweet spot of performance + composite out so that is the model I use daily.  
-    The [5](https://www.raspberrypi.com/products/raspberry-pi-5/) also works but I've only tested **over HDMI** to a modern TV (the Pi 5 has no composite output port and I don't have the hardware to test direct video over HDMI to a CRT). 
-    - It may work on other models too, but I'm sorry I can't say for sure.
-    - I've started a [hardware testing](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing) page on the wiki with more details.  If you have a setup that is working for you and would like to help out others please start [a discussion](https://github.com/anthonycaccese/240-MP/discussions/categories/q-a) so we can add it to the wiki.
+- A [RaspberryPi 4](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/)
+    - The Pi 4 fits in a nice sweet spot of performance + composite out and its the model I use daily so its the model I am most familiar with. It supports 1080p H264/HEVC playback well on both a CRT and over HDMI.
+    - The [Pi 3B and 3B+](https://www.raspberrypi.com/products/raspberry-pi-3-model-b/) work well too with some caveats...  The default configuration for Pi 3 supports smooth 1080p H264 playback at the expense of inconsistent crop functionality during playback (cropping will display a black screen on some videos).  If crop is important for your use case on a Pi 3 then you can change the video decode settings with the caveat that 1080p H264 playback will no longer be smooth (720p and below  will still work well). The [hardware testing](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing#raspberry-pi-3b) page has details on how to make that change.
+    - The [Pi 5](https://www.raspberrypi.com/products/raspberry-pi-5/) also works but I've only tested over HDMI to a modern TV. The Pi 5 doesn't have a direct composite output port, one can be added through a mod but I don't have the hardware to test that.
+    - Full details on all models can be found on the [hardware testing](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing) page on the wiki.  If you have a setup that is working for you and would like to help out others please add a comment to [this discussion](https://github.com/anthonycaccese/240-MP/discussions/44) so we can add it to the wiki.
 - SD Card (minimum of 4GB) with RaspberryPi OS already set up
     - Note: 240-MP is only an application, it's not an OS so you will need to make sure you have an OS setup and working with the display you'd like to use. 
     - In the below steps I provide an example using Raspberry Pi OS Lite that you can use to create a fresh SD card along with configs I've tested for CRT and HDMI output.
@@ -24,9 +24,17 @@ However, if you already have Raspberry Pi OS set up and working on your TV then 
 
 ### Optional
 
-- A CRT TV and a composite cable - Composite out is my recommended way to use 240-MP but it will also work over HDMI as well so just select the config that works for your setup in step 2 below.  This is the composite cable I use if you happen to have a CRT: https://www.adafruit.com/product/2881 (note: I've only tested composite on the Pi 3/4 - the Pi 5 works well over HDMI)
-- USB remote control - Keyboard input works well but if you want that experience of sitting back and playing video on a VCR then a remote will definitely help with that.  I use this one: https://www.amazon.com/dp/B01FVUGPE8
-- USB game controller - Most controllers (Xbox, PlayStation, 8BitDo, NES-style, etc.) should work out of the box: D-pad/left stick to navigate, A to select, B to go back, Start for play/pause.  Controllers can be plugged in at any time, and the button mapping can be customized — see [BUILDING.md → Gamepad input](BUILDING.md#gamepad-input-inputcfg).  If a controller isn't detected, make sure your user is in the `input` group: `sudo usermod -aG input $USER` then reboot.
+- A CRT TV and a composite cable
+    - Composite out is my recommended way to use 240-MP
+    - it will also work over HDMI as well so just select the config that works for your setup in step 2 below.
+    - This is the composite cable I use if you happen to have a CRT: https://www.adafruit.com/product/2881 (note: I've only tested composite on the Pi 3/4 - the Pi 5 works well over HDMI
+- USB remote control
+    - Keyboard input works well but if you want that experience of sitting back and playing video on a VCR then a remote will definitely help with that.
+    - I use this one: https://www.amazon.com/dp/B01FVUGPE8
+- USB game controller 
+    - Most controllers (Xbox, PlayStation, 8BitDo, NES-style, etc.) should work out of the box: D-pad/left stick to navigate, A to select, B to go back, Start for play/pause.  
+    - Controllers can be plugged in at any time, and the button mapping can be customized — see [BUILDING.md → Gamepad input](BUILDING.md#gamepad-input-inputcfg).
+    - If a controller isn't detected, make sure your user is in the `input` group: `sudo usermod -aG input $USER` then reboot.
 
 ### Steps
 
@@ -42,13 +50,11 @@ However, if you already have Raspberry Pi OS set up and working on your TV then 
 
     I would also suggest filling out Hostname, User and Wifi in the customization section as it will you save you from having to set them up manually later.
 
-2) After the write is complete, reconnect the card to your PC and update your boot/config.txt to one of the following (please make sure to choose the one that best matches your TV):
+2) After the write is complete, reconnect the card to your PC and update your config.txt to one of the following (please make sure to choose the one that best matches your TV):
 
     **Option 1: For composite out on a CRT TV (NTSC)...**
     ```
     # --- Global ---
-    arm_64bit=1
-    disable_fw_kms_setup=1
     disable_splash=1
     disable_overscan=1
     dtparam=audio=on
@@ -107,8 +113,6 @@ However, if you already have Raspberry Pi OS set up and working on your TV then 
     or **Option 2: for HDMI out on a modern TV...**
     ```
     # --- Global ---
-    arm_64bit=1
-    disable_fw_kms_setup=1
     disable_splash=1
     disable_overscan=1
 
