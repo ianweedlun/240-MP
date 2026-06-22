@@ -526,7 +526,13 @@ void MpvController::appendVideoArgs(QStringList &args) const {
             // straight to a DRM overlay plane for the lowest possible CPU (~15%) with
             // smooth playback. The one trade-off: the overlay plane can't zoom/crop,
             // so mpv's --panscan (the OSC crop button) blanks the video on this path.
-            args << "--vo=gpu" << "--gpu-context=drm" << "--hwdec=v4l2m2m";
+            // The "smooth_playback" setting (default ON) lets the user opt out: when
+            // OFF we fall back to the crop-capable scaler path (--vo=drm) at the cost
+            // of higher CPU and less smooth cadence.
+            if (smoothPlaybackEnabled())
+                args << "--vo=gpu" << "--gpu-context=drm" << "--hwdec=v4l2m2m";
+            else
+                args << "--vo=drm" << "--hwdec=v4l2m2m-copy";
         } else {
             // Pi 5 (Full KMS) and the safe fallback for unknown headless Linux.
             args << "--vo=drm" << "--hwdec=auto-safe";
@@ -538,6 +544,24 @@ void MpvController::appendVideoArgs(QStringList &args) const {
 #endif
         // Other desktop (X11/Wayland dev): leave mpv's defaults untouched.
     }
+}
+
+bool MpvController::smoothPlaybackEnabled() const {
+    // Default ON: only an explicit "Off" opts out. Stored by Settings as a string
+    // ("On"/"Off") via the list_single row, so compare on the string form.
+    if (!m_appCore)
+        return true;
+    const QVariant v = m_appCore->get_setting(QString(), "smooth_playback");
+    if (!v.isValid() || v.toString().isEmpty())
+        return true;
+    return v.toString().compare(QStringLiteral("Off"), Qt::CaseInsensitive) != 0;
+}
+
+bool MpvController::hasSmoothPlaybackTradeoff() const {
+    // Only the Pi 3 overlay path sacrifices crop/zoom for smoothness. Every other
+    // profile (Pi 4 copy path, Pi 5/generic --vo=drm, desktop) can already crop, so
+    // the toggle would be a no-op there and is hidden.
+    return m_videoProfile == VideoProfile::Pi3;
 }
 
 int MpvController::getActiveVt() const {

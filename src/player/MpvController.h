@@ -52,6 +52,11 @@ public:
     Q_INVOKABLE void seekTo(int positionMs);
     Q_INVOKABLE void sendKey(const QString &key);
 
+    // True only on devices whose smooth-playback decode path can't crop/zoom (the
+    // Pi 3 DRM-overlay path). Settings uses this to show the "Smooth Playback"
+    // toggle only where the smoothness-vs-crop trade-off actually exists.
+    Q_INVOKABLE bool hasSmoothPlaybackTradeoff() const;
+
 signals:
     void positionChanged(int ms);
     void durationChanged(int ms);
@@ -81,6 +86,9 @@ private:
     // Appends the profile-specific --vo/--gpu-context/--hwdec flags (honouring the
     // app-level "mpv_video_args" override) to a forming mpv argument list.
     void appendVideoArgs(QStringList &args) const;
+    // App-level "smooth_playback" setting (default ON). On the Pi 3 this selects the
+    // smooth zero-copy overlay path; turning it OFF restores the crop-capable scaler path.
+    bool smoothPlaybackEnabled() const;
     int  getActiveVt() const;
     int  findFreeVt() const;
     int  findQtDrmFd() const;
