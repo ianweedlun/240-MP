@@ -18,6 +18,7 @@ FocusScope {
     property bool   shuffleOn:           false
     property string resumeSetting:       "ask"
     property bool   subtitlesOn:         false
+    property var    subtitleLangs:       []
 
     // Track last non-null values during playback for robust save on exit
     property int    lastKnownPositionMs:  0
@@ -50,7 +51,7 @@ FocusScope {
                 if (choiceIndex === 0 && startPlPos >= 0)
                     resumedFromPlaylistPos = startPlPos
                 overlayVisible = false
-                mpvController.loadAndPlay(filePath, startMs / 1000.0, 0, subtitlesOn ? 0 : -1, [], loopOn, startPlPos)
+                mpvController.loadAndPlay(filePath, startMs / 1000.0, 0, subtitlesOn ? 0 : -1, [], subtitleLangs, loopOn, startPlPos)
                 event.accepted = true
             }
         } else {
@@ -139,15 +140,28 @@ FocusScope {
         subtitlesOn   = !!appCore.get_setting(moduleRoot.moduleId, "auto_subtitles")
         resumeSetting = appCore.get_setting(moduleRoot.moduleId, "resume_playback") || "ask"
 
+        // Leaving this as an array since MPV - like most players - expects a *list* of languages
+        // to progressively fall back to until a sub track is found. If we ever switch back to
+        // selecting a list in Settings, the change to support them all will be considerably simpler.
+        // "-" is the value we store for "Any" (i.e. no preference) thats also the manifest default and
+        // "Any" option's id. If the user never opened this setting, then get_setting returns nothing,
+        // so it will fall back to "-" too. With this, "haven't picked one" will behave the same as "Any":
+        // the check below adds nothing to the list and MPV is launched without a --slang preference.
+        var subLangString = appCore.get_setting(moduleRoot.moduleId, "sub_lang") || "-"
+        subtitleLangs = []
+        if (subLangString !== "-") {
+            subtitleLangs.push(subLangString)
+        }
+
         // Shuffle wins: a shuffled playlist starts fresh & random; resume position
         // (a sequential item index) is meaningless once order is randomized.
         if (shuffleOn && isPlaylist(filePath)) {
-            mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], loopOn, -1, 0.0, "", false, "", true)
+            mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], subtitleLangs, loopOn, -1, 0.0, "", false, "", true)
             return
         }
 
         if (resumeSetting === "no") {
-            mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], loopOn, -1)
+            mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], subtitleLangs, loopOn, -1)
             return
         }
 
@@ -159,14 +173,14 @@ FocusScope {
             if (savedPos > 0 && savedPl >= 0)
                 resumedFromPlaylistPos = savedPl
             mpvController.loadAndPlay(filePath, savedPos > 0 ? savedPos / 1000.0 : 0.0,
-                                      0, subtitlesOn ? 0 : -1, [], loopOn, savedPos > 0 ? savedPl : -1)
+                                      0, subtitlesOn ? 0 : -1, [], subtitleLangs, loopOn, savedPos > 0 ? savedPl : -1)
         } else {
             if (savedPos > 0) {
                 savedPositionMs  = savedPos
                 savedPlaylistPos = savedPl
                 overlayVisible   = true
             } else {
-                mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], loopOn, -1)
+                mpvController.loadAndPlay(filePath, 0.0, 0, subtitlesOn ? 0 : -1, [], subtitleLangs, loopOn, -1)
             }
         }
     }
