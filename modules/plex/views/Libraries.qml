@@ -105,6 +105,10 @@ FocusScope {
                     title: "CONTINUE WATCHING",
                     libraryName: lib.title
                 }, { currentIndex: libraryList.currentIndex })
+            } else if (lib.key === "live_tv") {
+                browseRoot.navigateTo("LiveChannels.qml", {
+                    libraryName: lib.title
+                }, { currentIndex: libraryList.currentIndex })
             } else {
                 browseRoot.navigateTo("Library.qml", {
                     libraryName: lib.title,
