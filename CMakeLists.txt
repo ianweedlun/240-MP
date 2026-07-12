@@ -25,6 +25,21 @@ if(NOT APPLE)
     pkg_check_modules(Libdrm REQUIRED libdrm)
 endif()
 
+# PC/SC for the NFC reader module (optional — the module compiles without it
+# but reports itself unavailable at runtime). macOS ships PCSC.framework with
+# the OS; Linux needs libpcsclite-dev.
+if(APPLE)
+    find_library(PCSC_LIBRARIES PCSC)
+    if(PCSC_LIBRARIES)
+        set(PCSC_FOUND TRUE)
+    endif()
+else()
+    pkg_check_modules(PCSC IMPORTED_TARGET libpcsclite)
+endif()
+if(NOT PCSC_FOUND)
+    message(STATUS "PC/SC not found — NFC reader module will compile but reader support is disabled")
+endif()
+
 if(APPLE)
     enable_language(OBJCXX)
 endif()
@@ -37,6 +52,7 @@ add_executable(240mp
     src/modules/jellyfin/JellyfinBackend.cpp
     src/modules/ambient_mode/AmbientModeBackend.cpp
     src/modules/youtube/YouTubeBackend.cpp
+    src/modules/nfc_reader/NfcReaderBackend.cpp
     src/player/MpvController.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
@@ -60,6 +76,15 @@ target_link_libraries(240mp PRIVATE
 
 if(APPLE)
     target_link_libraries(240mp PRIVATE "-framework AppKit")
+endif()
+
+if(PCSC_FOUND)
+    target_compile_definitions(240mp PRIVATE MP240_NFC_READER_AVAILABLE=1)
+    if(APPLE)
+        target_link_libraries(240mp PRIVATE ${PCSC_LIBRARIES})
+    else()
+        target_link_libraries(240mp PRIVATE PkgConfig::PCSC)
+    endif()
 endif()
 
 if(NOT APPLE)

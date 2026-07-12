@@ -2,11 +2,11 @@
 
 # 240-MP
 
-240-MP is a retro VCR style frontend to play content on [Raspberry Pi](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing) (preferably hooked up to a CRT TV). 
+240-MP is a retro VCR style frontend to play content on [Raspberry Pi](https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing) (preferably hooked up to a CRT TV).
 
-Playback experiences are handled via modules to enable new integrations without requiring major changes to the overall frontend. There are 5 currently included playback modules; [Local Files](https://github.com/anthonycaccese/240-MP/wiki/Module:-Local-Files), [Plex](https://github.com/anthonycaccese/240-MP/wiki/Module:-Plex), [Jellyfin](https://github.com/anthonycaccese/240-MP/wiki/Module:-Jellyfin), [YouTube](https://github.com/anthonycaccese/240-MP/wiki/Module:-YouTube) and a module similar to art/wallpaper modes on modern tvs called [Ambient:Mode](https://github.com/anthonycaccese/240-MP/wiki/Module:-Ambient-Mode).
+Playback experiences are handled via modules to enable new integrations without requiring major changes to the overall frontend. There are 6 currently included playback modules; [Local Files](https://github.com/anthonycaccese/240-MP/wiki/Module:-Local-Files), [Plex](https://github.com/anthonycaccese/240-MP/wiki/Module:-Plex), [Jellyfin](https://github.com/anthonycaccese/240-MP/wiki/Module:-Jellyfin), [YouTube](https://github.com/anthonycaccese/240-MP/wiki/Module:-YouTube), [NFC Reader](https://github.com/anthonycaccese/240-MP/wiki/Module:-NFC-Reader) and a module similar to art/wallpaper modes on modern tvs called [Ambient:Mode](https://github.com/anthonycaccese/240-MP/wiki/Module:-Ambient-Mode).
 
-It's built to work in conjuction with MPV which will be installed (or updated) as a dependency during the [install](#Install) steps outlined below.
+It's built to work in conjuction with MPV which will be installed (or updated) as a dependency during the [install](#Install) steps outlined below.  Some modules (like YouTube and NFC Reader) have additional dependencies which are covered on their associated wiki pages under the "To Enable" section.
 
 ## Video Overview
 
@@ -19,7 +19,7 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
 | <img src="https://github.com/user-attachments/assets/9472d55a-4617-4a7f-80c4-32aa28494048" /> | <img src="https://github.com/user-attachments/assets/4f7d8230-860a-4ace-9370-9f59f43289c0" /> |
 
 | Resume Option | Playback | Settings |
-| --- | --- | --- | 
+| --- | --- | --- |
 | <img src="https://github.com/user-attachments/assets/490e9ebd-fab2-4fd1-9959-35ebb619eff0" /> | <img src="https://github.com/user-attachments/assets/a3c768c7-6ede-4cdf-9d03-90aee7b8cdfb" /> | <img src="https://github.com/user-attachments/assets/0fd48977-8776-4334-b34e-d12256f23b97" /> |
 
 ## Current Features
@@ -78,12 +78,18 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
 - Mix video with a different audio track
 - Loops forever until you stop it
 
+### NFC Reader Module ([Wiki](https://github.com/anthonycaccese/240-MP/wiki/Module:-NFC-Reader))
+- Start video playback via NFC cards
+- Tested reader support: `ACS ACR122U`
+- Maps cards to videos via per-card text files in the `nfc_tags` data directory — the filename is the display title, line 1 the card UID, line 2 the video path or URL
+- Tapping an unknown card auto-creates a stub tag file for it; rename the file and add a path line to map the card
+
 ### Global
 - [Color Schemes](https://github.com/anthonycaccese/240-MP/wiki/Customizations)
 - [Keyboard & Controller](https://github.com/anthonycaccese/240-MP/wiki/Input) input support
 - Media Keys during video playback (volume +/-, mute, play/pause, stop, seek, next chapter, previous chapter)
 
-## Install 
+## Install
 - [On a Raspberry Pi](INSTALL.md#on-a-raspberry-pi)
 - [On macOS (ARM)](INSTALL.md#on-macos-arm)
 
@@ -98,21 +104,30 @@ Watch on YouTube: https://youtu.be/r-gylGDoELY
 - Why didn't you use Kodi/LibreELEC/OSMC?
     - I've used all of those distros and they are all excellent but I also like making things and wanted something simpler without as many options.  Something that felt like a VCR from my youth.
 - Should I use 240-MP instead of Kodi/LibreELEC/OSMC?
-    - Nope 😄
+    - I would recommend thinking about it like this...
     - All of those distros are amazing, feature rich, work across a ton of devices and have awesome supportive teams behind them.
-    - I on the other hand am just one person making nostalgic things for my own niche use cases.  If those use cases match with what you're looking for, then 240-MP is a bunch of fun and I'd be happy for you to try it.  Otherwise, the well known distros are spectacular and you should likely open those doors instead.
+    - I on the other hand am just one person making nostalgic things for my own niche use cases.
+    - If those use cases match with what you're looking for, then 240-MP is a bunch of fun and I'd be happy for you to try it.
+    - Otherwise, the well known distros are spectacular and you should likely open those doors instead.
 - Will this work on other Raspberry Pi models? (like the 5, 2 zero, etc...)
-    - Sorry, I can't say for sure as I've only tested on the 4b, 3b+ and 3b and don't have plans to test on other devices at this time.
+    - I've tested on the 4b, 3b+ and 3b. Other users have confimred the 5 works well too and all the details on what we've confimred can be found here: https://github.com/anthonycaccese/240-MP/wiki/Hardware-Testing
+    - If its not on that list then the short answer is "we don't know but please feel free try and let us know if it works"
 - Where does the name "240-MP" come from?
-    - 240 has a double meaning referring to the longest [VHS tape length](https://en.wikipedia.org/wiki/VHS#Tape_lengths) and my primary display target for it of [CRT TVs](https://consolemods.org/wiki/CRT:What_is_240p%3F).
+    - 240 has a double meaning referring to the longest [VHS tape length](https://en.wikipedia.org/wiki/VHS#Tape_lengths) and love for [CRT TVs](https://consolemods.org/wiki/CRT:What_is_240p%3F) as a display type.
     - MP also has a double meaning of "Media Player" and a play on the "SP/LP/EP/SLP" terminology that was used to refer to the recording quality for VHS recordings.
 - Does the 240 in the name mean that it outputs at 240p resolution?
-    - The output resolution for the menu and video playback when using it on a CRT is 480i/576i (depending on your config).
+    - The UI scales based on the OS config and output cables you are using.
+    - For example: the output resolution for the menu and video playback when using it on a CRT with the configs I use is 480i/576i
+- Does 240-MP support RGB out instead of composite?
+    - 240-MP is just an app that runs on top of an already configured Operating System. If you are able to configure your OS on the Raspberry Pi to output over RGB then 240-MP will simply scale and display to that output when it boots up as well.
+    - If you have a combination of RGB out + OS configuration that works well then please add a comment here with your set up details: https://github.com/anthonycaccese/240-MP/discussions/44
 - Does 240-MP work over HDMI on a modern television too?
     - Yes! The UI was built to scale on modern televisions over HDMI as well.
     - Please make sure you use the config.txt I provide for HDMI and it will output at the proper resolution for a modern tv.
+- Does 240-MP support bluetooth keyboards/remotes/controllers?
+    - 240-MP is just an app that runs on top of an already configured Operating System. If your OS has a way to configure and set up bluetooh controllers then 240-MP will simply see them as controllers when it boots up.
 
-## Credits & Acknowledgments 
+## Credits & Acknowledgments
 
 - The `VCR OSD Mono` font was created by Riciery Santos Leal (a.k.a. mrmanet) https://www.dafont.com/vcr-osd-mono.font
 - Because this is a hobby project (and a fairly niche use case), I am using [Claude Code](https://www.anthropic.com/product/claude-code) to build a large part of the backend C++ code and structure the modules.  If you have concerns with that, I am glad to talk through it.  Also, please feel free to fork this repo, update any aspects and tailor things to your own use case; that's why the source is fully open and available.
