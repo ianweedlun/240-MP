@@ -207,11 +207,28 @@ FocusScope {
 
         Keys.onUpPressed: {
             var prev = settingsRoot.firstSelectableBefore(currentIndex)
-            if (prev !== currentIndex) currentIndex = prev
+            if (prev !== currentIndex) {
+                currentIndex = prev
+            } else {
+                // wrap to last selectable
+                for (var i = settingsItems.length - 1; i >= 0; i--) {
+                    if (settingsItems[i].type !== "section") { currentIndex = i; break }
+                }
+            }
+            settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
         }
         Keys.onDownPressed: {
             var next = settingsRoot.firstSelectableAfter(currentIndex)
-            if (next !== currentIndex) currentIndex = next
+            if (next !== currentIndex) {
+                currentIndex = next
+                settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
+            } else {
+                // wrap to first selectable
+                for (var j = 0; j < settingsItems.length; j++) {
+                    if (settingsItems[j].type !== "section") { currentIndex = j; break }
+                }
+                settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
+            }
         }
 
         Keys.onLeftPressed: {
