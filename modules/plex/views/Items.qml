@@ -18,12 +18,24 @@ FocusScope {
     property string ratingKey: navParams.ratingKey || ""
     property string categoryKey: navParams.categoryKey || ""
     property string libraryName: navParams.libraryName || ""
+    // Folder browsing: the key of the folder being listed (empty at a section's
+    // top level) and the trail of folder names walked to reach it. The trail is
+    // appended to the library name in the header, so a deep folder says where it
+    // is — the leaf on its own is ambiguous, since the "Season 1" folders of two
+    // different shows would give identical headers.
+    property string folderKey: navParams.folderKey || ""
+    property string folderTrail: navParams.folderTrail || ""
 
     property var items: []
     property bool isLoading: false
     property string errorMessage: ""
 
+    // A folder listing only earns the panel when it agrees with the rows it
+    // points into — see letterNavUsable, which sets this as the listing loads.
+    // library_all is always server-sorted, so it needs no such test.
+    property bool folderLetterNav: false
     property bool showLetterNav: listType === "library_all"
+                                 || (listType === "folders" && folderLetterNav)
     property bool letterNavActive: false
     property var letterIndex: []
 
@@ -64,10 +76,28 @@ FocusScope {
         return queueRowsWarranted(candidates) ? 2 : 0
     }
 
+    // First character as a bucket label; everything non-alphabetic shares '#'.
+    function bucket(text) {
+        var ch = text.charAt(0).toUpperCase()
+        return (ch >= 'A' && ch <= 'Z') ? ch : '#'
+    }
+
+    // '#' sorts ahead of the letters, matching the panel's own ordering.
+    function bucketRank(key) {
+        return key === '#' ? 0 : key.charCodeAt(0)
+    }
+
     // Buckets by the server's sort title when one is set (Plex sorts the list by
     // titleSort), otherwise falls back to article-stripping the display title —
     // which is what Plex itself does for items without a custom sort title.
+    //
+    // Folder listings are the exception: there a row *is* the name on disk, so it
+    // buckets on the literal first character. Article-stripping is metadata logic,
+    // and it makes the panel disagree with what is on screen — a library filed
+    // into letter folders keeps "An Inconvenient Truth" in A/ on disk, but
+    // stripping the article would bucket it under I.
     function sortKey(item) {
+        if (listType === "folders") return bucket((item && item.title) || "")
         var sortTitle = (item && item.titleSort) || ""
         var t = (sortTitle || (item && item.title) || "").toLowerCase()
         if (!sortTitle) {
@@ -76,12 +106,33 @@ FocusScope {
                 if (t.indexOf(articles[i]) === 0) { t = t.substring(articles[i].length); break }
             }
         }
-        var ch = t.charAt(0).toUpperCase()
-        return (ch >= 'A' && ch <= 'Z') ? ch : '#'
+        return bucket(t)
+    }
+
+    // The panel is only useful when it agrees with the list it jumps into: the
+    // rows have to already be in bucket order, and there has to be more than one
+    // bucket to jump between. Plex returns a folder's subfolders ahead of its
+    // loose files, each group sorted on its own, so a folder holding both
+    // restarts the alphabet — A B C A B C — and a letter present in both groups
+    // could only ever reach the folder. Testing the whole listing catches that
+    // along with any other ordering surprise, and it also drops the panel for a
+    // single-bucket folder, where every row shares one letter anyway.
+    function letterNavUsable(itemArr) {
+        if (itemArr.length === 0) return false
+        var distinct = 1
+        var prev = sortKey(itemArr[0])
+        for (var i = 1; i < itemArr.length; i++) {
+            var key = sortKey(itemArr[i])
+            if (bucketRank(key) < bucketRank(prev)) return false
+            if (key !== prev) distinct++
+            prev = key
+        }
+        return distinct > 1
     }
 
     // Highlights the letter matching the currently selected item.
     function syncLetterToItem() {
+        if (letterIndex.length === 0) return
         var curLetter = sortKey(items[itemList.currentIndex - actionRows.length])
         for (var i = 0; i < letterIndex.length; i++) {
             if (letterIndex[i].letter === curLetter) { letterList.currentIndex = i; break }
@@ -185,6 +236,21 @@ FocusScope {
             }
         }
 
+        function onFolderLoaded(loadedItems) {
+            if (itemListRoot.listType === "folders") {
+                itemListRoot.isLoading = false
+                itemListRoot.items = loadedItems
+                itemListRoot.folderLetterNav = itemListRoot.letterNavUsable(loadedItems)
+                itemListRoot.letterIndex = itemListRoot.folderLetterNav
+                    ? itemListRoot.buildLetterIndex(loadedItems) : []
+                if (loadedItems.length > 0) {
+                    var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
+                    itemList.currentIndex = Math.min(restore, loadedItems.length - 1)
+                    itemList.positionViewAtIndex(itemList.currentIndex, ListView.Contain)
+                }
+            }
+        }
+
         function onCategoriesLoaded(loadedItems) {
             if (itemListRoot.listType === "categories") {
                 itemListRoot.isLoading = false
@@ -220,6 +286,20 @@ FocusScope {
                 queueItems: queueItems,
                 shuffle: item.__action === "shuffle",
                 title: listTitle,
+                libraryName: libraryName
+            }, { currentIndex: itemList.currentIndex })
+            return
+        }
+
+        // A folder row opens the next level down. The server's own key is passed
+        // back untouched, so the section id only matters at the top level.
+        if (item.type === "folder") {
+            itemListRoot.navigateTo("Items.qml", {
+                listType: "folders",
+                title: item.title,
+                sectionId: sectionId,
+                folderKey: item.folderKey,
+                folderTrail: (folderTrail !== "" ? folderTrail + " / " : "") + item.title,
                 libraryName: libraryName
             }, { currentIndex: itemList.currentIndex })
             return
@@ -326,6 +406,8 @@ FocusScope {
             plexBackend.load_categories(sectionId)
         else if (listType === "category_items")
             plexBackend.load_category_items(sectionId, categoryKey)
+        else if (listType === "folders")
+            plexBackend.load_folder(sectionId, folderKey)
         else if (listType === "continue_watching")
             plexBackend.load_continue_watching()
     }
@@ -346,7 +428,7 @@ FocusScope {
     AppBar {
         iconSource: moduleRoot.moduleIcon
         title: moduleRoot.moduleName
-        subtitle: libraryName
+        subtitle: folderTrail !== "" ? libraryName + " / " + folderTrail : libraryName
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
@@ -453,6 +535,7 @@ FocusScope {
                 Text {
                     id: rowText
                     text: {
+                        if (modelData.type === "folder") return (modelData.title || "") + "/"
                         if (modelData.type === "episode" && modelData.grandparentTitle) {
                             var sNum = (modelData.parentIndex != null) ? modelData.parentIndex : "?"
                             var eNum = (modelData.index != null) ? modelData.index : "?"
