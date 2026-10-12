@@ -6,10 +6,15 @@ FocusScope {
     property var navParams: ({})
 
     signal goBack()
+    // Emitted when autoplay advances in place, so Root can move the list
+    // cursor BACK returns to onto the now-playing playlist item.
+    signal updateBackListState(var state)
 
     property var    item:     navParams.item || ({})
     property string videoUrl: item.url || ""
     property string videoId:  item.videoId || ""
+    property var    playlistItems: navParams.playlistItems || []
+    property int    playlistIndex: navParams.playlistIndex === undefined ? -1 : navParams.playlistIndex
 
     property bool   overlayVisible:   false
     property bool   playbackStarted:  false
@@ -45,6 +50,19 @@ FocusScope {
     function play(startMs) {
         startTimer.pendingStartMs = startMs
         startTimer.restart()
+    }
+
+    function playNextPlaylistItem() {
+        if (playlistIndex < 0 || playlistIndex + 1 >= playlistItems.length)
+            return false
+        item = playlistItems[++playlistIndex]
+        playbackStarted = false
+        lastKnownPositionMs = 0
+        lastKnownDurationMs = 0
+        savedPositionMs = 0
+        updateBackListState({ currentIndex: playlistIndex })
+        play(0)
+        return true
     }
 
     Keys.onPressed: function(event) {
@@ -129,6 +147,10 @@ FocusScope {
                 youtubeBackend.savePosition(videoId, 0, item.title || "", item.channelName || "")
             else if (pos > 5000)
                 youtubeBackend.savePosition(videoId, pos, item.title || "", item.channelName || "")
+            var nextItemEnabled = appCore.get_setting(moduleRoot.moduleId, "autoplay_playlist_items")
+            if (reason === "eof" && (nextItemEnabled === true || nextItemEnabled === "ON")
+                    && playerRoot.playNextPlaylistItem())
+                return
             goBack()
         }
     }
