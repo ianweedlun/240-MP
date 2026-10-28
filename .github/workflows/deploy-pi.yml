@@ -66,14 +66,4 @@ jobs:
             "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C /opt/240mp && \
              sudo chown -R $PI_USER: /opt/240mp && \
              rm -f /tmp/240-MP-deploy.tar.gz && \
-             echo 'Deploy complete'"
-
-          # Start service
-          echo "Starting 240mp.service..."
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            "$PI_USER@$PI_HOST" \
-            "sudo systemctl start 240mp.service && \
-             sleep 3 && \
-             sudo systemctl status 240mp.service --no-pager"
-
-          echo "=== Deploy complete ==="
+             echo 'Deploy complete — restart service manually or reboot'"

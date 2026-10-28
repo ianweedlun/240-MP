@@ -50,13 +50,6 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
      rm -f /tmp/240-MP-deploy.tar.gz && \
-     echo 'Deploy complete'"
-
-# ── Start service ─────────────────────────────────────────────────────────────
-echo "Starting 240mp.service..."
-sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo systemctl start 240mp.service && \
-     sleep 3 && \
-     sudo systemctl status 240mp.service --no-pager"
+     echo 'Deploy complete — restart service manually or reboot'"
 
 echo "=== Deploy complete ==="
