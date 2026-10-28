@@ -1,0 +1,300 @@
+#include "../RetroArchBackend.h"
+
+#include <QtTest/QtTest>
+#include <QTemporaryDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSignalSpy>
+
+// Unit tests for RetroArchBackend's playlist browsing. Everything is local
+// file I/O against a temp tree, so the suite is fast and needs no RetroArch
+// install, no display and no network.
+class RetroArchBackendTest : public QObject {
+    Q_OBJECT
+
+private:
+    QTemporaryDir m_tmp;
+
+    // A temp-tree config.json pointing every path at the fixture dirs.
+    RetroArchBackend *makeBackend();
+    void writePlaylist(const QString &name, const QString &content);
+    static QString playlistJson(const QString &corePath, const QStringList &labels);
+
+private slots:
+    void initTestCase();
+    void systemFromPlaylistIsLowercaseBaseName();
+    void refreshSystemsGroupsAndSorts();
+    void refreshSystemsOnMissingDirIsEmpty();
+    void refreshPlaylistsFiltersBySystem();
+    void refreshGamesParsesEntries();
+    void refreshGamesSkipsMalformedItems();
+    void refreshGamesOnBrokenJsonIsEmpty();
+    void relativeRomResolvesAgainstRomDir();
+    void absoluteRomPassesThrough();
+    void thumbnailFoundInNamedBoxarts();
+    void missingThumbnailYieldsEmptyString();
+    void signalsFireAlongsideReturnValues();
+};
+
+void RetroArchBackendTest::initTestCase() {
+    QVERIFY(m_tmp.isValid());
+    QDir().mkpath(m_tmp.path() + "/playlists");
+    QDir().mkpath(m_tmp.path() + "/ROMs");
+    QDir().mkpath(m_tmp.path() + "/thumbnails");
+}
+
+RetroArchBackend *RetroArchBackendTest::makeBackend() {
+    const QString dataRoot = m_tmp.path();
+    QJsonObject mod;
+    mod.insert("playlist_directory", dataRoot + "/playlists");
+    mod.insert("rom_directory", dataRoot + "/ROMs");
+    mod.insert("thumbnail_directory", dataRoot + "/thumbnails");
+    QJsonObject cfg;
+    cfg.insert("modules", QJsonObject{ { QStringLiteral("com.240mp.retroarch"), mod } });
+    {
+        QFile f(dataRoot + "/config.json");
+        // QVERIFY would return out of this non-slot helper, so fail closed
+        // instead: slots check the pointer.
+        if (!f.open(QIODevice::WriteOnly))
+            return nullptr;
+        f.write(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
+    }
+    return new RetroArchBackend(dataRoot, dataRoot, nullptr, this);
+}
+
+void RetroArchBackendTest::writePlaylist(const QString &name, const QString &content) {
+    const QString path = m_tmp.path() + "/playlists/" + name;
+    QDir().mkpath(m_tmp.path() + "/playlists");
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(content.toUtf8());
+}
+
+QString RetroArchBackendTest::playlistJson(const QString &corePath,
+                                           const QStringList &labels) {
+    QJsonArray items;
+    for (const QString &label : labels) {
+        QJsonObject item;
+        item.insert("label", label);
+        item.insert("path", label + ".nes");
+        if (!corePath.isEmpty())
+            item.insert("core_path", corePath);
+        items.append(item);
+    }
+    QJsonObject root;
+    root.insert("version", 1);
+    root.insert("items", items);
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
+
+void RetroArchBackendTest::systemFromPlaylistIsLowercaseBaseName() {
+    RetroArchBackend be(m_tmp.path(), m_tmp.path(), nullptr, this);
+    QCOMPARE(be.systemFromPlaylist("/x/playlists/Snes9x_libretro.json"),
+             QString("snes9x_libretro"));
+    QCOMPARE(be.systemFromPlaylist("/x/playlists/NES.lpl"), QString("nes"));
+}
+
+void RetroArchBackendTest::refreshSystemsGroupsAndSorts() {
+    RetroArchBackend *be = makeBackend();
+    writePlaylist("snes9x_libretro.json",
+                  playlistJson("/cores/snes9x_libretro.so",
+                               { "Super Mario World", "Chrono Trigger" }));
+    writePlaylist("nes_libretro.json",
+                  playlistJson("/cores/nes_libretro.so", { "Tetris" }));
+    writePlaylist("genesis_libretro.json",
+                  playlistJson("/cores/genesis_libretro.so", { "Sonic 2" }));
+
+    const QVariantList systems = be->refreshSystems();
+    QCOMPARE(systems.size(), 3);
+    QCOMPARE(systems.at(0).toMap()["name"].toString(), QString("genesis_libretro"));
+    QCOMPARE(systems.at(1).toMap()["name"].toString(), QString("nes_libretro"));
+    QCOMPARE(systems.at(2).toMap()["name"].toString(), QString("snes9x_libretro"));
+    // Game counts propagate.
+    QCOMPARE(systems.at(2).toMap()["count"].toInt(), 2);
+    QCOMPARE(systems.at(1).toMap()["count"].toInt(), 1);
+}
+
+void RetroArchBackendTest::refreshSystemsOnMissingDirIsEmpty() {
+    // Isolated config: points at a playlist dir that never exists, so this
+    // test can't clobber the shared fixture the other tests rely on.
+    const QString dataRoot = m_tmp.path();
+    QJsonObject mod;
+    mod.insert("playlist_directory", dataRoot + "/no-such-dir");
+    QJsonObject cfg;
+    cfg.insert("modules", QJsonObject{ { QStringLiteral("com.240mp.retroarch"), mod } });
+    {
+        QFile f(dataRoot + "/config.json");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
+    }
+    RetroArchBackend be(dataRoot, dataRoot, nullptr, this);
+    QVERIFY(be.refreshSystems().isEmpty());
+    // Restore the shared config for the next test.
+    {
+        QJsonObject mod2;
+        mod2.insert("playlist_directory", dataRoot + "/playlists");
+        mod2.insert("rom_directory", dataRoot + "/ROMs");
+        mod2.insert("thumbnail_directory", dataRoot + "/thumbnails");
+        QJsonObject cfg2;
+        cfg2.insert("modules", QJsonObject{ { QStringLiteral("com.240mp.retroarch"), mod2 } });
+        QFile f(dataRoot + "/config.json");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QJsonDocument(cfg2).toJson(QJsonDocument::Compact));
+    }
+}
+
+void RetroArchBackendTest::refreshPlaylistsFiltersBySystem() {
+    RetroArchBackend *be = makeBackend();
+    writePlaylist("snes9x_libretro.json",
+                  playlistJson("/cores/snes9x_libretro.so", { "A", "B" }));
+    writePlaylist("nes_libretro.json",
+                  playlistJson("/cores/nes_libretro.so", { "C" }));
+
+    const QVariantList snes = be->refreshPlaylists("snes9x_libretro");
+    QCOMPARE(snes.size(), 1);
+    QCOMPARE(snes.at(0).toMap()["name"].toString(), QString("snes9x_libretro"));
+    QCOMPARE(snes.at(0).toMap()["count"].toInt(), 2);
+
+    const QVariantList nothing = be->refreshPlaylists("psx_libretro");
+    QVERIFY(nothing.isEmpty());
+}
+
+void RetroArchBackendTest::refreshGamesParsesEntries() {
+    RetroArchBackend *be = makeBackend();
+    const QString core = "/cores/snes9x_libretro.so";
+    writePlaylist("snes9x_libretro.json",
+                  playlistJson(core, { "Super Mario World", "Chrono Trigger" }));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
+    QCOMPARE(games.size(), 2);
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Super Mario World"));
+    QCOMPARE(games.at(0).toMap()["corePath"].toString(), core);
+    QCOMPARE(games.at(0).toMap()["coreName"].toString(), QString("snes9x_libretro"));
+    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
+}
+
+void RetroArchBackendTest::refreshGamesSkipsMalformedItems() {
+    RetroArchBackend *be = makeBackend();
+    QJsonArray items;
+    QJsonObject good;
+    good.insert("label", "Ok Game");
+    good.insert("path", "Ok Game.nes");
+    QJsonObject noPath;
+    noPath.insert("label", "Missing Path");
+    QJsonObject noLabel;
+    noLabel.insert("path", "Missing Label.nes");
+    items << good << noPath << noLabel;
+    QJsonObject root;
+    root.insert("items", items);
+
+    writePlaylist("nes_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+    const QVariantList games = be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QCOMPARE(games.size(), 1);
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Ok Game"));
+}
+
+void RetroArchBackendTest::refreshGamesOnBrokenJsonIsEmpty() {
+    RetroArchBackend *be = makeBackend();
+    writePlaylist("broken.json", "definitely not json {");
+    QVERIFY(be->refreshGames(m_tmp.path() + "/playlists/broken.json").isEmpty());
+}
+
+void RetroArchBackendTest::relativeRomResolvesAgainstRomDir() {
+    RetroArchBackend *be = makeBackend();
+    const QString roms = m_tmp.path() + "/ROMs";
+    QDir().mkpath(roms + "/snes");
+    {
+        QFile rom(roms + "/snes/Chrono Trigger.smc");
+        QVERIFY(rom.open(QIODevice::WriteOnly));
+    }
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Chrono Trigger");
+    item.insert("path", "snes/Chrono Trigger.smc");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("snes9x_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
+    QCOMPARE(games.size(), 1);
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(),
+             roms + "/snes/Chrono Trigger.smc");
+}
+
+void RetroArchBackendTest::absoluteRomPassesThrough() {
+    RetroArchBackend *be = makeBackend();
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Absolute");
+    item.insert("path", "/some/where/Absolute.nes");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("nes_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(), QString("/some/where/Absolute.nes"));
+}
+
+void RetroArchBackendTest::thumbnailFoundInNamedBoxarts() {
+    RetroArchBackend *be = makeBackend();
+    const QString thumbs = m_tmp.path() + "/thumbnails";
+    // RetroArch's real layout: <thumbnails>/<system>/<type>/<name>.png
+    // The system comes from the playlist filename (lowercased).
+    QDir().mkpath(thumbs + "/snes9x_libretro/Named_Boxarts");
+    {
+        QFile f(thumbs + "/snes9x_libretro/Named_Boxarts/Super mario world.png");
+        // Deliberately different case than the label: thumbnail lookups are
+        // case-insensitive.
+        QVERIFY(f.open(QIODevice::WriteOnly));
+    }
+    writePlaylist("snes9x_libretro.json",
+                  playlistJson("/cores/snes9x_libretro.so", { "Super Mario World" }));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
+    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+             thumbs + "/snes9x_libretro/Named_Boxarts/Super mario world.png");
+}
+
+void RetroArchBackendTest::missingThumbnailYieldsEmptyString() {
+    RetroArchBackend *be = makeBackend();
+    writePlaylist("nes_libretro.json",
+                  playlistJson("/cores/nes_libretro.so", { "No Art Game" }));
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QVERIFY(games.at(0).toMap()["thumbnail"].toString().isEmpty());
+}
+
+void RetroArchBackendTest::signalsFireAlongsideReturnValues() {
+    // Clean the playlist dir: previous tests left files there, which would
+    // make this count-based assertion flaky.
+    QDir plDir(m_tmp.path() + "/playlists");
+    plDir.removeRecursively();
+    QDir().mkpath(plDir.path());
+
+    RetroArchBackend *be = makeBackend();
+    writePlaylist("snes9x_libretro.json",
+                  playlistJson("/cores/snes9x_libretro.so", { "A" }));
+
+    QSignalSpy systemsSpy(be, &RetroArchBackend::systemsReady);
+    QSignalSpy gamesSpy(be, &RetroArchBackend::gamesReady);
+    be->refreshSystems();
+    be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
+
+    QCOMPARE(systemsSpy.count(), 1);
+    QCOMPARE(gamesSpy.count(), 1);
+    QCOMPARE(systemsSpy.at(0).at(0).toList().size(), 1);
+    QCOMPARE(gamesSpy.at(0).at(0).toList().size(), 1);
+}
+
+QTEST_GUILESS_MAIN(RetroArchBackendTest)
+#include "RetroArchBackendTest.moc"
