@@ -55,7 +55,7 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
      rm -f /tmp/240-MP-deploy.tar.gz && \
-     rm -f /etc/systemd/system/240mp.service.d/override.conf && \
+     sudo rm -f /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl daemon-reload && \
      echo 'Deploy complete — restart service manually or reboot'"
 
