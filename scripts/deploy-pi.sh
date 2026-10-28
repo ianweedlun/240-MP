@@ -33,6 +33,7 @@ echo "Tarball: $TARBALL"
 echo "Stopping 240mp.service via 240mp-terminal.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "echo -e '[Service]\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+     sudo systemctl daemon-reload && \
      sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
      sudo systemctl start 240mp-terminal.service && \
      sleep 2"
