@@ -35,14 +35,15 @@ jobs:
           TARBALL=$(ls *.tar.gz | head -1)
           echo "Deploying $TARBALL to $PI_USER@$PI_HOST"
 
-          # Stop service — temporarily clear ExecStopPost to avoid poweroff.
-          # ExecStopPost runs on ANY exit and defaults to systemctl poweroff,
-          # so we clear it via a drop-in file, stop, then restore.
+          # Stop service — use 240mp-terminal.service to stop 240mp.
+          # 240mp-terminal.service is a getty on tty1. Starting it stops 240mp.service
+          # because they compete for the same VT. No ExecStopPost, no poweroff.
           echo "Stopping 240mp.service..."
           sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
             "$PI_USER@$PI_HOST" \
-            "sudo mkdir -p /etc/systemd/system/240mp.service.d && \
-             echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+            "sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
+             sudo systemctl start 240mp-terminal.service && \
+             sleep 2 && \
              sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
           # Wait for service to stop
@@ -63,13 +64,13 @@ jobs:
           sshpass -p "$PI_PASSWORD" scp -o StrictHostKeyChecking=no \
             "$TARBALL" "$PI_USER@$PI_HOST:/tmp/240-MP-deploy.tar.gz"
 
-          # Extract and deploy, then restore ExecStopPost
+          # Extract and deploy, then clean up old override.conf
           echo "Extracting..."
           sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
             "$PI_USER@$PI_HOST" \
             "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C /opt/240mp && \
              sudo chown -R $PI_USER: /opt/240mp && \
              rm -f /tmp/240-MP-deploy.tar.gz && \
-             echo -e '[Service]\\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+             rm -f /etc/systemd/system/240mp.service.d/override.conf && \
              sudo systemctl daemon-reload && \
              echo 'Deploy complete — restart service manually or reboot'"
