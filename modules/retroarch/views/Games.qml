@@ -39,11 +39,43 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125 //80
     }
 
+    // Loading indicator
+    Rectangle {
+        id: loadingIndicator
+        anchors.centerIn: parent
+        width: root.sw * 0.3
+        height: root.sh * 0.15
+        color: "transparent"
+        visible: gameList.count === 0 && !Component.onCompletedCalled
+        border.color: root.accentColor
+        border.width: 2
+        radius: 8
+
+        Text {
+            anchors.centerIn: parent
+            text: "LOADING..."
+            color: root.accentColor
+            font.family: root.globalFont
+            font.capitalization: Font.AllUppercase
+            horizontalAlignment: Text.AlignHCenter
+            font.pixelSize: root.sh * 0.04 //20
+        }
+
+        SequentialAnimation {
+            running: loadingIndicator.visible
+            loops: Animation.Infinite
+            PauseAnimation { duration: 500 }
+            NumberAnimation { target: loadingIndicator; property: "opacity"; to: 0.3; duration: 500 }
+            PauseAnimation { duration: 500 }
+            NumberAnimation { target: loadingIndicator; property: "opacity"; to: 1; duration: 500 }
+        }
+    }
+
     // Empty state
     Column {
         anchors.centerIn: parent
         spacing: root.sh * 0.0333333 //16
-        visible: gameList.count === 0
+        visible: gameList.count === 0 && !loadingIndicator.visible
         Text {
             text: "No games in this playlist"
             color: root.secondaryColor

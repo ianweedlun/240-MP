@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>240-MP Remote Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0a;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 {
+            color: #a0a0a0;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            text-align: center;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .stream-container {
+            flex: 1;
+            min-width: 300px;
+            max-width: 640px;
+        }
+        .controls-container {
+            flex: 1;
+            min-width: 300px;
+            max-width: 400px;
+        }
+        .stream-container img {
+            width: 100%;
+            height: auto;
+            border: 2px solid #333;
+            border-radius: 4px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            font-size: 0.9em;
+            text-align: center;
+        }
+        .status .label { color: #888; }
+        .status .value { color: #4CAF50; }
+        .controls {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+        .controls h2 {
+            color: #a0a0a0;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+        .key-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .key-btn {
+            padding: 15px;
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .key-btn:hover {
+            background: #3a3a3a;
+            border-color: #666;
+        }
+        .key-btn:active {
+            background: #4a4a4a;
+            transform: scale(0.95);
+        }
+        .key-btn.danger {
+            background: #4a1a1a;
+            border-color: #8b0000;
+        }
+        .key-btn.danger:hover {
+            background: #5a2a2a;
+        }
+        .key-btn.success {
+            background: #1a4a1a;
+            border-color: #006400;
+        }
+        .key-btn.success:hover {
+            background: #2a5a2a;
+        }
+        .key-btn.warning {
+            background: #4a4a1a;
+            border-color: #8b8b00;
+        }
+        .key-btn.warning:hover {
+            background: #5a5a2a;
+        }
+        .key-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.8em;
+        }
+        .log .entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .log .time { color: #666; }
+        .log .message { color: #e0e0e0; }
+        .log .error { color: #ff6b6b; }
+        .log .success { color: #4CAF50; }
+    </style>
+</head>
+<body>
+    <h1>240-MP Remote Viewer & Control</h1>
+    <div class="container">
+        <div class="stream-container">
+            <img id="stream" src="http://execubot.weedlun.me:8080/stream.mjpg" alt="240-MP Screen Stream">
+            <div class="status">
+                <span class="label">Status: </span>
+                <span id="status" class="value">Connecting...</span>
+            </div>
+        </div>
+        <div class="controls-container">
+            <div class="controls">
+                <h2>Controls</h2>
+                <div class="key-grid">
+                    <button class="key-btn" onclick="sendKey('Escape')">ESC</button>
+                    <button class="key-btn" onclick="sendKey('Backspace')">←</button>
+                    <button class="key-btn" onclick="sendKey('Tab')">TAB</button>
+                    <button class="key-btn" onclick="sendKey('Up')">↑</button>
+                    <button class="key-btn" onclick="sendKey('Return')">ENTER</button>
+                    <button class="key-btn" onclick="sendKey('Down')">↓</button>
+                    <button class="key-btn" onclick="sendKey('Left')">←</button>
+                    <button class="key-btn" onclick="sendKey('Space')">SPACE</button>
+                    <button class="key-btn" onclick="sendKey('Right')">→</button>
+                    <button class="key-btn danger" onclick="sendKey('VolumeDown')">VOL-</button>
+                    <button class="key-btn warning" onclick="sendKey('Mute')">MUTE</button>
+                    <button class="key-btn success" onclick="sendKey('VolumeUp')">VOL+</button>
+                </div>
+            </div>
+            <div class="log" id="log">
+                <div class="entry"><span class="time">[init]</span> <span class="message">Ready</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const CONTROL_URL = 'http://execubot.weedlun.me:8081/key';
+        const STREAM_URL = 'http://execubot.weedlun.me:8080/stream.mjpg';
+
+        function sendKey(key) {
+            fetch(CONTROL_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: key, press: true })
+            })
+            .then(response => {
+                if (response.ok) {
+                    addLog(`Sent key: ${key}`, 'success');
+                } else {
+                    response.text().then(text => {
+                        addLog(`Failed: ${text}`, 'error');
+                    });
+                }
+            })
+            .catch(error => {
+                addLog(`Error: ${error.message}`, 'error');
+            });
+        }
+
+        function addLog(message, type = 'message') {
+            const log = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'entry';
+            entry.innerHTML = `<span class="time">[${time}]</span> <span class="${type}">${message}</span>`;
+            log.insertBefore(entry, log.firstChild);
+            if (log.children.length > 50) {
+                log.removeChild(log.lastChild);
+            }
+        }
+
+        function updateStatus() {
+            const img = document.getElementById('stream');
+            img.onerror = () => {
+                document.getElementById('status').textContent = 'Stream disconnected';
+                document.getElementById('status').className = 'value';
+                document.getElementById('status').style.color = '#ff6b6b';
+            };
+            img.onload = () => {
+                document.getElementById('status').textContent = 'Stream connected';
+                document.getElementById('status').className = 'value';
+                document.getElementById('status').style.color = '#4CAF50';
+            };
+        }
+
+        // Refresh stream every 5 seconds to maintain connection
+        setInterval(() => {
+            const img = document.getElementById('stream');
+            img.src = STREAM_URL + '?t=' + Date.now();
+        }, 5000);
+
+        updateStatus();
+        addLog('Viewer initialized', 'success');
+    </script>
+</body>
+</html>
