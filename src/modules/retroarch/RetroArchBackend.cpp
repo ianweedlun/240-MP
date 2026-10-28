@@ -29,7 +29,8 @@ void RetroArchBackend::loadSettings() {
         QJsonParseError err;
         QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
         if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            QJsonObject mod = doc.object()["modules"].toObject()["com.240mp.retroarch"].toObject();
+            QJsonObject root = doc.object();
+            QJsonObject mod = root["modules"].toObject()["com.240mp.retroarch"].toObject();
 
             m_playlistDir = mod["playlist_directory"].toString();
             if (m_playlistDir.isEmpty())
@@ -48,6 +49,40 @@ void RetroArchBackend::loadSettings() {
             m_retroarchPath = mod["retroarch_path"].toString();
             if (m_retroarchPath.isEmpty())
                 m_retroarchPath = QStringLiteral("retroarch"); // from PATH
+
+            // ── Migrate old show_preview (toggle) → thumbnail_display (list_single) ──
+            bool needsSave = false;
+            QString thumbDisplay;
+            if (!mod.contains("thumbnail_display") || mod["thumbnail_display"].isNull()) {
+                if (mod.contains("show_preview")) {
+                    bool oldPreview = mod["show_preview"].toBool(true);
+                    thumbDisplay = oldPreview ? "RIGHT" : "OFF";
+                    needsSave = true;
+                } else {
+                    thumbDisplay = "RIGHT"; // default
+                    needsSave = true;
+                }
+                // Remove the old key
+                mod.remove("show_preview");
+            }
+            if (needsSave) {
+                qInfo("[RetroArch] Migrating show_preview -> thumbnail_display: %s", qPrintable(thumbDisplay));
+                mod.insert("thumbnail_display", QJsonValue::fromVariant(thumbDisplay));
+                // Write back the modified module object — must reassign the whole
+                // modules object since QJsonObject is implicitly shared.
+                QJsonObject modules = root["modules"].toObject();
+                modules.insert("com.240mp.retroarch", mod);
+                root["modules"] = modules;
+                // Close the read handle first, then write with a fresh QFile.
+                f.close();
+                QFile fw(m_dataRoot + "/config.json");
+                if (fw.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    fw.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+                    qInfo("[RetroArch] Config migration written to %s", qPrintable(fw.fileName()));
+                } else {
+                    qWarning("[RetroArch] Failed to write migrated config: %s", fw.errorString());
+                }
+            }
         }
     }
 }
@@ -150,17 +185,17 @@ QVariantList RetroArchBackend::refreshGames(const QString &playlistPath) {
 QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString &systemId) {
     QVariantList entries;
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return entries;
+    if (!f.open(QIODevice::ReadOnly)) return entries;
 
     QByteArray data = f.readAll();
     if (data.isEmpty()) return entries;
 
     // Check for RZI-compressed playlist (RetroArch 1.7.5+ default).
     // Header: "#RZIPv" (6) + version(1) + flag(1) + uncompressed_size(4, LE) + compressed_size(4, LE)
-    // Total 16 bytes, then zlib deflate stream.
-    if (data.size() >= 16 &&
+    // + 4 zero bytes + 4 bytes (checksum?) = 24 bytes total, then zlib deflate stream.
+    if (data.size() >= 24 &&
         data[0] == '#' && data[1] == 'R' && data[2] == 'Z' && data[3] == 'I' && data[4] == 'P' && data[5] == 'v') {
-        QByteArray compressed = data.mid(16);
+        QByteArray compressed = data.mid(24);
         QByteArray decompressed = qUncompress(compressed);
         if (!decompressed.isEmpty()) {
             data = decompressed;
