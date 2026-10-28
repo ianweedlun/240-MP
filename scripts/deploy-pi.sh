@@ -15,6 +15,7 @@ TARBALL="${1:?Usage: deploy-pi.sh <tarball-path> [hostname]}"
 HOST="${2:-execubot.weedlun.me}"
 INSTALL_DIR="/opt/240mp"
 OWNER="ian"
+PASS=$(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//')
 
 # ── Verify tarball ────────────────────────────────────────────────────────────
 if [ ! -f "$TARBALL" ]; then
@@ -27,15 +28,13 @@ echo "Tarball: $TARBALL"
 
 # ── Stop service (if running) ─────────────────────────────────────────────────
 echo "Stopping 240mp.service..."
-sshpass -f /dev/stdin ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'" \
-    < <(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//')
+sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
+    "sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
 # Wait for service to fully stop
 for i in $(seq 1 10); do
-    if sshpass -f /dev/stdin ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-        "systemctl is-active 240mp.service 2>/dev/null" \
-        < <(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//') | grep -q 'active'; then
+    if sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
+        "systemctl is-active 240mp.service 2>/dev/null" | grep -q 'active'; then
         echo "Waiting for service to stop... ($i/10)"
         sleep 2
     else
@@ -46,18 +45,18 @@ done
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 echo "Extracting tarball..."
-sshpass -f /dev/stdin ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
+sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$TARBALL" "$OWNER@$HOST:/tmp/240-MP-deploy.tar.gz"
+sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
-     echo 'Deploy complete'" \
-    < <(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//')
+     rm -f /tmp/240-MP-deploy.tar.gz && \
+     echo 'Deploy complete'"
 
 # ── Start service ─────────────────────────────────────────────────────────────
 echo "Starting 240mp.service..."
-sshpass -f /dev/stdin ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
+sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo systemctl start 240mp.service && \
      sleep 3 && \
-     sudo systemctl status 240mp.service --no-pager" \
-    < <(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//')
+     sudo systemctl status 240mp.service --no-pager"
 
 echo "=== Deploy complete ==="
