@@ -1,0 +1,79 @@
+name: Deploy to Pi
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  deploy:
+    name: Deploy to Raspberry Pi
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download tarball artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tarball-linux-arm64
+          path: .
+          run-id: ${{ github.event.workflow_run.database_id }}
+
+      - name: Verify tarball
+        run: |
+          ls -la *.tar.gz
+          file *.tar.gz
+
+      - name: Deploy to Pi
+        env:
+          PI_HOST: execubot.weedlun.me
+          PI_USER: ian
+          PI_PASSWORD: ${{ secrets.PI_SSH_PASSWORD }}
+        run: |
+          TARBALL=$(ls *.tar.gz | head -1)
+          echo "Deploying $TARBALL to $PI_USER@$PI_HOST"
+
+          # Stop service
+          echo "Stopping 240mp.service..."
+          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
+            "$PI_USER@$PI_HOST" \
+            "sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
+
+          # Wait for service to stop
+          for i in $(seq 1 10); do
+            if sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
+              "$PI_USER@$PI_HOST" \
+              "systemctl is-active 240mp.service 2>/dev/null" | grep -q 'active'; then
+              echo "Waiting for service to stop... ($i/10)"
+              sleep 2
+            else
+              echo "Service stopped"
+              break
+            fi
+          done
+
+          # SCP tarball
+          echo "Uploading tarball..."
+          sshpass -p "$PI_PASSWORD" scp -o StrictHostKeyChecking=no \
+            "$TARBALL" "$PI_USER@$PI_HOST:/tmp/240-MP-deploy.tar.gz"
+
+          # Extract and deploy
+          echo "Extracting..."
+          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
+            "$PI_USER@$PI_HOST" \
+            "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C /opt/240mp && \
+             sudo chown -R $PI_USER: /opt/240mp && \
+             rm -f /tmp/240-MP-deploy.tar.gz && \
+             echo 'Deploy complete'"
+
+          # Start service
+          echo "Starting 240mp.service..."
+          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
+            "$PI_USER@$PI_HOST" \
+            "sudo systemctl start 240mp.service && \
+             sleep 3 && \
+             sudo systemctl status 240mp.service --no-pager"
+
+          echo "=== Deploy complete ==="
