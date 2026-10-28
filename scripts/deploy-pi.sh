@@ -26,10 +26,10 @@ fi
 echo "=== Deploying 240-MP to $HOST ==="
 echo "Tarball: $TARBALL"
 
-# ── Stop service (if running) ─────────────────────────────────────────────────
+# ── Stop service (if running) — use kill to avoid ExecStopPost poweroff ────────
 echo "Stopping 240mp.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
+    "sudo systemctl kill --signal=SIGTERM 240mp.service 2>/dev/null || echo 'Service not running'"
 
 # Wait for service to fully stop
 for i in $(seq 1 10); do

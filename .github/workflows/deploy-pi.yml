@@ -35,11 +35,12 @@ jobs:
           TARBALL=$(ls *.tar.gz | head -1)
           echo "Deploying $TARBALL to $PI_USER@$PI_HOST"
 
-          # Stop service
+          # Stop service — use kill to avoid triggering ExecStopPost (which
+          # calls systemctl poweroff on non-10/11/12 exit codes).
           echo "Stopping 240mp.service..."
           sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
             "$PI_USER@$PI_HOST" \
-            "sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
+            "sudo systemctl kill --signal=SIGTERM 240mp.service 2>/dev/null || echo 'Service not running'"
 
           # Wait for service to stop
           for i in $(seq 1 10); do
