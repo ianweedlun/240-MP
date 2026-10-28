@@ -29,7 +29,7 @@ echo "Tarball: $TARBALL"
 # ── Stop service (if running) — clear ExecStopPost to avoid poweroff ───────────
 echo "Stopping 240mp.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "echo -e '[Service]\\nExecStopPost=' | sudo systemctl edit 240mp.service && \
+    "echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
 # Wait for service to fully stop
@@ -51,7 +51,7 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
      rm -f /tmp/240-MP-deploy.tar.gz && \
-     echo -e '[Service]\\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo systemctl edit 240mp.service && \
+     echo -e '[Service]\\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl daemon-reload && \
      echo 'Deploy complete — restart service manually or reboot'"
 
