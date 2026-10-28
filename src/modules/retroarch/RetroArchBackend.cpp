@@ -190,26 +190,48 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     QByteArray data = f.readAll();
     if (data.isEmpty()) return entries;
 
+    qInfo("[RetroArch] Parsing playlist: %s (size: %d bytes)", qPrintable(path), data.size());
+
     // Check for RZI-compressed playlist (RetroArch 1.7.5+ default).
     // Header: "#RZIPv" (6) + version(1) + flag(1) + uncompressed_size(4, LE) + compressed_size(4, LE)
-    // + 4 zero bytes + 4 bytes (checksum?) = 24 bytes total, then zlib deflate stream.
+    // + 4 zero bytes + 4 bytes (actual compressed size) = 24 bytes total, then zlib deflate stream.
     if (data.size() >= 24 &&
         data[0] == '#' && data[1] == 'R' && data[2] == 'Z' && data[3] == 'I' && data[4] == 'P' && data[5] == 'v') {
+        
+        quint32 uncompressedSize = *reinterpret_cast<const quint32*>(data.constData() + 8);
+        quint32 compressedSizeHeader = *reinterpret_cast<const quint32*>(data.constData() + 12);
+        quint32 compressedSizeActual = *reinterpret_cast<const quint32*>(data.constData() + 20);
+        
+        qInfo("[RetroArch] RZI header: uncompressed=%u, compressed(header)=%u, compressed(actual)=%u, data.size()=%d",
+              uncompressedSize, compressedSizeHeader, compressedSizeActual, data.size());
+        
         QByteArray compressed = data.mid(24);
+        qInfo("[RetroArch] Compressed data size: %d bytes (expected actual: %u)", compressed.size(), compressedSizeActual);
+        
         QByteArray decompressed = qUncompress(compressed);
+        qInfo("[RetroArch] Decompressed size: %d bytes", decompressed.size());
+        
         if (!decompressed.isEmpty()) {
             data = decompressed;
+            qInfo("[RetroArch] Successfully decompressed RZI playlist");
         } else {
-            qWarning("[RetroArch] Failed to decompress RZI playlist: %s", qPrintable(path));
+            qWarning("[RetroArch] Failed to decompress RZI playlist: %s (compressed size: %d, zlib header: 0x%02x%02x)",
+                     qPrintable(path), compressed.size(), 
+                     compressed.size() > 0 ? (uchar)compressed[0] : 0,
+                     compressed.size() > 1 ? (uchar)compressed[1] : 0);
             return entries;
         }
     }
 
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject()) return entries;
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning("[RetroArch] JSON parse error: %s", qPrintable(err.errorString()));
+        return entries;
+    }
 
     QJsonArray items = doc.object()["items"].toArray();
+    qInfo("[RetroArch] Parsed %d items from playlist", items.size());
     for (const QJsonValue &val : items) {
         QJsonObject item = val.toObject();
         const QString label = item["label"].toString();

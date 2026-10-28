@@ -80,6 +80,7 @@ private slots:
 private:
     QJsonObject loadConfig() const;
     void saveConfig(const QJsonObject &config) const;
+    void migrateConfig();          // one-shot legacy config migrations at startup
     QString moduleIdForBackend(QObject *backend) const;
     // Extra top-level menu rows a module's backend wants to contribute. Probed,
     // not connected — see the comment at the call site in scan_for_modules.

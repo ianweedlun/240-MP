@@ -13,6 +13,7 @@
 AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *parent)
     : QObject(parent), m_appRoot(appRoot), m_dataRoot(dataRoot)
 {
+    qInfo("[AppCore] Constructor running, appRoot=%s, dataRoot=%s", qPrintable(appRoot), qPrintable(dataRoot));
     QDir modulesDir(appRoot + "/modules");
     const QStringList dirs = modulesDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString &folder : dirs) {
@@ -44,6 +45,9 @@ AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *paren
         m_modules.append(m);
         qDebug("[AppCore] Loaded manifest: %s", qPrintable(id));
     }
+
+    // Migrate legacy config keys once at startup
+    migrateConfig();
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +76,31 @@ void AppCore::saveConfig(const QJsonObject &config) const {
         return;
     }
     f.write(QJsonDocument(config).toJson(QJsonDocument::Indented));
+}
+
+void AppCore::migrateConfig() {
+    qInfo("[AppCore] migrateConfig() running");
+    QJsonObject config = loadConfig();
+    QJsonObject modulesConfig = config["modules"].toObject();
+    bool needsSave = false;
+
+    // RetroArch: show_preview (toggle) → thumbnail_display (list_single)
+    QJsonObject retroMod = modulesConfig["com.240mp.retroarch"].toObject();
+    if (retroMod.contains("show_preview") &&
+        (!retroMod.contains("thumbnail_display") || retroMod["thumbnail_display"].isNull())) {
+        qInfo("[AppCore] Migrating RetroArch show_preview -> thumbnail_display");
+        bool oldPreview = retroMod["show_preview"].toBool(true);
+        retroMod["thumbnail_display"] = oldPreview ? "RIGHT" : "OFF";
+        retroMod.remove("show_preview");
+        modulesConfig["com.240mp.retroarch"] = retroMod;
+        needsSave = true;
+    }
+
+    if (needsSave) {
+        config["modules"] = modulesConfig;
+        saveConfig(config);
+        qInfo("[AppCore] Migrated legacy config: RetroArch show_preview -> thumbnail_display");
+    }
 }
 
 bool AppCore::isModuleEnabled(const ModuleEntry &m, const QJsonObject &modulesConfig) const {
