@@ -896,16 +896,18 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     // held; the rest fire once per press so a held key is a single seek/chapter
     // jump. On macOS during fullscreen playback mpv holds the keyboard and these
     // never reach us — mpv binds the same names natively.
-    const QString mediaKey = mpvKeyForMediaEvent(ke);
-    if (!mediaKey.isEmpty()) {
-        if (type == QEvent::KeyPress) {
-            // Volume keys repeat while held; everything else fires once per press.
-            // mediaKey is the single source of truth for which key this is.
-            const bool isVolume = mediaKey.startsWith(QLatin1String("VOLUME"));
-            if (isVolume || !ke->isAutoRepeat())
-                emit mpvKeyRequested(mediaKey);
+    if (m_interceptMediaKeys) {
+        const QString mediaKey = mpvKeyForMediaEvent(ke);
+        if (!mediaKey.isEmpty()) {
+            if (type == QEvent::KeyPress) {
+                // Volume keys repeat while held; everything else fires once per press.
+                // mediaKey is the single source of truth for which key this is.
+                const bool isVolume = mediaKey.startsWith(QLatin1String("VOLUME"));
+                if (isVolume || !ke->isAutoRepeat())
+                    emit mpvKeyRequested(mediaKey);
+            }
+            return true;
         }
-        return true;
     }
     return false;
 }

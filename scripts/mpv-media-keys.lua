@@ -108,6 +108,9 @@ local function show_volume_bar()
     bar_timer = mp.add_timeout(BAR_TIMEOUT, hide_bar)
 end
 
+-- Script message handler to show volume bar from external IPC (e.g. Weather module)
+mp.register_script_message("240mp-osd-volume-show", show_volume_bar)
+
 local function change_volume(delta)
     mp.command("no-osd add volume " .. delta)
     show_volume_bar()

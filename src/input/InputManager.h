@@ -73,6 +73,12 @@ signals:
     // accept all three id spaces alike. Only emitted while capture is active.
     void auxButtonPressed(int extendedKeyId);
 
+public slots:
+    // When true (default), HID media keys (volume, play/pause, etc.) are
+    // intercepted and sent to mpv via mpvKeyRequested. Set to false when a
+    // module wants to handle volume keys locally (e.g. Weather background music).
+    void setInterceptMediaKeys(bool intercept) { m_interceptMediaKeys = intercept; }
+
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
 
@@ -164,4 +170,5 @@ private:
 
     QString m_lastInputDevice = "keyboard";
     QVariantMap m_hints;
+    bool m_interceptMediaKeys = true;
 };
