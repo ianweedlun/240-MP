@@ -28,15 +28,16 @@ echo "Tarball: $TARBALL"
 
 # ── Stop service (if running) — use 240mp-terminal.service to stop 240mp ───────
 # 240mp-terminal.service is a getty on tty1. Starting it stops 240mp.service
-# because they compete for the same VT. No ExecStopPost, no poweroff.
-echo "Stopping 240mp.service..."
+# because they compete for the same VT.
+# Also clear ExecStopPost to avoid poweroff when 240mp exits due to VT loss.
+echo "Stopping 240mp.service via 240mp-terminal.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
+    "echo -e '[Service]\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+     sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
      sudo systemctl start 240mp-terminal.service && \
-     sleep 2 && \
-     sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
+     sleep 2"
 
-# Wait for service to fully stop
+# Wait for service to fully stop (240mp-terminal takes the VT, forcing 240mp to exit)
 for i in $(seq 1 10); do
     if sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
         "systemctl is-active 240mp.service 2>/dev/null" | grep -q 'active'; then
@@ -55,7 +56,7 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
      rm -f /tmp/240-MP-deploy.tar.gz && \
-     sudo rm -f /etc/systemd/system/240mp.service.d/override.conf && \
+     echo -e '[Service]\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl daemon-reload && \
      echo 'Deploy complete — restart service manually or reboot'"
 

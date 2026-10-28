@@ -8,10 +8,12 @@ FocusScope {
     property var navListState: navParams.navListState || ({})
     readonly property string systemId: navParams.systemId || ""
     readonly property string systemName: navParams.systemName || ""
-    readonly property bool showPreview: {
-        var v = appCore.get_setting(moduleRoot.moduleId, "show_preview")
-        return v !== false && v !== "OFF"
+    readonly property string thumbDisplay: {
+        var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
+        return (v === "LEFT" || v === "RIGHT") ? v : "OFF"
     }
+    readonly property bool showPreview: thumbDisplay !== "OFF"
+    readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
@@ -66,9 +68,11 @@ FocusScope {
     ListView {
         id: playlistList
         anchors.top: parent.top
-        anchors.left: parent.left
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.leftMargin: root.sw * 0.115625 //74
+        anchors.left: previewOnLeft ? previewLoader.right : parent.left
+        anchors.right: previewOnLeft ? parent.right : previewLoader.left
+        anchors.leftMargin: previewOnLeft ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
+        anchors.rightMargin: previewOnLeft ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
         width: playlistsRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
@@ -117,7 +121,7 @@ FocusScope {
                 SequentialAnimation {
                     running: (playlistList.currentIndex === index) &&
                              (rowText.implicitWidth > textClip.width)
-                    loops: Animation.Infinite
+                        loops: Animation.Infinite
                     onRunningChanged: if (!running) rowText.x = 0
                     PauseAnimation { duration: 1500 }
                     NumberAnimation {
@@ -162,13 +166,15 @@ FocusScope {
     Loader {
         id: previewLoader
         visible: playlistsRoot.showPreview && playlistList.count > 0
-        anchors.right: parent.right
-        anchors.rightMargin: root.sw * 0.125 //80
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
         width: root.sw * 0.22
         height: root.sh * 0.525 //252
         source: "PlaylistPreview.qml"
+        anchors.left: previewOnLeft ? parent.left : undefined
+        anchors.leftMargin: previewOnLeft ? root.sw * 0.125 : undefined //80
+        anchors.right: previewOnLeft ? undefined : parent.right
+        anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
     }
 
     // Footer

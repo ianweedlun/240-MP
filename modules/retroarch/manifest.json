@@ -33,11 +33,16 @@
       "description": "Where RetroArch thumbnails live. Default: ~/.config/retroarch/thumbnails"
     },
     {
-      "key": "show_preview",
-      "label": "Show Preview",
-      "type": "toggle",
-      "default": "ON",
-      "description": "Show selected game thumbnail and metadata beside the playlist."
+      "key": "thumbnail_display",
+      "label": "Thumbnail Display",
+      "type": "list_single",
+      "default": "RIGHT",
+      "options": [
+        { "id": "OFF", "label": "OFF" },
+        { "id": "LEFT", "label": "LEFT" },
+        { "id": "RIGHT", "label": "RIGHT" }
+      ],
+      "description": "Show thumbnails to the left or right of the game list, or disable."
     },
     {
       "key": "retroarch_path",

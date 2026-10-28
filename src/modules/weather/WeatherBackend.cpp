@@ -376,6 +376,9 @@ void WeatherBackend::startMusic() {
          << QStringLiteral("--input-ipc-server=%1").arg(m_musicSocketPath)
          // Load media-keys script for volume OSD bar and key handling
          << QStringLiteral("--script=%1").arg(m_appRoot + "/scripts/mpv-media-keys.lua")
+         // --vo=null creates an OSD surface (so the volume bar renders) but
+         // discards video frames — perfect for audio-only playback with visible OSD.
+         << QStringLiteral("--vo=null")
          // Everything after this is a file, so an entry starting with '-'
          // cannot be mistaken for an option.
          << QStringLiteral("--")

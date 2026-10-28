@@ -1,5 +1,6 @@
 #include "RetroArchBackend.h"
 #include "../../util/DisplayHandoff.h"
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -151,8 +152,26 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return entries;
 
+    QByteArray data = f.readAll();
+    if (data.isEmpty()) return entries;
+
+    // Check for RZI-compressed playlist (RetroArch 1.7.5+ default).
+    // Header: "#RZIPv" (6) + version(1) + flag(1) + uncompressed_size(4, LE) + compressed_size(4, LE)
+    // Total 16 bytes, then zlib deflate stream.
+    if (data.size() >= 16 &&
+        data[0] == '#' && data[1] == 'R' && data[2] == 'Z' && data[3] == 'I' && data[4] == 'P' && data[5] == 'v') {
+        QByteArray compressed = data.mid(16);
+        QByteArray decompressed = qUncompress(compressed);
+        if (!decompressed.isEmpty()) {
+            data = decompressed;
+        } else {
+            qWarning("[RetroArch] Failed to decompress RZI playlist: %s", qPrintable(path));
+            return entries;
+        }
+    }
+
     QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return entries;
 
     QJsonArray items = doc.object()["items"].toArray();
