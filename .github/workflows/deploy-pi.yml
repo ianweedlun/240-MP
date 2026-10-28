@@ -41,7 +41,8 @@ jobs:
           echo "Stopping 240mp.service..."
           sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
             "$PI_USER@$PI_HOST" \
-            "echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+            "sudo mkdir -p /etc/systemd/system/240mp.service.d && \
+             echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
              sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
           # Wait for service to stop

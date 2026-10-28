@@ -29,7 +29,8 @@ echo "Tarball: $TARBALL"
 # ── Stop service (if running) — clear ExecStopPost to avoid poweroff ───────────
 echo "Stopping 240mp.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
+    "sudo mkdir -p /etc/systemd/system/240mp.service.d && \
+     echo -e '[Service]\\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
 # Wait for service to fully stop
