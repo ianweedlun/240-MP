@@ -23,6 +23,16 @@ if [ ! -f "$TARBALL" ]; then
     exit 1
 fi
 
+# The Pi is aarch64. A fat-fingered local build (or wrong CI job) ships an
+# x86-64 binary, and 240mp-stop's poweroff-on-exit turns that into a
+# boot loop. Verify the arch before we touch the Pi.
+TARBALL_ARCH=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp 2>/dev/null | file - | grep -o 'ARM aarch64' || true)
+if [ "$TARBALL_ARCH" != "ARM aarch64" ]; then
+    echo "Error: tarball binary is not ARM aarch64 — refusing to deploy."
+    echo "       (A non-ARM binary makes the Pi power off on every boot.)"
+    exit 1
+fi
+
 echo "=== Deploying 240-MP to $HOST ==="
 echo "Tarball: $TARBALL"
 
