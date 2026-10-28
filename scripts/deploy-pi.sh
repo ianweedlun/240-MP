@@ -69,6 +69,7 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
      rm -f /tmp/240-MP-deploy.tar.gz && \
      echo -e '[Service]\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
      sudo systemctl daemon-reload && \
-     echo 'Deploy complete — restart service manually or reboot'"
+     sudo systemctl stop 240mp-terminal.service 2>/dev/null; true && \
+     echo 'Deploy complete — restart 240mp.service manually or reboot'"
 
 echo "=== Deploy complete ==="
