@@ -54,6 +54,9 @@ FocusScope {
         // No-op when the Music setting is off, so the view doesn't have to read
         // the setting a second time.
         weatherBackend.startMusic()
+
+        // Allow volume keys to reach QML for weather music volume control.
+        inputManager.setInterceptMediaKeys(false)
     }
 
     property var chosenDisplays: ({})
@@ -85,6 +88,8 @@ FocusScope {
             idleTracker.mpvActive = false
             idleTracker.resetActivity()
         }
+        // Restore media key interception for mpv playback.
+        inputManager.setInterceptMediaKeys(true)
     }
 
     function advance(step) {
@@ -114,6 +119,17 @@ FocusScope {
             // Independent of weatherRoot.paused: Enter pauses the carousel, and
             // music should keep playing under a screen you're lingering on.
             weatherBackend.toggleMusic()
+            event.accepted = true
+        } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
+            // Qt.Key_VolumeUp (0x01000070) or XF86AudioRaiseVolume (0x1008FF13)
+            // InputManager synthesizes these from HID media keys.
+            weatherBackend.setMusicVolume(
+                Math.min(100, (weatherBackend.musicVolume || 50) + 10))
+            event.accepted = true
+        } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
+            // Qt.Key_VolumeDown (0x01000071) or XF86AudioLowerVolume (0x1008FF11)
+            weatherBackend.setMusicVolume(
+                Math.max(0, (weatherBackend.musicVolume || 50) - 10))
             event.accepted = true
         }
     }
