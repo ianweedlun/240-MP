@@ -26,10 +26,11 @@ fi
 echo "=== Deploying 240-MP to $HOST ==="
 echo "Tarball: $TARBALL"
 
-# ── Stop service (if running) — use kill to avoid ExecStopPost poweroff ────────
+# ── Stop service (if running) — clear ExecStopPost to avoid poweroff ───────────
 echo "Stopping 240mp.service..."
 sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo systemctl kill --signal=SIGTERM 240mp.service 2>/dev/null || echo 'Service not running'"
+    "echo -e '[Service]\\nExecStopPost=' | sudo systemctl edit 240mp.service && \
+     sudo systemctl stop 240mp.service 2>/dev/null || echo 'Service not running'"
 
 # Wait for service to fully stop
 for i in $(seq 1 10); do
@@ -50,6 +51,8 @@ sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
     "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
      sudo chown -R $OWNER: $INSTALL_DIR && \
      rm -f /tmp/240-MP-deploy.tar.gz && \
+     echo -e '[Service]\\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo systemctl edit 240mp.service && \
+     sudo systemctl daemon-reload && \
      echo 'Deploy complete — restart service manually or reboot'"
 
 echo "=== Deploy complete ==="
