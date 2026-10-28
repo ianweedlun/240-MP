@@ -109,11 +109,27 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure -j4
 
+      - name: Install to staging prefix
+        run: |
+          cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
+
+      - name: Create tarball
+        run: |
+          cd "${GITHUB_WORKSPACE}/install"
+          tar -czf "${GITHUB_WORKSPACE}/240-MP-ci-linux-arm64.tar.gz" .
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-linux-arm64
           path: build/240mp
+          retention-days: 5
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-linux-arm64
+          path: 240-MP-ci-linux-arm64.tar.gz
           retention-days: 5
 
   # ──────────────────────────────────────────────────────────────────────────────
