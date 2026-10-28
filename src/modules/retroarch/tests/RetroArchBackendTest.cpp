@@ -19,6 +19,7 @@ private:
     // A temp-tree config.json pointing every path at the fixture dirs.
     RetroArchBackend *makeBackend();
     void writePlaylist(const QString &name, const QString &content);
+    void writePlaylistBinary(const QString &name, const QByteArray &content);
     static QString playlistJson(const QString &corePath, const QStringList &labels);
 
 private slots:
@@ -30,6 +31,7 @@ private slots:
     void refreshGamesParsesEntries();
     void refreshGamesSkipsMalformedItems();
     void refreshGamesOnBrokenJsonIsEmpty();
+    void refreshGamesParsesRzipCompressedPlaylist();
     void relativeRomResolvesAgainstRomDir();
     void absoluteRomPassesThrough();
     void thumbnailFoundInNamedBoxarts();
@@ -69,6 +71,14 @@ void RetroArchBackendTest::writePlaylist(const QString &name, const QString &con
     QFile f(path);
     QVERIFY(f.open(QIODevice::WriteOnly));
     f.write(content.toUtf8());
+}
+
+void RetroArchBackendTest::writePlaylistBinary(const QString &name, const QByteArray &content) {
+    const QString path = m_tmp.path() + "/playlists/" + name;
+    QDir().mkpath(m_tmp.path() + "/playlists");
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(content);
 }
 
 QString RetroArchBackendTest::playlistJson(const QString &corePath,
@@ -294,6 +304,72 @@ void RetroArchBackendTest::signalsFireAlongsideReturnValues() {
     QCOMPARE(gamesSpy.count(), 1);
     QCOMPARE(systemsSpy.at(0).at(0).toList().size(), 1);
     QCOMPARE(gamesSpy.at(0).at(0).toList().size(), 1);
+}
+
+void RetroArchBackendTest::refreshGamesParsesRzipCompressedPlaylist() {
+    RetroArchBackend *be = makeBackend();
+
+    // Build a JSON playlist, then wrap it in RZIP format.
+    // RZIP header: "#RZIP#" (8) + chunk_size(4, LE) + total_size(8, LE) = 20 bytes
+    // Then chunks: compressed_size(4, LE) + zlib-compressed data.
+    QJsonArray items;
+    {
+        QJsonObject item1;
+        item1.insert("label", "Super Mario World");
+        item1.insert("path", "snes/Super Mario World.smc");
+        item1.insert("core_path", "snes9x_libretro.so");
+        items.append(item1);
+        QJsonObject item2;
+        item2.insert("label", "Chrono Trigger");
+        item2.insert("path", "snes/Chrono Trigger.smc");
+        item2.insert("core_path", "snes9x_libretro.so");
+        items.append(item2);
+    }
+    QJsonObject root;
+    root.insert("version", 1);
+    root.insert("items", items);
+    QString jsonStr = QJsonDocument(root).toJson(QJsonDocument::Compact);
+    QByteArray jsonBytes = jsonStr.toUtf8();
+
+    // Compress with zlib (Qt's qUncompress expects this format)
+    QByteArray compressed = qCompress(jsonBytes, 6);
+
+    // Build RZIP header (20 bytes)
+    QByteArray header;
+    header.append('#').append('R').append('Z').append('I').append('P')  // bytes 0-4: "#RZIP"
+          .append('v')  // byte 5: 'v'
+          .append((quint8)1)  // byte 6: version = 1 (deflate)
+          .append('#');  // byte 7: '#'
+    // chunk_size (4 bytes, LE) — unused by reader, just set to 128KB
+    header.append((quint8)0).append((quint8)0).append((quint8)2).append((quint8)0);
+    // total_size (8 bytes, LE)
+    quint64 totalSize = jsonBytes.size();
+    for (int i = 0; i < 8; ++i)
+        header.append((quint8)(totalSize >> (i * 8)));
+
+    // Chunk header: compressed_size (4 bytes, LE)
+    QByteArray chunkHeader;
+    chunkHeader.append((quint8)(compressed.size() & 0xFF))
+               .append((quint8)((compressed.size() >> 8) & 0xFF))
+               .append((quint8)((compressed.size() >> 16) & 0xFF))
+               .append((quint8)((compressed.size() >> 24) & 0xFF));
+
+    // qCompress already adds a 4-byte header (original size LE) before zlib data.
+    // qUncompress expects this same format, so pass directly.
+    QByteArray rzipData = header + chunkHeader + compressed;
+
+    qInfo("[RZIP test] Header hex: %s", header.left(20).toHex().data());
+    qInfo("[RZIP test] Chunk header hex: %s", chunkHeader.toHex().data());
+    qInfo("[RZIP test] Compressed size: %d, rzipData size: %d", compressed.size(), rzipData.size());
+    qInfo("[RZIP test] First 20 bytes of rzipData: %s", rzipData.left(20).toHex().data());
+
+    writePlaylistBinary("snes9x_libretro.rpl", rzipData);
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.rpl");
+    QCOMPARE(games.size(), 2);
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Super Mario World"));
+    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)

@@ -192,33 +192,87 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
 
     qInfo("[RetroArch] Parsing playlist: %s (size: %d bytes)", qPrintable(path), data.size());
 
-    // Check for RZI-compressed playlist (RetroArch 1.7.5+ default).
-    // Header: "#RZIPv" (6) + version(1) + flag(1) + uncompressed_size(4, LE) + compressed_size(4, LE)
-    // + 4 zero bytes + 4 bytes (actual compressed size) = 24 bytes total, then zlib deflate stream.
-    if (data.size() >= 24 &&
-        data[0] == '#' && data[1] == 'R' && data[2] == 'Z' && data[3] == 'I' && data[4] == 'P' && data[5] == 'v') {
-        
-        quint32 uncompressedSize = *reinterpret_cast<const quint32*>(data.constData() + 8);
-        quint32 compressedSizeHeader = *reinterpret_cast<const quint32*>(data.constData() + 12);
-        quint32 compressedSizeActual = *reinterpret_cast<const quint32*>(data.constData() + 20);
-        
-        qInfo("[RetroArch] RZI header: uncompressed=%u, compressed(header)=%u, compressed(actual)=%u, data.size()=%d",
-              uncompressedSize, compressedSizeHeader, compressedSizeActual, data.size());
-        
-        QByteArray compressed = data.mid(24);
-        qInfo("[RetroArch] Compressed data size: %d bytes (expected actual: %u)", compressed.size(), compressedSizeActual);
-        
-        QByteArray decompressed = qUncompress(compressed);
-        qInfo("[RetroArch] Decompressed size: %d bytes", decompressed.size());
-        
+    // Check for RZIP-compressed playlist (RetroArch 1.7.5+ default).
+    // Header is 20 bytes:
+    //   bytes 0-5:  magic "#RZIP"
+    //   byte 6:     version (1=deflate, 2=zstd)
+    //   byte 7:     '#' (0x23)
+    //   bytes 8-11: chunk size (big-endian)
+    //   bytes 12-19: total uncompressed size (big-endian)
+    // Then chunks: 4-byte LE compressed_size + zlib-compressed data.
+    if (data.size() >= 20 &&
+        data[0] == '#' && data[1] == 'R' && data[2] == 'Z' && data[3] == 'I' &&
+        data[4] == 'P' && data[5] == 'v' && data[6] == 1 && data[7] == '#') {
+
+        // Read total uncompressed size (little-endian, bytes 12-19).
+        // Cast to quint8 first to avoid sign-extension from signed char.
+        quint64 totalSize = (quint64(quint8(data[12]))
+                           | (quint64(quint8(data[13])) << 8)
+                           | (quint64(quint8(data[14])) << 16)
+                           | (quint64(quint8(data[15])) << 24)
+                           | (quint64(quint8(data[16])) << 32)
+                           | (quint64(quint8(data[17])) << 40)
+                           | (quint64(quint8(data[18])) << 48)
+                           | (quint64(quint8(data[19])) << 56));
+
+        qInfo("[RetroArch] RZIP header: total_size=%llu, data.size()=%d",
+              (qlonglong)totalSize, data.size());
+
+        // Parse chunks: each chunk = 4-byte LE compressed_size + zlib data
+        QByteArray decompressed;
+        int offset = 20;
+        int chunkCount = 0;
+        quint32 nominalChunkSize = (quint32(quint8(data[11])) << 24)
+                                 | (quint32(quint8(data[10])) << 16)
+                                 | (quint32(quint8(data[9])) << 8)
+                                 | quint32(quint8(data[8]));
+
+        while (offset + 4 <= data.size()) {
+            // Read 4-byte chunk header (LE). Cast to quint8 to avoid sign-extension.
+            quint32 chunkCompSize = (quint32(quint8(data[offset + 3])) << 24)
+                                  | (quint32(quint8(data[offset + 2])) << 16)
+                                  | (quint32(quint8(data[offset + 1])) << 8)
+                                  | quint32(quint8(data[offset]));
+            offset += 4;
+
+            if (chunkCompSize == 0) {
+                qWarning("[RetroArch] Zero chunk size at offset %d", offset);
+                break;
+            }
+
+            // Read compressed chunk data (skip 4-byte LE compressed_size header)
+            QByteArray chunkData = data.mid(offset + 4, chunkCompSize);
+            offset += 4 + chunkCompSize;
+
+            // Decompress with Qt's qUncompress (expects 4-byte LE size header + zlib data).
+            // RetroArch chunks are [4-byte LE compressed_size][zlib data], so skip the
+            // size header and prepend a 4-byte header with the nominal chunk size.
+            QByteArray chunkWithHeader;
+            chunkWithHeader.resize(4);
+            chunkWithHeader[0] = (quint8)(nominalChunkSize & 0xFF);
+            chunkWithHeader[1] = (quint8)((nominalChunkSize >> 8) & 0xFF);
+            chunkWithHeader[2] = (quint8)((nominalChunkSize >> 16) & 0xFF);
+            chunkWithHeader[3] = (quint8)((nominalChunkSize >> 24) & 0xFF);
+            chunkWithHeader.append(chunkData);
+            QByteArray chunkDecompressed = qUncompress(chunkWithHeader);
+            if (!chunkDecompressed.isEmpty()) {
+                decompressed.append(chunkDecompressed);
+                chunkCount++;
+            } else {
+                qWarning("[RetroArch] Failed to decompress chunk %d at offset %d",
+                         chunkCount + 1, offset - chunkCompSize - 4);
+                break;
+            }
+        }
+
+        qInfo("[RetroArch] Decompressed %d chunks, total %d bytes (expected: %llu)",
+              chunkCount, decompressed.size(), (qlonglong)totalSize);
+
         if (!decompressed.isEmpty()) {
             data = decompressed;
-            qInfo("[RetroArch] Successfully decompressed RZI playlist");
+            qInfo("[RetroArch] Successfully decompressed RZIP playlist");
         } else {
-            qWarning("[RetroArch] Failed to decompress RZI playlist: %s (compressed size: %d, zlib header: 0x%02x%02x)",
-                     qPrintable(path), compressed.size(), 
-                     compressed.size() > 0 ? (uchar)compressed[0] : 0,
-                     compressed.size() > 1 ? (uchar)compressed[1] : 0);
+            qWarning("[RetroArch] Failed to decompress RZIP playlist: %s", qPrintable(path));
             return entries;
         }
     }
