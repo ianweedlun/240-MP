@@ -80,7 +80,7 @@ void RetroArchBackend::loadSettings() {
                     fw.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
                     qInfo("[RetroArch] Config migration written to %s", qPrintable(fw.fileName()));
                 } else {
-                    qWarning("[RetroArch] Failed to write migrated config: %s", fw.errorString());
+                    qWarning("[RetroArch] Failed to write migrated config: %s", qPrintable(fw.errorString()));
                 }
             }
         }
