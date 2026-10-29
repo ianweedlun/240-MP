@@ -1,0 +1,46 @@
+name: Sync .hermes.md
+
+# .hermes.md is single-sourced on main (sanctioned exception to the
+# main-branch rule). When it changes, mirror it into every other branch so
+# agent instructions never drift. Branches never edit the file themselves,
+# so the sync commit is always trivially clean — no force pushes needed.
+on:
+  push:
+    branches: [main]
+    paths: ['.hermes.md']
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Mirror .hermes.md to all branches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Sync to each branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for BRANCH in $(git branch -r | grep -v HEAD | sed 's|origin/||' | grep -v '^main$'); do
+            # Skip stale remote-tracking noise (deleted branches etc.)
+            git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
+
+            # Already in sync? Skip.
+            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/main:.hermes.md" 2>/dev/null; then
+              echo "$BRANCH: .hermes.md already in sync"
+              continue
+            fi
+
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+            git show "origin/main:.hermes.md" > .hermes.md
+            git commit -m "docs: sync .hermes.md from main"
+            git push origin "$BRANCH"
+            echo "$BRANCH: synced"
+          done
