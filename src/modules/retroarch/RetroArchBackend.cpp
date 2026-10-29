@@ -245,16 +245,8 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
             offset += chunkCompSize;
 
             // Decompress with Qt's qUncompress (expects 4-byte LE size header + zlib data).
-            // RetroArch chunks are [4-byte LE compressed_size][zlib data], so skip the
-            // size header and prepend a 4-byte header with the total uncompressed size.
-            QByteArray chunkWithHeader;
-            chunkWithHeader.resize(4);
-            chunkWithHeader[0] = (quint8)(totalSize & 0xFF);
-            chunkWithHeader[1] = (quint8)((totalSize >> 8) & 0xFF);
-            chunkWithHeader[2] = (quint8)((totalSize >> 16) & 0xFF);
-            chunkWithHeader[3] = (quint8)((totalSize >> 24) & 0xFF);
-            chunkWithHeader.append(chunkData);
-            QByteArray chunkDecompressed = qUncompress(chunkWithHeader);
+            // qCompress already adds the 4-byte header, so pass chunkData directly.
+            QByteArray chunkDecompressed = qUncompress(chunkData);
             if (!chunkDecompressed.isEmpty()) {
                 decompressed.append(chunkDecompressed);
                 chunkCount++;
