@@ -285,6 +285,9 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     }
 
     QJsonArray items = doc.object()["items"].toArray();
+    // Extract the playlist's default core path — used to resolve "DETECT" entries.
+    const QString defaultCorePath = doc.object()["default_core_path"].toString();
+    qInfo("[RetroArch] Default core path: %s", qPrintable(defaultCorePath));
     qInfo("[RetroArch] Parsed %d items from playlist", items.size());
     for (const QJsonValue &val : items) {
         QJsonObject item = val.toObject();
@@ -295,7 +298,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
         entries.append(QVariantMap{
             { "name", label },
             { "romPath", resolveRomPath(path, romPath) },
-            { "corePath", resolveCorePath(item["core_path"].toString()) },
+            { "corePath", resolveCorePath(item["core_path"].toString(), defaultCorePath) },
             { "coreName", QFileInfo(item["core_path"].toString()).baseName() },
             { "dbName", item["db_name"].toString() },
             { "thumbnail", findThumbnail(label, systemId) },
@@ -326,7 +329,14 @@ QString RetroArchBackend::resolveRomPath(const QString &playlistPath,
     return romPath;
 }
 
-QString RetroArchBackend::resolveCorePath(const QString &corePath) const {
+QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString &defaultCorePath) const {
+    // "DETECT" means RetroArch should figure out the core at runtime. We can't
+    // leave it as-is — RetroArch won't find the core without an explicit path.
+    // Fall back to the playlist's default_core_path, which RetroArch wrote when
+    // the playlist was created.
+    if (corePath == "DETECT" && !defaultCorePath.isEmpty()) {
+        return defaultCorePath;
+    }
     // Absolute: pass through. Relative filename: pass through too — RetroArch
     // resolves it against its own core directory (core_directory setting),
     // which is exactly where a user-installed core lives. Guessing a path

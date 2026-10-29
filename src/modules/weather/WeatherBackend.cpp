@@ -476,21 +476,14 @@ void WeatherBackend::setMusicVolume(int volume) {
     }
     volume = qBound(0, volume, 100);
     m_musicVolume = volume;
-    // Send volume command and trigger the OSD bar via mpv-media-keys.lua's
-    // show_volume_bar() function (bound to volume keys there, but we call it
-    // manually via script-message).
+    // Send volume command to mpv. The OSD bar is drawn in QML (Weather.qml)
+    // because mpv's --vo=null doesn't reliably render OSD overlays.
     const QJsonObject cmd{
         { QStringLiteral("command"),
           QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
                       volume } }
     };
     m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
-    // Also trigger the OSD bar to show
-    const QJsonObject osdCmd{
-        { QStringLiteral("command"),
-          QJsonArray{ QStringLiteral("script-message"), QStringLiteral("240mp-osd-volume-show") } }
-    };
-    m_musicIpc->write(QJsonDocument(osdCmd).toJson(QJsonDocument::Compact) + "\n");
     emit musicStateChanged();
 }
 

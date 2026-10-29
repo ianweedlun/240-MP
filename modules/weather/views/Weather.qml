@@ -200,6 +200,87 @@ FocusScope {
         }
     }
 
+    // Volume bar overlay — drawn in QML because mpv's --vo=null doesn't
+    // reliably render OSD overlays. Shows for 2 seconds when volume changes.
+    Rectangle {
+        id: volumeBarOverlay
+        visible: false
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: statusBar.top
+        anchors.top: parent.top
+        color: "transparent"
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: root.sh * 0.08 //40
+            anchors.left: root.sw * 0.125 //80
+            anchors.right: root.sw * 0.125 //80
+            height: root.sh * 0.06 //28
+            color: "transparent"
+
+            // Volume label
+            Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: (weatherBackend.musicVolume === 0) ? "MUTE" : "VOLUME"
+                color: root.primaryColor
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.05 //24
+                font.bold: true
+            }
+
+            // Volume ticks
+            Row {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: root.sw * 0.15 //100
+                anchors.rightMargin: root.sw * 0.15 //100
+                spacing: root.sw * 0.00625 //4
+
+                Repeater {
+                    model: 20 // 20 ticks for 0-100 volume (5% each)
+
+                    Rectangle {
+                        width: root.sw * 0.015625 //10
+                        height: parent.height
+                        color: index * 5 <= weatherBackend.musicVolume
+                               ? root.primaryColor
+                               : Qt.rgba(0.5, 0.5, 0.5, 0.3)
+                        radius: 2
+                    }
+                }
+            }
+        }
+
+        // Fade in/out animation
+        opacity: 0
+        Behavior on opacity { NumberAnimation { duration: 0.2 } }
+    }
+
+    Connections {
+        target: weatherBackend
+        function onMusicStateChanged() {
+            // Show volume bar when volume changes (not when music starts/stops)
+            if (weatherBackend.musicPlaying) {
+                volumeBarOverlay.visible = true
+                volumeBarOverlay.opacity = 1
+                volumeBarTimer.start()
+            }
+        }
+    }
+
+    Timer {
+        id: volumeBarTimer
+        interval: 2000
+        onTriggered: {
+            volumeBarOverlay.opacity = 0
+            // Keep visible but transparent so it doesn't flash
+            if (!volumeBarTimer.running) volumeBarOverlay.visible = false
+        }
+    }
+
     Connections {
         target: weatherBackend
         function onDataChanged() {

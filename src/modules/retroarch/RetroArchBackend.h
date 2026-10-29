@@ -77,5 +77,5 @@ private:
     QString resolveRomPath(const QString &playlistPath, const QString &romPath) const;
     // Core .so location for an item: its core_path if present, else the cores
     // directory next to the config (where RetroArch installs cores).
-    QString resolveCorePath(const QString &corePath) const;
+    QString resolveCorePath(const QString &corePath, const QString &defaultCorePath) const;
 };
