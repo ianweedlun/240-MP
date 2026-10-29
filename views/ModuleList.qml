@@ -28,6 +28,7 @@ FocusScope {
 
     // Header
     AppBar {
+        iconSource: "../assets/images/logo.svg"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
