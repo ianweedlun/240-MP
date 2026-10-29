@@ -286,9 +286,24 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
             QByteArray chunkData = data.mid(offset, chunkCompSize);
             offset += chunkCompSize;
 
-            // Decompress with Qt's qUncompress (expects 4-byte LE size header + zlib data).
-            // qCompress already adds the 4-byte header, so pass chunkData directly.
-            QByteArray chunkDecompressed = qUncompress(chunkData);
+            // qUncompress expects: 4-byte LE uncompressed_size + zlib data.
+            // The RZIP chunk has: 4-byte LE compressed_size + raw zlib data (no Qt header).
+            // We need to prepend the uncompressed size (chunkCompSize is the compressed size,
+            // but we don't know uncompressed upfront — so use a large enough value and let
+            // qUncompress figure it out. Actually qUncompress reads the first 4 bytes as the
+            // expected output size. The RZIP header has nominalChunkSize as the uncompressed
+            // chunk size. Use that as the expected size.
+            QByteArray qtFormatChunk;
+            qtFormatChunk.resize(4 + chunkCompSize);
+            // Write nominalChunkSize as 4-byte LE (uncompressed size for this chunk)
+            qtFormatChunk[0] = char(nominalChunkSize & 0xFF);
+            qtFormatChunk[1] = char((nominalChunkSize >> 8) & 0xFF);
+            qtFormatChunk[2] = char((nominalChunkSize >> 16) & 0xFF);
+            qtFormatChunk[3] = char((nominalChunkSize >> 24) & 0xFF);
+            // Append raw zlib data
+            memcpy(qtFormatChunk.data() + 4, chunkData.constData(), chunkCompSize);
+
+            QByteArray chunkDecompressed = qUncompress(qtFormatChunk);
             if (!chunkDecompressed.isEmpty()) {
                 decompressed.append(chunkDecompressed);
                 chunkCount++;
