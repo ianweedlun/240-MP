@@ -511,3 +511,9 @@ QString AppCore::startupModuleEntryPoint() const {
     }
     return {};
 }
+
+QString AppCore::takeScreenshot()
+{
+    qInfo("[AppCore] takeScreenshot() called");
+    return captureScreenshot();
+}
