@@ -910,6 +910,7 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
 
     // F12: trigger screenshot (debug)
     if (!synthetic && type == QEvent::KeyPress && ke->key() == Qt::Key_F12 && !ke->isAutoRepeat()) {
+        qInfo("[input] F12 pressed — triggering screenshot");
         if (m_appCore) {
             QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
         }
