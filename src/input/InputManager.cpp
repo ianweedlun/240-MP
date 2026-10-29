@@ -907,6 +907,14 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
         }
         return true;
     }
+
+    // F12: trigger screenshot (debug)
+    if (!synthetic && type == QEvent::KeyPress && ke->key() == Qt::Key_F12 && !ke->isAutoRepeat()) {
+        if (m_appCore) {
+            QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
+        }
+        return true;
+    }
     return false;
 }
 
