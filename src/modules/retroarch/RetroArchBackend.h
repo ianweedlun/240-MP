@@ -52,6 +52,8 @@ public:
     // System id derived from a playlist path: its filename without extension,
     // lowercased. "snes9x_libretro.json" -> "snes9x_libretro".
     Q_INVOKABLE QString systemFromPlaylist(const QString &playlistPath) const;
+    // Short name for a system: maps long playlist names to compact labels.
+    Q_INVOKABLE QString shortNameForSystem(const QString &systemId) const;
 
 signals:
     void systemsReady(const QVariantList &systems);

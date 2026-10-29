@@ -135,7 +135,7 @@ FocusScope {
 
                 Text {
                     id: rowText
-                    text: modelData.name
+                    text: retroarchBackend.shortNameForSystem(modelData.id)
                     color: systemList.currentIndex === index ? root.surfaceColor : root.primaryColor
                     font.family: root.globalFont
                     font.capitalization: Font.AllUppercase

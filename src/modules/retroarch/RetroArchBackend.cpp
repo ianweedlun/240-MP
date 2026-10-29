@@ -102,11 +102,40 @@ QString RetroArchBackend::systemFromPlaylist(const QString &playlistPath) const 
     return QFileInfo(playlistPath).baseName().toLower();
 }
 
+QString RetroArchBackend::shortNameForSystem(const QString &systemId) const {
+    // Map playlist base names to short, user-friendly labels.
+    static const QHash<QString, QString> kShortNames = {
+        { "nintendo - super nintendo entertainment system", "SNES" },
+        { "nintendo - game boy advance", "GBA" },
+        { "nintendo - game boy color", "GBC" },
+        { "nintendo - game boy", "GB" },
+        { "nintendo - nintendo entertainment system", "NES" },
+        { "sega - mega drive - genesis", "Genesis" },
+        { "sega - dreamcast", "Dreamcast" },
+        { "sega - game gear", "Game Gear" },
+        { "sega - master system - mark iii", "Master System" },
+        { "sega - 32x", "32X" },
+        { "atari - 2600", "Atari 2600" },
+        { "atari - 5200", "Atari 5200" },
+        { "atari - 7800", "Atari 7800" },
+        { "atari - lynx", "Atari Lynx" },
+        { "fbneo - arcade games", "Arcade" },
+        { "coleco - colecoVision", "ColecoVision" },
+        { "nec - pc engine - turbografx 16", "TG-16" },
+        { "nec - pc engine supergrafx", "PC Engine" },
+        { "snk - neo geo pocket color", "NGPC" },
+    };
+    return kShortNames.value(systemId.toLower(), systemId);
+}
+
 // ── Tier 1: systems ──────────────────────────────────────────────────────────
 
 QVariantList RetroArchBackend::refreshSystems() {
     QVariantList systems;
     QDir playlistDir(m_playlistDir);
+
+    qInfo("[RetroArch] refreshSystems: playlistDir=%s, exists=%d",
+          qPrintable(m_playlistDir), playlistDir.exists());
 
     if (!playlistDir.exists()) {
         emit systemsReady(systems);
@@ -116,11 +145,15 @@ QVariantList RetroArchBackend::refreshSystems() {
     QFileInfoList playlists =
         playlistDir.entryInfoList(playlistFilters(), QDir::Files | QDir::Readable, QDir::Name);
 
+    qInfo("[RetroArch] refreshSystems: found %d playlist files", playlists.size());
+
     // Each playlist file IS a system entry: name comes from the filename.
     // Count the games in it as its "weight" so a system with 400 games reads
     // as a different row than one with 2.
     for (const QFileInfo &pl : playlists) {
         const QString systemId = systemFromPlaylist(pl.filePath());
+        qInfo("[RetroArch]   playlist: %s -> systemId=%s",
+              qPrintable(pl.fileName()), qPrintable(systemId));
         if (systemId.isEmpty()) continue;
 
         QVariantList games = parsePlaylist(pl.filePath(), systemId);
@@ -146,6 +179,9 @@ QVariantList RetroArchBackend::refreshPlaylists(const QString &systemId) {
     QVariantList playlists;
     QDir playlistDir(m_playlistDir);
 
+    qInfo("[RetroArch] refreshPlaylists: systemId=%s, playlistDir=%s",
+          qPrintable(systemId), qPrintable(m_playlistDir));
+
     if (!playlistDir.exists()) {
         emit playlistsReady(playlists);
         return playlists;
@@ -154,7 +190,13 @@ QVariantList RetroArchBackend::refreshPlaylists(const QString &systemId) {
     QFileInfoList plFiles =
         playlistDir.entryInfoList(playlistFilters(), QDir::Files | QDir::Readable, QDir::Name);
 
+    qInfo("[RetroArch] refreshPlaylists: found %d files, filtering for systemId=%s",
+          plFiles.size(), qPrintable(systemId));
+
     for (const QFileInfo &pl : plFiles) {
+        const QString plSystemId = systemFromPlaylist(pl.filePath());
+        qInfo("[RetroArch]   file: %s -> systemId=%s (match=%d)",
+              qPrintable(pl.fileName()), qPrintable(plSystemId), plSystemId == systemId);
         if (systemFromPlaylist(pl.filePath()) != systemId) continue;
 
         QVariantList games = parsePlaylist(pl.filePath(), systemId);
@@ -166,10 +208,10 @@ QVariantList RetroArchBackend::refreshPlaylists(const QString &systemId) {
         });
     }
 
+    qInfo("[RetroArch] refreshPlaylists: returning %d playlists", playlists.size());
     std::sort(playlists.begin(), playlists.end(), [](const QVariant &a, const QVariant &b) {
         return a.toMap()["name"].toString() < b.toMap()["name"].toString();
     });
-
     emit playlistsReady(playlists);
     return playlists;
 }
