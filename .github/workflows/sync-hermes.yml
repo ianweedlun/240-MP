@@ -23,24 +23,24 @@ jobs:
           fetch-depth: 0
           ref: main
 
-      - name: Sync to each branch
+      - name: Sync .hermes.md to all branches
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          for BRANCH in $(git branch -r | grep -v HEAD | sed 's|origin/||' | grep -v '^main$'); do
-            # Skip stale remote-tracking noise (deleted branches etc.)
+          # Get list of all remote branches tracking main
+          BRANCHES=$(git branch -r | grep -v HEAD | sed 's|origin/||' | grep -v '^main$')
+
+          for BRANCH in $BRANCHES; do
+            # Verify branch ref exists
             git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
 
-            # Already in sync? Skip.
-            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/main:.hermes.md" 2>/dev/null; then
-              echo "$BRANCH: .hermes.md already in sync"
-              continue
-            fi
+            # Always sync .hermes.md from main to this branch
+            git checkout -B "$BRANCH" "origin/$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
-            git checkout -B "$BRANCH" "origin/$BRANCH"
             git show "origin/main:.hermes.md" > .hermes.md
-            git commit -m "docs: sync .hermes.md from main"
+            git add .hermes.md
+            git commit -m "docs: sync .hermes.md from main (auto-sync)"
             git push origin "$BRANCH"
             echo "$BRANCH: synced"
           done
