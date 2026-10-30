@@ -14,7 +14,10 @@ Item {
 
     Text {
         id: plName
-        text: playlistPreview.playlist.name || ""
+        // In the all-playlists context the panel sits beside rows labeled by
+        // short name — mirror that here; inside a single system fall back to
+        // the full playlist name.
+        text: playlistPreview.playlist.shortName || playlistPreview.playlist.name || ""
         color: root.primaryColor
         font.family: root.globalFont
         font.capitalization: Font.AllUppercase
