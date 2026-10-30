@@ -57,6 +57,7 @@ public:
     // without hardcoding a path across module boundaries.
     Q_INVOKABLE QString module_entry_point(const QString &moduleId) const;
 
+    static QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 
     // Registers a module backend: stores it for action routing, exposes it to QML under
