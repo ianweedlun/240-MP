@@ -6,7 +6,7 @@ I would welcome and appreciate any code review, suggestions, or ideas provided b
 
 ## Generative-AI artwork policy
 
-Image/Video/Audio (art) generation for testing purposes only. Any artwork used for production must be human-made and libre (open source, fair-use, creative commons). Attribution is always required.
+Image/Video/Audio (art) generation for testing purposes only. Any artwork used for production must be human-made and libre (e.g. open source, fair use, or CC-licensed). Attribution is always required.
 
 - Ian
 
