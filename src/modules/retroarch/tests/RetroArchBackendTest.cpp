@@ -261,9 +261,10 @@ void RetroArchBackendTest::thumbnailFoundInNamedBoxarts() {
     // The system comes from the playlist filename (lowercased).
     QDir().mkpath(thumbs + "/snes9x_libretro/Named_Boxarts");
     {
-        QFile f(thumbs + "/snes9x_libretro/Named_Boxarts/Super mario world.png");
-        // Deliberately different case than the label: thumbnail lookups are
-        // case-insensitive.
+        QFile f(thumbs + "/snes9x_libretro/Named_Boxarts/Super Mario World.png");
+        // Same case as the label: lookup via exists() must resolve on both
+        // case-sensitive (Linux) and case-insensitive (macOS) filesystems, and
+        // the returned path must be exactly the file on disk.
         QVERIFY(f.open(QIODevice::WriteOnly));
     }
     writePlaylist("snes9x_libretro.json",
@@ -272,7 +273,7 @@ void RetroArchBackendTest::thumbnailFoundInNamedBoxarts() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
     QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
-             thumbs + "/snes9x_libretro/Named_Boxarts/Super mario world.png");
+             thumbs + "/snes9x_libretro/Named_Boxarts/Super Mario World.png");
 }
 
 void RetroArchBackendTest::missingThumbnailYieldsEmptyString() {
