@@ -26,9 +26,10 @@ jobs:
           echo "First 400 bytes of artifacts response (diagnostic):"
           echo "$RESP" | head -c 400
           CID=$(echo "$RESP" | jq -r '.artifacts[] | select(.name=="tarball-linux-arm64") | .id' | head -1)
-          if [ -z "$CID" ]; then echo "No tarball artifact in CI run $RUN_ID"; exit 1; fi
-          curl -sSL -H "Accept: application/zip" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/ianweedlun/240-MP/actions/artifacts/$CID/zip" > /tmp/artifact.zip
+          DLURL=$(echo "$RESP" | jq -r '.artifacts[] | select(.name=="tarball-linux-arm64") | .archive_download_url' | head -1)
+          if [ -z "$DLURL" ]; then echo "No tarball artifact in CI run $RUN_ID"; exit 1; fi
+          curl -sSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "$DLURL" > /tmp/artifact.zip
+          echo "downloaded $(wc -c < /tmp/artifact.zip) bytes; file says: $(file -b /tmp/artifact.zip)"
           unzip -o /tmp/artifact.zip
           ls -la *.tar.gz
 
