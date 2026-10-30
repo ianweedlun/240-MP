@@ -1,12 +1,12 @@
 name: Sync .hermes.md
 
-# .hermes.md is single-sourced on main (sanctioned exception to the
-# main-branch rule). When it changes, mirror it into every other branch so
-# agent instructions never drift. Branches never edit the file themselves,
-# so the sync commit is always trivially clean — no force pushes needed.
+# .hermes.md is single-sourced on dev (the integration branch). When it
+# changes, mirror it into every other branch except main (which is a pure
+# upstream mirror and never carries the file). Sync commits are always
+# trivially clean — no force pushes needed.
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths: ['.hermes.md']
 
 permissions:
@@ -21,32 +21,30 @@ jobs:
         uses: actions/checkout@v4.2.2
         with:
           fetch-depth: 0
-          ref: main
+          ref: dev
 
       - name: Sync .hermes.md to all branches
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Get list of all remote branches tracking main
-          BRANCHES=$(git branch -r | grep -v HEAD | sed 's|origin/||' | grep -v '^main$')
+          # All remote branches except HEAD, main (upstream mirror), and dev (source)
+          BRANCHES=$(git branch -r | grep -v HEAD | sed 's|origin/||' | grep -vE '^(main|dev)$')
 
           for BRANCH in $BRANCHES; do
-            # Verify branch ref exists
             git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
 
-            # Skip branches whose .hermes.md already matches main (empty commits fail)
-            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/main:.hermes.md" 2>/dev/null; then
+            # Skip branches whose .hermes.md already matches dev
+            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/dev:.hermes.md" 2>/dev/null; then
               echo "$BRANCH: .hermes.md already in sync"
               continue
             fi
 
-            # Always sync .hermes.md from main to this branch
             git checkout -B "$BRANCH" "origin/$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
-            git show "origin/main:.hermes.md" > .hermes.md
+            git show "origin/dev:.hermes.md" > .hermes.md
             git add .hermes.md
-            git commit -m "docs: sync .hermes.md from main (auto-sync)"
+            git commit -m "docs: sync .hermes.md from dev (auto-sync)"
             git push origin "$BRANCH"
             echo "$BRANCH: synced"
           done
