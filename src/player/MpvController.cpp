@@ -174,9 +174,9 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 
     // 240mp-level basic mpv knobs (see MpvBasicOptions.h): appended as CLI
     // options, so they win over the user's ~/.config/mpv/mpv.conf by mpv's own
-    // precedence. Absent/invalid values emit nothing — mpv's config is the
-    // fallback, and we never pass a value we didn't validate.
-    args << mpvopts::basicArgs(m_dataRoot);
+    // The four basic knobs now live in the user's mpv.conf itself: the Settings
+    // menu reads and writes that file directly (mpvopts), so there is nothing
+    // to append here — the file is read fresh by mpv at each spawn.
 
     if (hasOscScript)
         args << QString("--script=%1").arg(oscScript);
