@@ -516,6 +516,11 @@ QString AppCore::startupModuleEntryPoint() const {
     return {};
 }
 
+void AppCore::setQuickWindow(QQuickWindow *w)
+{
+    m_quickWindow = w;
+}
+
 QString AppCore::captureScreenshot(const QString &outputPath)
 {
     QString path = outputPath;
@@ -523,15 +528,25 @@ QString AppCore::captureScreenshot(const QString &outputPath)
         path = QStringLiteral("/tmp/240mp_screenshot_%1.png").arg(
             QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
     }
-    
-    // Try to get primary screen screenshot
-    QList<QScreen*> screens = QGuiApplication::screens();
-    if (screens.isEmpty()) {
-        qWarning("[AppCore] No screens available for screenshot");
-        return QString();
+
+    // EGLFS (the Pi's platform) renders through a non-composited GL context:
+    // QScreen::grabWindow refuses that ("Not supported for non-composited
+    // OpenGL content"). Grab through the live QQuickWindow instead — that
+    // reads back from the actual framebuffer.
+    QPixmap pixmap;
+    if (m_quickWindow) {
+        const QImage img = m_quickWindow->grabWindow();
+        if (!img.isNull())
+            pixmap = QPixmap::fromImage(img);
     }
-    
-    QPixmap pixmap = screens.first()->grabWindow(0);
+
+    // Fallback for composited stacks (X11/Wayland/macOS debugging on desktop):
+    if (pixmap.isNull()) {
+        QList<QScreen*> screens = QGuiApplication::screens();
+        if (!screens.isEmpty())
+            pixmap = screens.first()->grabWindow(0);
+    }
+
     if (pixmap.isNull()) {
         qWarning("[AppCore] Screenshot grab returned null pixmap");
         return QString();

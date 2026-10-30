@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QCoreApplication>
+#include <QQuickWindow>
 
 class QQmlContext;
 
@@ -57,7 +58,12 @@ public:
     // without hardcoding a path across module boundaries.
     Q_INVOKABLE QString module_entry_point(const QString &moduleId) const;
 
-    static QString captureScreenshot(const QString &outputPath = QString());
+    // Window handle for screenshots: main.cpp hands us the root QQuickWindow
+    // once the QML engine has loaded it. QScreen::grabWindow does not work on
+    // EGLFS (non-composited OpenGL), so captureScreenshot prefers
+    // QQuickWindow::grabWindow() through this handle.
+    void setQuickWindow(QQuickWindow *w);
+    QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 
     // Registers a module backend: stores it for action routing, exposes it to QML under
@@ -94,6 +100,7 @@ private:
 
     QString m_appRoot;
     QString m_dataRoot;
+    QQuickWindow *m_quickWindow = nullptr;   // root window handle for screenshots (set by main.cpp)
     QList<ModuleEntry> m_modules;
     QMap<QString, QObject*> m_backends;
 };
