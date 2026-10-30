@@ -399,6 +399,10 @@ void InputManager::setRemapCapture(bool active) {
     m_remapCapture = active;
 }
 
+void InputManager::setInterceptMediaKeys(bool intercept) {
+    m_interceptMediaKeys = intercept;
+}
+
 #ifdef Q_OS_LINUX
 // Some remote/keyboard USB combos expose their "Consumer Page" HID buttons
 // (Home, Back, Menu, colored buttons, zoom, media transport…) as a *separate*
@@ -896,7 +900,9 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     // held; the rest fire once per press so a held key is a single seek/chapter
     // jump. On macOS during fullscreen playback mpv holds the keyboard and these
     // never reach us — mpv binds the same names natively.
-    const QString mediaKey = mpvKeyForMediaEvent(ke);
+    // A module that handles volume/media keys itself (Weather's volume OSD)
+    // disables interception; the keys then fall through and QML sees them.
+    const QString mediaKey = m_interceptMediaKeys ? mpvKeyForMediaEvent(ke) : QString();
     if (!mediaKey.isEmpty()) {
         if (type == QEvent::KeyPress) {
             // Volume keys repeat while held; everything else fires once per press.

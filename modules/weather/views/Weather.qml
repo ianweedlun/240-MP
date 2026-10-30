@@ -54,6 +54,9 @@ FocusScope {
         // No-op when the Music setting is off, so the view doesn't have to read
         // the setting a second time.
         weatherBackend.startMusic()
+
+        // Allow volume keys to reach QML for weather music volume control.
+        inputManager.setInterceptMediaKeys(false)
     }
 
     property var chosenDisplays: ({})
@@ -85,6 +88,8 @@ FocusScope {
             idleTracker.mpvActive = false
             idleTracker.resetActivity()
         }
+        // Restore media key interception for mpv playback.
+        inputManager.setInterceptMediaKeys(true)
     }
 
     function advance(step) {
@@ -114,6 +119,14 @@ FocusScope {
             // Independent of weatherRoot.paused: Enter pauses the carousel, and
             // music should keep playing under a screen you're lingering on.
             weatherBackend.toggleMusic()
+            event.accepted = true
+        } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
+            weatherBackend.setMusicVolume(
+                Math.min(100, (weatherBackend.musicVolume || 50) + 10))
+            event.accepted = true
+        } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
+            weatherBackend.setMusicVolume(
+                Math.max(0, (weatherBackend.musicVolume || 50) - 10))
             event.accepted = true
         }
     }
@@ -181,6 +194,94 @@ FocusScope {
             if (item.hasOwnProperty("almanac"))      item.almanac = weatherBackend.almanac
             if (item.hasOwnProperty("rows"))         item.rows = weatherBackend.otherLocations
             if (item.hasOwnProperty("tempUnit"))     item.tempUnit = weatherBackend.tempUnitLabel
+        }
+    }
+
+    // Volume bar overlay — drawn in QML because mpv's --vo=null doesn't
+    // reliably render OSD overlays. Shows for 2 seconds when volume changes.
+    Rectangle {
+        id: volumeBarOverlay
+        visible: false
+        x: 0
+        width: parent.width
+        anchors.bottom: statusBar.top
+        anchors.top: parent.top
+        color: "transparent"
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: root.sh * 0.08 //40
+            x: root.sw * 0.125 //80
+            width: root.sw * 0.75 //480
+            height: root.sh * 0.06 //28
+            color: "transparent"
+
+            // Volume label
+            Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: (weatherBackend.musicVolume === 0) ? "MUTE" : "VOLUME"
+                color: root.primaryColor
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.05 //24
+                font.bold: true
+            }
+
+            // Volume ticks
+            Row {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: root.sw * 0.15 //100
+                anchors.rightMargin: root.sw * 0.15 //100
+                spacing: root.sw * 0.00625 //4
+                // Row has no implicit height from an id-less Repeater whose
+                // children read height: parent.height — that circularity
+                // collapses the Row to 0px and all ticks draw invisible. Size
+                // it from the bar rectangle explicitly.
+                height: parent.height
+
+                Repeater {
+                    model: 20 // 20 ticks for 0-100 volume (5% each)
+
+                    Rectangle {
+                        width: root.sw * 0.015625 //10
+                        height: parent.height
+                        // Slate, not 30%-grey: the blue background composites a
+                        // translucent grey to within ~12 units of itself —
+                        // "unlit" must be visibly unlit, not near-invisible.
+                        color: (index + 1) * 5 <= weatherBackend.musicVolume
+                               ? root.primaryColor
+                               : Qt.rgba(0.4, 0.4, 0.6, 1.0)
+                        radius: 2
+                    }
+                }
+            }
+        }
+
+        // Fade in/out animation
+        opacity: 0
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+    }
+
+    Connections {
+        target: weatherBackend
+        function onMusicStateChanged() {
+            if (weatherBackend.musicPlaying) {
+                volumeBarOverlay.visible = true
+                volumeBarOverlay.opacity = 1
+                volumeBarTimer.start()
+            }
+        }
+    }
+
+    Timer {
+        id: volumeBarTimer
+        interval: 2000
+        onTriggered: {
+            volumeBarOverlay.opacity = 0
+            // Keep visible but transparent so it doesn't flash
+            if (!volumeBarTimer.running) volumeBarOverlay.visible = false
         }
     }
 
