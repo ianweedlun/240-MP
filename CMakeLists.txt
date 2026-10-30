@@ -64,6 +64,7 @@ add_executable(240mp
     src/modules/scripts/ScriptLauncher.cpp
     src/modules/retroarch/RetroArchBackend.cpp
     src/player/MpvController.cpp
+    src/util/MpvBasicOptions.cpp
     src/util/YtDlpLocator.cpp
     src/util/MpvLocator.cpp
     src/util/ExecPath.cpp
@@ -238,6 +239,26 @@ if(APPLE)
 else()
     set(CPACK_GENERATOR "TGZ")
     set(CPACK_PACKAGING_INSTALL_PREFIX "/usr/local")
+endif()
+
+#   cmake -B build -DBUILD_TESTS=ON
+#   cmake --build build --target mpv-basic-options-tests && ./build/mpv-basic-options-tests
+option(BUILD_TESTS "Build the unit test suite" OFF)
+if(BUILD_TESTS)
+
+    enable_testing()
+    # MpvBasicOptions policy-table tests: pure file-in/args-out checks against
+    # a temp dataRoot, no process spawning.
+    add_executable(mpv-basic-options-tests
+        src/util/tests/MpvBasicOptionsTest.cpp
+        src/util/MpvBasicOptions.cpp)
+    set_target_properties(mpv-basic-options-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-basic-options-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(mpv-basic-options-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
+
 endif()
 
 include(CPack)
