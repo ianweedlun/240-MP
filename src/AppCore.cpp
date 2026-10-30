@@ -8,6 +8,10 @@
 #include <QDebug>
 #include <QRegularExpression>
 #include <QNetworkInterface>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QPixmap>
+#include <QDateTime>
 #include <QQmlContext>
 
 AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *parent)
