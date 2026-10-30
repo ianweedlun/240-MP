@@ -172,7 +172,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
          << (hasOscScript ? "--osc=no" : "--osc=yes")
          << "--osd-level=0";
 
-    // 240mp-level basic mpv knobs (see Mp*v BasicOptions.h): appended as CLI
+    // 240mp-level basic mpv knobs (see MpvBasicOptions.h): appended as CLI
     // options, so they win over the user's ~/.config/mpv/mpv.conf by mpv's own
     // precedence. Absent/invalid values emit nothing — mpv's config is the
     // fallback, and we never pass a value we didn't validate.
@@ -691,7 +691,7 @@ void MpvController::appendVideoArgs(QStringList &args) const {
                 args << "--vo=drm" << "--hwdec=v4l2m2m-copy";
         } else {
             // Pi 5 (Full KMS) and a safe fallback for unknown headless Linux for now.
-            // Note: Sometimes on Pi5+composite CRTs the Pi5 reports its composite raster 
+            // Note: Sometimes on Pi5+composite CRTs the Pi5 reports its composite raster
             // inconsistently (sometimes a narrow 704×432 instead of the standard 720×480i)
             // this can be accomodated for in mpv.conf via a monitorpixelaspect property or
             // in cmdline.txt/config.txt at the OS level vs hardcoding something here.
