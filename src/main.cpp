@@ -23,6 +23,7 @@
 #include "modules/youtube/YouTubeBackend.h"
 #include "modules/weather/WeatherBackend.h"
 #include "modules/scripts/ScriptsBackend.h"
+#include "modules/retroarch/RetroArchBackend.h"
 #include "player/MpvController.h"
 #include "input/InputManager.h"
 #include "input/IdleTracker.h"
@@ -158,6 +159,7 @@ int main(int argc, char *argv[]) {
     YouTubeBackend      youtubeBackend(appRoot, dataRoot);
     WeatherBackend      weatherBackend(appRoot, dataRoot);
     DisplayHandoff      displayHandoff;
+    RetroArchBackend    retroArchBackend(appRoot, dataRoot, &displayHandoff);
     ScriptsBackend      scriptsBackend(appRoot, dataRoot, &displayHandoff);
     MpvController       mpvController(appRoot, dataRoot, &appCore, &displayHandoff);
     InputManager        inputManager(dataRoot, &appCore);
@@ -185,6 +187,7 @@ int main(int argc, char *argv[]) {
     appCore.registerModule("com.240mp.nfc_reader",   "nfcReaderBackend",   &nfcReader,   ctx);
     appCore.registerModule("com.240mp.youtube",      "youtubeBackend",     &youtubeBackend, ctx);
     appCore.registerModule("com.240mp.weather",      "weatherBackend",     &weatherBackend, ctx);
+    appCore.registerModule("com.240mp.retroarch",    "retroarchBackend",   &retroArchBackend, ctx);
     appCore.registerModule("com.240mp.scripts",      "scriptsBackend",     &scriptsBackend, ctx);
 
     ctx->setContextProperty("idleTracker",   &idleTracker);

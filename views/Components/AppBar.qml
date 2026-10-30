@@ -20,7 +20,6 @@ Row {
         anchors.verticalCenter: parent.verticalCenter
         height: root.sh * 0.05 //24
         Image {
-            visible: false
             id: iconImg
             height: parent.height
             sourceSize.height: height
