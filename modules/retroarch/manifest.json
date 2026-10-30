@@ -1,0 +1,55 @@
+{
+  "id": "com.240mp.retroarch",
+  "name": "RETROARCH",
+  "icon": "assets/images/logo.svg",
+  "entry_point_qml": "views/Root.qml",
+  "settings": [
+    {
+      "key": "enabled",
+      "label": "Enabled",
+      "type": "toggle",
+      "default": "OFF",
+      "description": "Show RETROARCH on the main menu."
+    },
+    {
+      "key": "playlist_directory",
+      "label": "Playlist Folder",
+      "type": "directory_browser",
+      "default": "",
+      "description": "Where RetroArch playlists (.lpl files) live. Default: ~/.config/retroarch/playlists"
+    },
+    {
+      "key": "rom_directory",
+      "label": "ROM Folder",
+      "type": "directory_browser",
+      "default": "",
+      "description": "Where ROM files live. Used to resolve relative paths in playlists. Default: ~/ROMs"
+    },
+    {
+      "key": "thumbnail_directory",
+      "label": "Thumbnail Folder",
+      "type": "directory_browser",
+      "default": "",
+      "description": "Where RetroArch thumbnails live. Default: ~/.config/retroarch/thumbnails"
+    },
+    {
+      "key": "thumbnail_display",
+      "label": "Thumbnail Display",
+      "type": "list_single",
+      "default": "RIGHT",
+      "options": [
+        { "id": "OFF", "label": "OFF" },
+        { "id": "LEFT", "label": "LEFT" },
+        { "id": "RIGHT", "label": "RIGHT" }
+      ],
+      "description": "Show thumbnails to the left or right of the game list, or disable."
+    },
+    {
+      "key": "retroarch_path",
+      "label": "RetroArch Executable",
+      "type": "directory_browser",
+      "default": "",
+      "description": "Path to RetroArch binary. Leave empty to use 'retroarch' from PATH."
+    }
+  ]
+}
