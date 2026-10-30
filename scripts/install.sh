@@ -8,7 +8,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO="anthonycaccese/240-mp"          # ← update before first release
+REPO="ianweedlun/240-MP"             # ← our fork; upstream releases live in anthonycaccese/240-mp
 INSTALL_DIR="/opt/240mp"
 LAUNCHER="/usr/local/bin/240mp"
 SYSTEMD_SERVICE="/etc/systemd/system/240mp.service"
