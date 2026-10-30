@@ -34,7 +34,6 @@ FocusScope {
 
     function buildModel() {
         var cfg = appCore.get_settings()
-        console.log("[240mp-settings] cfg.app keys: " + Object.keys(cfg.app || {}).join(','))
         appSettings = cfg.app || {}
         installedModules = appCore.get_installed_modules()
         autostartSession = appCore.isAutostartSession()

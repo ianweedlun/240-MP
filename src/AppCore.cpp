@@ -205,13 +205,9 @@ QVariant AppCore::get_settings() {
     // Display: inject the effective tokens (mpv.conf value, else mpv's built-in
     // default, else an honest "Custom (raw)") for the four managed keys so
     // Settings.qml sees the file itself, not an override layer.
-    const QVariantMap cfgAll = config.toVariantMap();
+    QVariantMap cfgAll = config.toVariantMap();
     QVariantMap appMap = cfgAll[QStringLiteral("app")].toMap();
     const QVariantMap eff = mpvopts::effectiveTokens(mpvConfPath());
-    qWarning("[AppCore] get_settings: conf=%s tokens=%d %s",
-             qPrintable(mpvConfPath()), eff.size(),
-             qPrintable([&]{ QStringList p; for (auto it = eff.begin(); it != eff.end(); ++it)
-                              p << (it.key() + "=" + it.value().toString()); return p.join(','); }()));
     for (const QString &key : mpvKeys) {
         if (eff.contains(key))
             appMap.insert(key, eff.value(key));
