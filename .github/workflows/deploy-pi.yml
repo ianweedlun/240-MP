@@ -8,20 +8,24 @@ on:
 jobs:
   deploy:
     name: Deploy to Raspberry Pi
-    if: >
-      github.event.workflow_run.head_branch == 'dev'
-      || github.event.workflow_run.head_branch == 'feature/retroarch-playlist-nav'
-      || github.event.workflow_run.head_branch == 'feature/weather-volume-osd'
-      || github.event.workflow_run.head_branch == 'feature/mpv-config-options'
+    # Any dev or feature-branch CI completion triggers a deploy (no hand-maintained branch list).
+    if: >-
+      github.event.workflow_run.head_branch == 'dev' ||
+      startsWith(github.event.workflow_run.head_branch, 'feature/')
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
 
     steps:
-      - name: Download tarball artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tarball-linux-arm64
-          path: .
-          run-id: ${{ github.event.workflow_run.database_id }}
+      - name: Download arm64 tarball (REST; bypasses v4 action cross-run quirks)
+        run: |
+          RUN_ID='${{ github.event.workflow_run.id }}'
+          CID=$(gh api "repos/ianweedlun/240-MP/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name=="tarball-linux-arm64") | .id' | head -1)
+          if [ -z "$CID" ]; then echo "No tarball artifact in CI run $RUN_ID"; exit 1; fi
+          gh api -H "Accept: application/zip" "repos/ianweedlun/240-MP/actions/artifacts/$CID/zip" > /tmp/artifact.zip
+          unzip -o /tmp/artifact.zip
+          ls -la *.tar.gz
 
       - name: Verify tarball
         run: |
