@@ -63,6 +63,14 @@ jobs:
           TARBALL=$(ls *.tar.gz | head -1)
           echo "Deploying $TARBALL to $PI_USER@$PI_HOST (branch: $BRANCH, commit: $COMMIT)"
 
+          # If the Pi is off-network for the runner, stop after verify: the artifact +
+          # ARM check already proved the build. Deploy from a local machine instead.
+          if ! sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$PI_USER@$PI_HOST" "true" 2>/dev/null; then
+            echo "Pi not reachable from runner. Build verified; transfer skipped."
+            echo "To land this build locally: ./scripts/deploy-pi.sh --latest dev"
+            exit 0
+          fi
+
           # Stop service — use 240mp-terminal.service to stop 240mp.
           # 240mp-terminal.service is a getty on tty1. Starting it stops 240mp.service
           # because they compete for the same VT.
