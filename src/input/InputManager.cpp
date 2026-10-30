@@ -903,9 +903,6 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     // A module that handles volume/media keys itself (Weather's volume OSD)
     // disables interception; the keys then fall through and QML sees them.
     const QString mediaKey = m_interceptMediaKeys ? mpvKeyForMediaEvent(ke) : QString();
-    if (mpvKeyForMediaEvent(ke) == QLatin1String("VOLUME_DOWN") && type == QEvent::KeyPress)
-        qInfo("[wx-osd-debug] C++ saw VolumeDown (press), intercept=%d -> falls through to QML=%d",
-              int(m_interceptMediaKeys), int(mediaKey.isEmpty()));
     if (!mediaKey.isEmpty()) {
         if (type == QEvent::KeyPress) {
             // Volume keys repeat while held; everything else fires once per press.
