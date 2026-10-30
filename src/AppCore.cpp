@@ -1,4 +1,5 @@
 #include "AppCore.h"
+#include "util/MpvBasicOptions.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -13,6 +14,17 @@
 #include <QPixmap>
 #include <QDateTime>
 #include <QQmlContext>
+#include <QStandardPaths>
+
+// User-level mpv config: ~/.config/mpv/mpv.conf — the same file mpv itself
+// reads at spawn (XDG config dir, same precedent as the RetroArch backend).
+// The Settings menu's four mpv knobs read and write THIS file; config.json
+// no longer holds them.
+static QString mpvConfPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
+           + QStringLiteral("/mpv/mpv.conf");
+}
 
 AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *parent)
     : QObject(parent), m_appRoot(appRoot), m_dataRoot(dataRoot)
@@ -165,7 +177,43 @@ QVariantList AppCore::menuEntriesForModule(const QString &moduleId) const {
 }
 
 QVariant AppCore::get_settings() {
-    return loadConfig().toVariantMap();
+    QJsonObject config = loadConfig();
+
+    const QStringList mpvKeys{QStringLiteral("replaygain"), QStringLiteral("audio_gain"),
+                              QStringLiteral("deinterlace"), QStringLiteral("audio_channels")};
+
+    // One-time migration: pre-redesign config.json app keys for the four mpv
+    // knobs are written into mpv.conf, then dropped from config.json. The file
+    // is the single source of truth from here on.
+    QJsonObject app = config[QStringLiteral("app")].toObject();
+    bool migrated = false;
+    for (const QString &key : mpvKeys) {
+        if (!app.contains(key))
+            continue;
+        const QString v = app.value(key).toString();
+        // The legacy "Mpv Conf" token means "no override" — just drop it.
+        if (!mpvopts::mpvValueForLegacyToken(key, v).isEmpty())
+            mpvopts::setUiValue(mpvConfPath(), key, v);
+        app.remove(key);
+        migrated = true;
+    }
+    if (migrated) {
+        config[QStringLiteral("app")] = app;
+        saveConfig(config);
+    }
+
+    // Display: inject the effective tokens (mpv.conf value, else mpv's built-in
+    // default, else an honest "Custom (raw)") for the four managed keys so
+    // Settings.qml sees the file itself, not an override layer.
+    const QVariantMap cfgAll = config.toVariantMap();
+    QVariantMap appMap = cfgAll[QStringLiteral("app")].toMap();
+    const QVariantMap eff = mpvopts::effectiveTokens(mpvConfPath());
+    for (const QString &key : mpvKeys) {
+        if (eff.contains(key))
+            appMap.insert(key, eff.value(key));
+    }
+    cfgAll[QStringLiteral("app")] = appMap;
+    return cfgAll;
 }
 
 QVariant AppCore::get_setting(const QString &moduleId, const QString &key) {
@@ -185,6 +233,28 @@ QVariant AppCore::get_setting(const QString &moduleId, const QString &key) {
 }
 
 void AppCore::save_setting(const QString &moduleId, const QString &key, const QVariant &value) {
+    // The four basic mpv knobs write straight into ~/.config/mpv/mpv.conf — the
+    // menu and the file are one surface, config.json stays out of their way.
+    if (moduleId.isEmpty() && mpvopts::isManagedKey(key)) {
+        if (!mpvopts::setUiValue(mpvConfPath(), key, value.toString())) {
+            qWarning("[AppCore] Rejected unknown mpv token for %s: %s",
+                     qPrintable(key), qPrintable(value.toString()));
+            return;
+        }
+        // Drop the legacy key from config.json if one is still there.
+        QJsonObject config = loadConfig();
+        QJsonObject app = config["app"].toObject();
+        if (app.contains(key)) {
+            app.remove(key);
+            config["app"] = app;
+            saveConfig(config);
+        }
+        qDebug("[AppCore] mpv setting written to mpv.conf: %s = %s",
+               qPrintable(key), qPrintable(value.toString()));
+        emit appSettingChanged(key, value.toString());
+        return;
+    }
+
     QJsonObject config = loadConfig();
 
     // Navigate to the target section
