@@ -8,12 +8,13 @@ on:
 jobs:
   deploy:
     name: Deploy to Raspberry Pi
-    if: >
-      github.event.workflow_run.head_branch == 'dev'
-      || github.event.workflow_run.head_branch == 'feature/retroarch-playlist-nav'
-      || github.event.workflow_run.head_branch == 'feature/weather-volume-osd'
-      || github.event.workflow_run.head_branch == 'feature/mpv-config-options'
+    # Any dev or feature-branch CI completion triggers a deploy (no hand-maintained branch list).
+    if: >-
+      github.event.workflow_run.head_branch == 'dev' ||
+      startsWith(github.event.workflow_run.head_branch, 'feature/')
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
 
     steps:
       - name: Download tarball artifact
@@ -21,7 +22,7 @@ jobs:
         with:
           name: tarball-linux-arm64
           path: .
-          run-id: ${{ github.event.workflow_run.database_id }}
+          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Verify tarball
         run: |
