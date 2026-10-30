@@ -66,3 +66,24 @@ document when implemented.
   expect no transcode log line), a 4K item (expect transcode to the ladder target),
   and "Direct play (always)" with the 4K item (expect direct / failure-fallback).
   Decision qDebug lines go through journalctl on the Pi.
+
+## As built (756e59e → this branch)
+- Implemented as a header-only pure function (`src/modules/plex/PlaybackDecision.h`,
+  `PlexQuality::shouldTranscode`) — QML untouched: `buildItemDetail` still emits
+  the `forceTranscode` key, only its computation changed.
+- Ladder labels carry NO bitrate ("Above 1080p: transcode") — the old id→Mbps
+  pairings were unverified and user rejected them; ids still feed
+  `maxVideoBitrate` internally, target quality is an internal detail for now.
+- Test target `plex-playback-decision` (ctest-registered, header-only so it links
+  nothing); needs `Test` added to root `find_package(Qt6 …)` (same delta the
+  retroarch branch made; a dev↔branch CMake merge will see this region conflict).
+- Unknown id not on the ladder = legacy always-transcode (back-compat for old
+  config.json values). Unknown dimensions = transcode (conservative).
+- Decision test verified locally: 8/8 green (x86_64, Qt 6.10.2).
+
+## Not done / open
+- Pi validation sweep (needs deploy + reboot + screenshots) — when this lands.
+- Actual transcode target quality per ladder tier remains the hardcoded ids
+  (8000/4000/2000 kbps). If PMS caps resolution by bitrate with the Chrome
+  profile, this may be fine as-is; revisit if 4K→target output looks wrong on CRT.
+

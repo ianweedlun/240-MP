@@ -14,7 +14,7 @@ set(APP_VERSION "dev" CACHE STRING "Release version (CI passes the git tag)")
 
 include(GNUInstallDirs)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Network Svg)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Network Svg Test)
 find_package(OpenSSL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED) # gamepad input (InputManager)
 
@@ -183,6 +183,26 @@ else()
         COMPONENT Runtime)
 endif()
 
+# ── Tests (opt-in) ─────────────────────────────────────────────────────────────
+# OFF by default: the normal build and the release pipeline are unaffected.
+# Pure-logic tests only — headless, no Quick/mpv/display required.
+#
+#   cmake -B build -DBUILD_TESTS=ON
+#   cmake --build build --target plex-playback-decision && ./build/plex-playback-decision
+option(BUILD_TESTS "Build the unit test suite" OFF)
+if(BUILD_TESTS)
+    enable_testing()
+    # Plex playback-decision logic (header-only — links nothing else).
+    add_executable(plex-playback-decision
+        src/modules/plex/tests/PlaybackDecisionTest.cpp)
+    set_target_properties(plex-playback-decision PROPERTIES AUTOMOC ON)
+    target_link_libraries(plex-playback-decision PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(plex-playback-decision PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME plex-playback-decision COMMAND plex-playback-decision)
+
+endif()
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
