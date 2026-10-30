@@ -216,6 +216,9 @@ int main(int argc, char *argv[]) {
     // the QML focus item even when another window (mpv) holds OS focus.
     inputManager.setTargetWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
 
+    // Screenshot debug capture grabs through this window (see AppCore::captureScreenshot).
+    appCore.setQuickWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
+
 #ifdef Q_OS_MAC
     if (QWindow *win = qobject_cast<QWindow *>(engine.rootObjects().first())) {
         // Move the window onto the target screen before forcing fullscreen, so
