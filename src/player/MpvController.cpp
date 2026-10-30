@@ -2,6 +2,7 @@
 #include "../AppCore.h"
 #include "../util/YtDlpLocator.h"
 #include "../util/MpvLocator.h"
+#include "../util/MpvBasicOptions.h"
 #include "../util/DisplayHandoff.h"
 #include "../util/FontconfigOverride.h"
 #include <QCoreApplication>
@@ -170,6 +171,12 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
          << QString("--log-file=%1").arg(m_logFilePath)
          << (hasOscScript ? "--osc=no" : "--osc=yes")
          << "--osd-level=0";
+
+    // 240mp-level basic mpv knobs (see Mp*v BasicOptions.h): appended as CLI
+    // options, so they win over the user's ~/.config/mpv/mpv.conf by mpv's own
+    // precedence. Absent/invalid values emit nothing — mpv's config is the
+    // fallback, and we never pass a value we didn't validate.
+    args << mpvopts::basicArgs(m_dataRoot);
 
     if (hasOscScript)
         args << QString("--script=%1").arg(oscScript);
