@@ -204,13 +204,18 @@ endif()
 option(BUILD_TESTS "Build the unit test suite" OFF)
 if(BUILD_TESTS)
 
+    enable_testing()
     # MpvBasicOptions policy-table tests: pure file-in/args-out checks against
-    # a temp dataRoot (QTemporary), no process spawning.
+    # a temp dataRoot, no process spawning.
     add_executable(mpv-basic-options-tests
         src/util/tests/MpvBasicOptionsTest.cpp
         src/util/MpvBasicOptions.cpp)
     set_target_properties(mpv-basic-options-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(mpv-basic-options-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(mpv-basic-options-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
 
 endif()
 
