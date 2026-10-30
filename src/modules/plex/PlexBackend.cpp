@@ -1,4 +1,5 @@
 #include "PlexBackend.h"
+#include "PlaybackDecision.h"
 
 #include <QFile>
 #include <QJsonDocument>
@@ -1888,6 +1889,7 @@ QVariantMap PlexBackend::buildItemDetail(const QJsonObject &meta) const {
                                        {"selected",false},{"imageSubtitle",false}});
     QString selectedAudio, selectedSubtitle = "0";
     QString videoCodec;
+    int srcW = 0, srcH = 0;
 
     for (const auto &sv : streams) {
         QJsonObject s = sv.toObject();
@@ -1900,6 +1902,10 @@ QVariantMap PlexBackend::buildItemDetail(const QJsonObject &meta) const {
         QString codec = s["codec"].toString().toLower();
         if (st == 1) {
             videoCodec = codec;
+            // Source display dimensions (PMS reports rotated metadata where
+            // width > height; the decision uses the shorter edge either way).
+            srcW = s["width"].toInt();
+            srcH = s["height"].toInt();
         } else if (st == 2) {
             audioStreams.append(QVariantMap{{"id",sid},{"displayTitle",title},{"language",lang}});
             if (s["selected"].toBool() && selectedAudio.isEmpty())
@@ -1916,8 +1922,11 @@ QVariantMap PlexBackend::buildItemDetail(const QJsonObject &meta) const {
     if (selectedAudio.isEmpty() && !audioStreams.isEmpty())
         selectedAudio = audioStreams[0].toMap()["id"].toString();
 
-    bool forceTranscode = (videoQuality() != "auto");
+    // Resolution-aware decision: the selected ladder direct-plays sources at or
+    // below its resolution class and transcodes anything above it.
+    const bool forceTranscode = PlexQuality::shouldTranscode(videoQuality(), srcW, srcH);
     qDebug() << "[Plex] Item detail loaded — codec:" << videoCodec
+             << "| source:" << srcW << QChar('x') << srcH
              << "| quality:" << videoQuality()
              << "| playback:" << (forceTranscode ? "transcode" : "direct play");
     int duration = meta["duration"].toInt();
@@ -2904,10 +2913,10 @@ void PlexBackend::getServers() {
 
 void PlexBackend::getVideoQualities() {
     QVariantList options = {
-        QVariantMap{{"id","auto"}, {"label","Direct Play"}},
-        QVariantMap{{"id","8000"}, {"label","8 Mbps (1080p)"}},
-        QVariantMap{{"id","4000"}, {"label","4 Mbps (720p)"}},
-        QVariantMap{{"id","2000"}, {"label","2 Mbps (480p)"}},
+        QVariantMap{{"id","auto"}, {"label","Direct Play (always)"}},
+        QVariantMap{{"id","8000"}, {"label","Above 1080p: transcode"}},
+        QVariantMap{{"id","4000"}, {"label","Above 720p: transcode"}},
+        QVariantMap{{"id","2000"}, {"label","Above 480p: transcode"}},
     };
     emit dynamicOptionsReady("video_quality", options);
 }

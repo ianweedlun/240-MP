@@ -46,6 +46,7 @@
     {
       "key": "video_quality",
       "label": "Video Quality",
+      "description": "Source at or below the selected resolution plays direct; above it transcodes. Always direct play plays anything direct.",
       "type": "list_single",
       "options_source": "dynamic",
       "options_slot": "getVideoQualities",

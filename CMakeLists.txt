@@ -231,9 +231,17 @@ if(BUILD_TESTS)
         target_compile_options(weather-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME weather-codes COMMAND weather-tests)
+
+    # Plex playback-decision logic (header-only — links nothing else).
+    add_executable(plex-playback-decision
+        src/modules/plex/tests/PlaybackDecisionTest.cpp)
+    set_target_properties(plex-playback-decision PROPERTIES AUTOMOC ON)
+    target_link_libraries(plex-playback-decision PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(plex-playback-decision PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME plex-playback-decision COMMAND plex-playback-decision)
 endif()
-
-
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
