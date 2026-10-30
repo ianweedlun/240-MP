@@ -131,6 +131,49 @@ FocusScope {
             moduleId: ""
         })
 
+        // Basic mpv knobs at the app level. [Mpv Conf] emits nothing so the
+        // user's ~/.config/mpv/mpv.conf keeps authority; picking any other
+        // value appends the matching CLI option, which by mpv's precedence
+        // (command line > config file) overrides it. Keys keep mpv's own
+        // option names (dots as underscores); the C++ side validates every
+        // token against its own table before anything reaches the CLI.
+        items.push({
+            type: "list_single",
+            key: "replaygain",
+            label: "Audio Normalize",
+            options: ["Mpv Conf", "Off", "Track", "Album"],
+            value: appSettings["replaygain"] || "Mpv Conf",
+            description: "Level tracks to a common loudness using ReplayGain tags\n[TRACK] Per-track tags (most libraries)  [ALBUM] Keep album flow",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "audio_gain",
+            label: "Sound Boost",
+            options: ["Mpv Conf", "0", "2", "4", "6", "8", "-4"],
+            value: appSettings["audio_gain"] || "Mpv Conf",
+            description: "Raise all audio output by decibels (dB)",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "deinterlace",
+            label: "Deinterlace",
+            options: ["Mpv Conf", "Off", "Auto", "On"],
+            value: appSettings["deinterlace"] || "Mpv Conf",
+            description: "Un interlaced sources (old TV, 50i DVDs) into progressive lines\n[AUTO] Only when the source is interlaced",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "audio_channels",
+            label: "Audio Channels",
+            options: ["Mpv Conf", "Auto", "Stereo", "Mono"],
+            value: appSettings["audio_channels"] || "Mpv Conf",
+            description: "[STEREO] Two channels  [MONO] One channel (shared CRT speaker)",
+            moduleId: ""
+        })
+
         // SCREEN SAVER section — single control: OFF disables, a number sets the
         // timeout for both menu idle and playback pause (handled inside mpv).
         items.push({
