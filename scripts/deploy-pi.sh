@@ -71,7 +71,7 @@ if [ "${1:-}" = "--latest" ]; then
     gh run download "$RUN_ID" --repo "$REPO" -n tarball-linux-arm64 -D "$TMPDIR"
     ORIG=$(ls "$TMPDIR"/*.tar.gz | head -1)
     TARBALL="$TMPDIR/240-MP-${BRANCH//\//-}-linux-arm64-${COMMIT}.tar.gz"
-    mv -- "$ORIG" "$TARBALL"
+    mv -- "$ORIG" "$TARBALL" 2>/dev/null || [ "$ORIG" = "$TARBALL" ]  # CI may already name it exactly this
 
     if [ ! -f "$TARBALL" ]; then
         echo "Error: Downloaded artifact not found at $TARBALL"
