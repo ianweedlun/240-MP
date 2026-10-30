@@ -125,7 +125,7 @@ FocusScope {
                 Math.min(100, (weatherBackend.musicVolume || 50) + 10))
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
-            // Qt.Key_VolumeDown (0x01000071) or XF86AudioLowerVolume (0x1008FF11)
+            console.warn("[wx-osd-debug] QML saw VolumeDown key=" + event.key.toString(16))
             weatherBackend.setMusicVolume(
                 Math.max(0, (weatherBackend.musicVolume || 50) - 10))
             event.accepted = true
