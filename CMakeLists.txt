@@ -14,7 +14,7 @@ set(APP_VERSION "dev" CACHE STRING "Release version (CI passes the git tag)")
 
 include(GNUInstallDirs)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Network Svg)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Network Svg Test)
 find_package(OpenSSL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED) # gamepad input (InputManager)
 
@@ -181,6 +181,29 @@ else()
         "${CMAKE_SOURCE_DIR}/scripts"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
         COMPONENT Runtime)
+endif()
+
+# ── Tests (opt-in) ─────────────────────────────────────────────────────────────
+# OFF by default: the normal build and the release pipeline are unaffected.
+# QtCore only — these cover pure logic (playlist parsing, config loading) and
+# need no Quick, no mpv and no display, so they run headless on any target.
+#
+#   cmake -B build -DBUILD_TESTS=ON
+#   cmake --build build --target weather-tests && ./build/weather-tests
+option(BUILD_TESTS "Build the unit test suite" OFF)
+if(BUILD_TESTS)
+
+    # Weather code-mapping tests: pure table lookups and METAR reduction, no
+    # files, no network. WeatherCodes.h is self-contained, so this target
+    # needs nothing beyond Qt Test.
+    add_executable(weather-tests
+        src/modules/weather/tests/WeatherCodesTest.cpp)
+    set_target_properties(weather-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-codes COMMAND weather-tests)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
