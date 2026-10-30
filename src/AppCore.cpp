@@ -512,6 +512,36 @@ QString AppCore::startupModuleEntryPoint() const {
     return {};
 }
 
+QString AppCore::captureScreenshot(const QString &outputPath)
+{
+    QString path = outputPath;
+    if (path.isEmpty()) {
+        path = QStringLiteral("/tmp/240mp_screenshot_%1.png").arg(
+            QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+    }
+    
+    // Try to get primary screen screenshot
+    QList<QScreen*> screens = QGuiApplication::screens();
+    if (screens.isEmpty()) {
+        qWarning("[AppCore] No screens available for screenshot");
+        return QString();
+    }
+    
+    QPixmap pixmap = screens.first()->grabWindow(0);
+    if (pixmap.isNull()) {
+        qWarning("[AppCore] Screenshot grab returned null pixmap");
+        return QString();
+    }
+    
+    if (!pixmap.save(path)) {
+        qWarning("[AppCore] Failed to save screenshot to %s", qPrintable(path));
+        return QString();
+    }
+    
+    qInfo("[AppCore] Screenshot saved to %s", qPrintable(path));
+    return path;
+}
+
 QString AppCore::takeScreenshot()
 {
     qInfo("[AppCore] takeScreenshot() called");
