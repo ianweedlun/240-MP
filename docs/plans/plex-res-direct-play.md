@@ -83,7 +83,7 @@ document when implemented.
 
 ## Not done / open
 - Pi validation sweep (needs deploy + reboot + screenshots) — when this lands.
-- Actual transcode target quality per ladder tier remains the hardcoded ids
-  (8000/4000/2000 kbps). If PMS caps resolution by bitrate with the Chrome
+  (corrected 8000/3000/1500 kbps per Plex convention; the pre-reorg 4000/2000 ids now
+  take the legacy always-transcode path). If PMS caps resolution by bitrate with the Chrome
   profile, this may be fine as-is; revisit if 4K→target output looks wrong on CRT.
 

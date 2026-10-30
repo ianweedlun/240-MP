@@ -16,17 +16,17 @@ private slots:
     void atOrBelowThresholdDirectPlays() {
         // Exactly at the class threshold direct-plays (inclusive bound).
         QCOMPARE(PlexQuality::shouldTranscode("8000", 1920, 1080), false);
-        QCOMPARE(PlexQuality::shouldTranscode("4000", 1280, 720), false);
+        QCOMPARE(PlexQuality::shouldTranscode("3000", 1280, 720), false);
         // Below too.
         QCOMPARE(PlexQuality::shouldTranscode("8000", 1280, 720), false);
-        QCOMPARE(PlexQuality::shouldTranscode("2000", 640, 480), false);
+        QCOMPARE(PlexQuality::shouldTranscode("1500", 640, 480), false);
     }
 
     void aboveThresholdTranscodes() {
         // Just-above and far-above both transcode to the ladder target.
         QCOMPARE(PlexQuality::shouldTranscode("8000", 3840, 2160), true);
         QCOMPARE(PlexQuality::shouldTranscode("8000", 1921, 1081), true);
-        QCOMPARE(PlexQuality::shouldTranscode("4000", 1920, 1080), true);
+        QCOMPARE(PlexQuality::shouldTranscode("3000", 1920, 1080), true);
     }
 
     void portraitAndRotatedUseShortEdge() {
@@ -45,9 +45,11 @@ private slots:
     }
 
     void legacyCustomBitrateAlwaysTranscodes() {
-        // Ids not on our ladder (pre-reorg custom bitrate) keep the old
-        // semantics: unconditionally transcode at that bitrate.
+        // Ids not on our corrected ladder (including the pre-reorg 4000/2000
+        // values from older config.json) keep the old semantics:
+        // unconditionally transcode at that bitrate.
         QCOMPARE(PlexQuality::shouldTranscode("1200", 1920, 1080), true);
+        QCOMPARE(PlexQuality::shouldTranscode("4000", 640, 480), true);
         QCOMPARE(PlexQuality::shouldTranscode("1200", 640, 480), true);
     }
 };

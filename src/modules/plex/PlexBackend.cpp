@@ -2915,8 +2915,8 @@ void PlexBackend::getVideoQualities() {
     QVariantList options = {
         QVariantMap{{"id","auto"}, {"label","Direct Play (always)"}},
         QVariantMap{{"id","8000"}, {"label","Above 1080p: transcode"}},
-        QVariantMap{{"id","4000"}, {"label","Above 720p: transcode"}},
-        QVariantMap{{"id","2000"}, {"label","Above 480p: transcode"}},
+        QVariantMap{{"id","3000"}, {"label","Above 720p: transcode"}},
+        QVariantMap{{"id","1500"}, {"label","Above 480p: transcode"}},
     };
     emit dynamicOptionsReady("video_quality", options);
 }

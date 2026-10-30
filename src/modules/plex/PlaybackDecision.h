@@ -15,9 +15,11 @@ namespace PlexQuality {
 // edge, in px) that still direct-plays. Anything above is transcoded to
 // that ladder target.
 inline const QHash<QString, int> &ladderThresholds() {
+    // Ladder ids corrected to Plex-conventional bitrate targets:
+    // 1080p-class ≈ 8 Mbps, 720p-class ≈ 3 Mbps, SD/480p-class ≈ 1.5 Mbps.
     static const QHash<QString, int> t{{{"8000", 1080},
-                                        {"4000", 720},
-                                        {"2000", 480}}};
+                                        {"3000", 720},
+                                        {"1500", 480}}};
     return t;
 }
 
