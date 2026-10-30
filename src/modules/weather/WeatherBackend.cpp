@@ -1,5 +1,6 @@
 #include "WeatherBackend.h"
 #include "../../util/MpvLocator.h"
+#include "../../util/MpvBasicOptions.h"
 
 #include <QDir>
 #include <QFile>
@@ -593,7 +594,11 @@ void WeatherBackend::startMusic() {
          << QStringLiteral("--shuffle")
          << QStringLiteral("--no-terminal")
          << QStringLiteral("--really-quiet")
-         << QStringLiteral("--input-ipc-server=%1").arg(m_musicSocketPath)
+         << QStringLiteral("--input-ipc-server=%1").arg(m_musicSocketPath);
+         // 240mp-level basic mpv knobs (audio normalize/boost included): the
+         // music player honors the same Settings as video playback.
+         args << mpvopts::basicArgs(m_dataRoot);
+         args
          // Everything after this is a file, so an entry starting with '-'
          // cannot be mistaken for an option.
          << QStringLiteral("--")
