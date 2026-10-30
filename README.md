@@ -1,3 +1,16 @@
+## Human Talking
+
+This fork of 240-MP started as a way to learn how to use local LLMs and hermes-agent for... anything.
+The goal is to extend and improve the original application I love by learning how to make vibe coding suck the least.
+I would welcome and appreciate any code review, suggestions, or ideas provided by real humans.
+
+## Generative-AI artwork policy
+
+Image/Video/Audio (art) generation for testing purposes only. Any artwork used for production must be human-made and libre (open source, fair-use, creative commons). Attribution is always required.
+
+- Ian
+
+
 <img src="https://github.com/user-attachments/assets/73c3e46f-a74a-4d96-9c4f-ae30f28378be" />
 
 # 240-MP
