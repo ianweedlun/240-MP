@@ -114,7 +114,7 @@ QString RetroArchBackend::shortNameForSystem(const QString &systemId) const {
         { "atari - lynx", "ATARI LYNX" },
         { "coleco - colecovision", "COLECOVISION" },
         { "fbneo - arcade games", "ARCADE" },
-        { "nec - pc engine supergrafx", "PC ENGINE SGRFX" },
+        { "nec - pc engine supergrafx", "PC ENGINE SGFX" },
         { "nec - pc engine - turbografx 16", "TG-16" },
         { "nintendo - game boy advance", "GBA" },
         { "nintendo - game boy color", "GBC" },
@@ -212,8 +212,15 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
         });
     }
 
+    // Rows are labeled with the short name, so order by what the user sees.
     std::sort(playlists.begin(), playlists.end(), [](const QVariant &a, const QVariant &b) {
-        return a.toMap()["name"].toString() < b.toMap()["name"].toString();
+        const auto ma = a.toMap();
+        const auto mb = b.toMap();
+        const QString snA = ma.value(QStringLiteral("shortName")).toString();
+        const QString snB = mb.value(QStringLiteral("shortName")).toString();
+        const QString sa = snA.isEmpty() ? ma.value(QStringLiteral("name")).toString() : snA;
+        const QString sb = snB.isEmpty() ? mb.value(QStringLiteral("name")).toString() : snB;
+        return sa < sb;
     });
 
     return playlists;
