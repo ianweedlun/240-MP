@@ -57,6 +57,12 @@ public:
     // pad's Back button can still cancel the overlay.
     Q_INVOKABLE void setRemapCapture(bool active);
 
+    // Modules that own media-key semantics themselves (e.g. the Weather view's
+    // volume OSD) disable interception for as long as they are up; the flag is
+    // restored on their Component.onDestruction. While false, HID media keys
+    // fall through eventFilter and QML sees the real QKeyEvent.
+    Q_INVOKABLE void setInterceptMediaKeys(bool intercept);
+
 signals:
     void gamepadConnectedChanged();
     void lastInputDeviceChanged();
@@ -156,6 +162,7 @@ private:
     // can't re-fire a press it's already holding).
     QSet<Action> m_heldActions;
     bool m_remapCapture = false;                     // see setRemapCapture()
+    bool m_interceptMediaKeys = true;                // see setInterceptMediaKeys()
 
 #ifdef Q_OS_LINUX
     int m_consumerFd = -1;

@@ -26,6 +26,14 @@
       "description": "Background music while the forecast is up. Optional playlist: weather_music.txt in the data directory"
     },
     {
+      "key": "music_volume",
+      "label": "Music Volume",
+      "type": "list_single",
+      "options": ["10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"],
+      "default": "50%",
+      "description": "Volume level for background music"
+    },
+    {
       "key": "units",
       "label": "Units",
       "type": "list_single",

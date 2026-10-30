@@ -190,7 +190,7 @@ endif()
 # need no Quick, no mpv and no display, so they run headless on any target.
 #
 #   cmake -B build -DBUILD_TESTS=ON
-#   cmake --build build --target retroarch-tests && ./build/retroarch-tests
+#   cmake --build build --target <target> && ./build/<target>
 option(BUILD_TESTS "Build the unit test suite" OFF)
 if(BUILD_TESTS)
     add_executable(retroarch-tests
@@ -211,7 +211,19 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # Weather code-mapping tests: pure table lookups and METAR reduction, no
+    # files, no network. WeatherCodes.h is self-contained, so this target
+    # needs nothing beyond Qt Test.
+    add_executable(weather-tests
+        src/modules/weather/tests/WeatherCodesTest.cpp)
+    set_target_properties(weather-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-codes COMMAND weather-tests)
 endif()
+
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")

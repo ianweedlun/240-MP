@@ -46,6 +46,8 @@ class WeatherBackend : public QObject {
     // Nothing binds it yet; it exists so an on-screen indicator is a QML-only
     // change.
     Q_PROPERTY(bool musicPlaying READ musicPlaying NOTIFY musicStateChanged)
+    // Current music volume (0-100). Updated when volume is changed via IPC.
+    Q_PROPERTY(int musicVolume READ musicVolume NOTIFY musicStateChanged)
 
 public:
     explicit WeatherBackend(const QString &appRoot, const QString &dataRoot,
@@ -63,6 +65,7 @@ public:
     int         utcOffsetSeconds() const { return m_utcOffset; }
 
     bool musicPlaying() const;
+    int musicVolume() const { return m_musicVolume; }
 
     // Absolute path to weather_location.txt, so the setup screen can say exactly
     // where to put it.
@@ -84,6 +87,8 @@ public:
     // Pause/resume in place over mpv's IPC socket, so the current track survives
     // the toggle. Session-only: it deliberately does not write the setting.
     Q_INVOKABLE void toggleMusic();
+    // Set music volume (0-100). Sends command to mpv via IPC and triggers OSD bar.
+    Q_INVOKABLE void setMusicVolume(int volume);
 
     // options_slot for the "displays" multiselect. Ids match Weather.qml's
     // allScreens list.
@@ -210,6 +215,7 @@ private:
     QTimer       *m_musicConnect = nullptr;
     QString       m_musicSocketPath;
     bool          m_musicPaused = false;
+    int           m_musicVolume = 50;
 
     QVariantMap  m_current;
     QVariantList m_forecast;
