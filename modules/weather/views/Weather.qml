@@ -237,6 +237,11 @@ FocusScope {
                 anchors.leftMargin: root.sw * 0.15 //100
                 anchors.rightMargin: root.sw * 0.15 //100
                 spacing: root.sw * 0.00625 //4
+                // Row has no implicit height from an id-less Repeater whose
+                // children read height: parent.height — that circularity
+                // collapses the Row to 0px and all ticks draw invisible. Size
+                // it from the bar rectangle explicitly.
+                height: parent.height
 
                 Repeater {
                     model: 20 // 20 ticks for 0-100 volume (5% each)
