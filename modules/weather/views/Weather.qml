@@ -121,8 +121,7 @@ FocusScope {
             weatherBackend.toggleMusic()
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
-            // Qt.Key_VolumeUp (0x01000070) or XF86AudioRaiseVolume (0x1008FF13)
-            // InputManager synthesizes these from HID media keys.
+            console.warn("[wx-osd-debug] VolumeUp key reached QML handler")
             weatherBackend.setMusicVolume(
                 Math.min(100, (weatherBackend.musicVolume || 50) + 10))
             event.accepted = true
@@ -262,7 +261,7 @@ FocusScope {
     Connections {
         target: weatherBackend
         function onMusicStateChanged() {
-            // Show volume bar when volume changes (not when music starts/stops)
+            console.warn("[wx-osd-debug] musicStateChanged fired: playing=" + weatherBackend.musicPlaying + " vol=" + weatherBackend.musicVolume)
             if (weatherBackend.musicPlaying) {
                 volumeBarOverlay.visible = true
                 volumeBarOverlay.opacity = 1
