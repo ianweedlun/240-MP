@@ -121,7 +121,6 @@ FocusScope {
             weatherBackend.toggleMusic()
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
-            console.warn("[wx-osd-debug] VolumeUp key reached QML handler")
             weatherBackend.setMusicVolume(
                 Math.min(100, (weatherBackend.musicVolume || 50) + 10))
             event.accepted = true
@@ -249,9 +248,12 @@ FocusScope {
                     Rectangle {
                         width: root.sw * 0.015625 //10
                         height: parent.height
+                        // Slate, not 30%-grey: the blue background composites a
+                        // translucent grey to within ~12 units of itself —
+                        // "unlit" must be visibly unlit, not near-invisible.
                         color: index * 5 <= weatherBackend.musicVolume
                                ? root.primaryColor
-                               : Qt.rgba(0.5, 0.5, 0.5, 0.3)
+                               : Qt.rgba(0.4, 0.4, 0.6, 1.0)
                         radius: 2
                     }
                 }
@@ -266,7 +268,6 @@ FocusScope {
     Connections {
         target: weatherBackend
         function onMusicStateChanged() {
-            console.warn("[wx-osd-debug] musicStateChanged fired: playing=" + weatherBackend.musicPlaying + " vol=" + weatherBackend.musicVolume)
             if (weatherBackend.musicPlaying) {
                 volumeBarOverlay.visible = true
                 volumeBarOverlay.opacity = 1
