@@ -125,7 +125,6 @@ FocusScope {
                 Math.min(100, (weatherBackend.musicVolume || 50) + 10))
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
-            console.warn("[wx-osd-debug] QML saw VolumeDown key=" + event.key.toString(16))
             weatherBackend.setMusicVolume(
                 Math.max(0, (weatherBackend.musicVolume || 50) - 10))
             event.accepted = true
@@ -251,7 +250,7 @@ FocusScope {
                         // Slate, not 30%-grey: the blue background composites a
                         // translucent grey to within ~12 units of itself —
                         // "unlit" must be visibly unlit, not near-invisible.
-                        color: index * 5 <= weatherBackend.musicVolume
+                        color: (index + 1) * 5 <= weatherBackend.musicVolume
                                ? root.primaryColor
                                : Qt.rgba(0.4, 0.4, 0.6, 1.0)
                         radius: 2
