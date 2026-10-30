@@ -35,6 +35,12 @@ jobs:
             # Verify branch ref exists
             git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
 
+            # Skip branches whose .hermes.md already matches main (empty commits fail)
+            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/main:.hermes.md" 2>/dev/null; then
+              echo "$BRANCH: .hermes.md already in sync"
+              continue
+            fi
+
             # Always sync .hermes.md from main to this branch
             git checkout -B "$BRANCH" "origin/$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
