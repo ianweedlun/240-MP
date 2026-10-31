@@ -666,9 +666,11 @@ void AppCore::note_view(const QString &source)
 
 void AppCore::note_state(const QString &event, const QString &detail)
 {
+#ifdef APP_TELEMETRY
     QFile f(QStringLiteral("/tmp/240mp_state.log"));
     if (!f.open(QIODevice::Append | QIODevice::Text))
         return; // debug aid — never fail into the app
     const qint64 ts = QDateTime::currentDateTime().toSecsSinceEpoch();
     f.write((QString::number(ts) + QLatin1Char(' ') + event + QLatin1Char(' ') + detail + QLatin1Char('\n')).toUtf8());
+#endif
 }

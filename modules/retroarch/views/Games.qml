@@ -37,7 +37,8 @@ FocusScope {
         : root.sw - root.sw * 0.115625
 
     signal goBack()
-
+    // Debug telemetry signal: highlighted row moved (Main.qml logs it).
+    signal rowSelected(name, index)
     focus: true
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
@@ -139,6 +140,10 @@ FocusScope {
         delegate: Item {
             width: gameList.width
             height: root.sh * 0.0583333 //28
+
+            // Debug telemetry: the row announces its own highlight.
+            property bool selected: gameList.currentIndex === index
+            onSelectedChanged: if (selected) gamesRoot.rowSelected(modelData.name, index)
 
             Item {
                 id: textClip

@@ -691,20 +691,39 @@ void InputManager::releaseAction(Action a) {
 // When mpv isn't running either, sendKey is a no-op, so background presses
 // while the user is in another app do nothing — same as keyboard.
 void InputManager::deliverPress(Action a, bool autoRepeat) {
-    // While a child process whose semantics are entirely its own (RetroArch
-    // gameplay) holds the fullscreen display, it already consumes the very
-    // same evdev/SDL stream: a ROM-quit "Back" would double-handle here and
-    // skew the QML nav stack by one extra goBack. Drop QML-bound delivery for
-    // that owner only. mpv playback deliberately keeps delivering — the Player
-    // views translate keys into mpv IPC on their own. Two signals, either one
-    // suffices: the DisplayHandoff owner token (where a VT/DRM hand-off exists)
-    // and the backend's live child process (where none is recorded). isHeldBy()
-    // is false on macOS/desktop where DisplayHandoff is a no-op, so this is
-    // Pi-only behaviour.
-    if (m_raBackend && m_raBackend->gameRunning())
+#ifdef APP_TELEMETRY
+    const auto actionName = [](Action a) -> QString {
+        switch (a) {
+        case Action::Up:    return QStringLiteral("up");
+        case Action::Down:  return QStringLiteral("down");
+        case Action::Left:  return QStringLiteral("left");
+        case Action::Right: return QStringLiteral("right");
+        case Action::Select:return QStringLiteral("select");
+        case Action::Back:  return QStringLiteral("back");
+        case Action::PlayPause: return QStringLiteral("playpause");
+        default: return QStringLiteral("none");
+        }
+    };
+    // Input-decision telemetry: the delivered/suppressed call is the ground
+    // truth for stack-skew bugs — read it instead of inferring from nav.
+    const bool telemetryFirst = !autoRepeat;
+    // The suppression itself (documented in .hermes.md Input Flow #5): a child
+    // game (RetroArch) owns the console and already consumed this key from the
+    // same evdev/SDL stream — delivering it too would pop QML nav one extra
+    // time. mpv keeps delivering: Player views translate keys into mpv IPC.
+    if (m_raBackend && m_raBackend->gameRunning()) {
+        if (telemetryFirst && m_appCore)
+            m_appCore->note_state("key", actionName(a) + " suppressed=game");
         return;
-    if (m_handoff && m_handoff->isHeldBy(QStringLiteral("retroarch")))
+    }
+    if (m_handoff && m_handoff->isHeldBy(QStringLiteral("retroarch"))) {
+        if (telemetryFirst && m_appCore)
+            m_appCore->note_state("key", actionName(a) + " suppressed=handoff");
         return;
+    }
+    if (telemetryFirst && m_appCore)
+        m_appCore->note_state("key", actionName(a) + (windowActive() ? " delivered" : " mpv-ipc"));
+#endif
     if (windowActive())
         postKey(qtKeyForAction(a), QEvent::KeyPress, autoRepeat);
     else
