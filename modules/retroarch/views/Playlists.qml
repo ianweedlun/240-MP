@@ -193,6 +193,11 @@ FocusScope {
     }
 
     Component.onCompleted: {
+        refreshPlaylistModel()
+        playlistList.forceActiveFocus()
+    }
+
+    function refreshPlaylistModel() {
         var pls = showAllPlaylists
             ? retroarchBackend.refreshAllPlaylists()
             : retroarchBackend.refreshPlaylists(systemId)
@@ -202,7 +207,15 @@ FocusScope {
             playlistList.currentIndex = Math.min(restore, pls.length - 1)
             playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
         }
-        playlistList.forceActiveFocus()
+    }
+
+    Connections {
+        target: appCore
+        function onModuleSettingChanged(mid, key, value) {
+            if (mid === moduleRoot.moduleId && key === "playlist_sort") {
+                refreshPlaylistModel()
+            }
+        }
     }
 
     // Footer

@@ -106,10 +106,10 @@ FocusScope {
         id: gameList
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.left: previewOnLeft ? previewLoader.right : parent.left
-        anchors.right: previewOnLeft ? parent.right : previewLoader.left
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
-        anchors.rightMargin: previewOnLeft ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
+        anchors.left: (gamesRoot.showPreview && previewOnLeft) ? previewLoader.right : parent.left
+        anchors.right: (gamesRoot.showPreview && !previewOnLeft) ? parent.right : previewLoader.left
+        anchors.leftMargin: (gamesRoot.showPreview && previewOnLeft) ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
+        anchors.rightMargin: (gamesRoot.showPreview && !previewOnLeft) ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
         width: gamesRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
@@ -200,6 +200,9 @@ FocusScope {
         anchors.right: previewOnLeft ? undefined : parent.right
         anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
     }
+
+    // When thumbnail_display is OFF, ensure preview is fully hidden and list takes full width
+    // This binding ensures the list anchors update when showPreview changes
 
     // Footer
     Text {
