@@ -15,9 +15,9 @@ jobs:
         run: |
           umask 077
           cat > /tmp/pi_id <<'PIKEY'
-          {{ secrets.PI_SSH_IDENTITY }}
+          ${{ secrets.PI_SSH_IDENTITY }}
           PIKEY
-          ssh-keygen -l /tmp/pi_id
+          ssh-keygen -lf /tmp/pi_id
       - name: Probe
         run: |
           ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 \
