@@ -43,6 +43,8 @@ jobs:
           # Extract header to check architecture
           tar -xzf "$TARBALL" -O ./usr/local/bin/240mp | file - | grep -q 'ARM aarch64' \
             || { echo "Error: tarball binary is not ARM aarch64"; exit 1; }
+          LOCAL_MD5=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
+          echo "LOCAL_MD5=$LOCAL_MD5" >> $GITHUB_ENV
 
       - name: Get branch and commit from tarball filename
         run: |
@@ -54,62 +56,51 @@ jobs:
           echo "BRANCH=$BRANCH" >> $GITHUB_ENV
           echo "COMMIT=$COMMIT" >> $GITHUB_ENV
 
-      - name: Deploy to Pi
-        env:
-          PI_HOST: ${{ secrets.PI_SSH_HOSTNAME }}
-          PI_USER: ${{ secrets.PI_SSH_USERNAME }}
-          PI_PASSWORD: ${{ secrets.PI_SSH_PASSWORD }}
+      - name: Stage identity key (key-only auth, no password secrets)
         run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -q -lf /tmp/pi_id
+
+      - name: Deploy via ghdeploy + root wrapper, then verify
+        # The Pi's own /usr/local/bin/240mp-ci-deploy (run via sudo, granted by
+        # /etc/sudoers.d/240mp-ci) does the whole dance: clear ExecStopPost, VT-stop,
+        # extract, restore override, reboot. Connection death from the reboot is expected.
+        run: |
+          HOST='${{ secrets.PI_SSH_HOSTNAME }}'
+          USER='${{ secrets.PI_SSH_USERNAME }}'
           TARBALL=$(ls *.tar.gz | head -1)
-          echo "Deploying $TARBALL to $PI_USER@$PI_HOST (branch: $BRANCH, commit: $COMMIT)"
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
 
           # If the Pi is off-network for the runner, stop after verify: the artifact +
           # ARM check already proved the build. Deploy from a local machine instead.
-          if ! sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$PI_USER@$PI_HOST" "true" 2>/dev/null; then
-            echo "Pi not reachable from runner. Build verified; transfer skipped."
-            echo "To land this build locally: ./scripts/deploy-pi.sh --latest dev"
+          if ! $SSH "$USER@$HOST" true 2>/tmp/ssh_err; then
+            echo "Pi not reachable from runner (likely cold). Build verified; transfer skipped."
+            echo "To land locally: ./scripts/deploy-pi.sh --latest $BRANCH"
             exit 0
           fi
 
-          # Stop service — use 240mp-terminal.service to stop 240mp.
-          # 240mp-terminal.service is a getty on tty1. Starting it stops 240mp.service
-          # because they compete for the same VT.
-          # Also clear ExecStopPost to avoid poweroff when 240mp exits due to VT loss.
-          echo "Stopping 240mp.service via 240mp-terminal.service..."
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            "$PI_USER@$PI_HOST" \
-            "echo -e '[Service]\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
-             sudo systemctl daemon-reload && \
-             sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
-             sudo systemctl start 240mp-terminal.service && \
-             sleep 2"
+          echo "Uploading $TARBALL to /tmp/240mp-deploy.tar.gz ..."
+          scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            "$TARBALL" "$USER@$HOST:/tmp/240mp-deploy.tar.gz"
 
-          # Wait for service to stop (240mp-terminal takes the VT, forcing 240mp to exit)
-          for i in $(seq 1 10); do
-            if sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-              "$PI_USER@$PI_HOST" \
-              "systemctl is-active 240mp.service 2>/dev/null" | grep -q 'active'; then
-              echo "Waiting for service to stop... ($i/10)"
-              sleep 2
-            else
-              echo "Service stopped"
-              break
+          echo "Root-side dance via /usr/local/bin/240mp-ci-deploy (its systemctl reboot kills this ssh) ..."
+          rc=0
+          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy /tmp/240mp-deploy.tar.gz" || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
+          echo "wrapper call returned rc=$rc (connection death = rebooting, as expected)"
+
+          echo "Verify loop: waiting for Pi to come back and run the new build ..."
+          for i in $(seq 1 15); do
+            sleep 20
+            OUT=$($SSH "$USER@$HOST" "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || continue
+            echo "check $i:" "$(echo "$OUT" | tr '\n' ' ')"
+            if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+              echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($COMMIT)"
+              exit 0
             fi
           done
-
-          # SCP tarball
-          echo "Uploading tarball..."
-          sshpass -p "$PI_PASSWORD" scp -o StrictHostKeyChecking=no \
-            "$TARBALL" "$PI_USER@$PI_HOST:/tmp/240-MP-deploy.tar.gz"
-
-          # Extract and deploy, then restore ExecStopPost
-          echo "Extracting..."
-          sshpass -p "$PI_PASSWORD" ssh -o StrictHostKeyChecking=no \
-            "$PI_USER@$PI_HOST" \
-            "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C /opt/240mp && \
-             sudo chown -R $PI_USER: /opt/240mp && \
-             rm -f /tmp/240-MP-deploy.tar.gz && \
-             echo -e '[Service]\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
-             sudo systemctl daemon-reload && \
-             sudo systemctl stop 240mp-terminal.service 2>/dev/null; true && \
-             echo "Deploy complete for branch $BRANCH commit $COMMIT — restart 240mp.service manually or reboot"
+          echo "VERIFY FAILED: service active + md5 $LOCAL_MD5 not confirmed after 15 tries"
+          exit 1
