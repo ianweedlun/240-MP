@@ -69,7 +69,7 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
     }
 
-    ListView {
+    RowTrackingListView {
         id: dirList
         model: browserRoot.listModel
         anchors.top: parent.top
