@@ -160,7 +160,8 @@ FocusScope {
 
             Text {
                 text: modelData.count + " GAMES"
-                color: systemList.currentIndex === index ? root.surfaceColor : root.tertiaryColor
+                // Highlight spans only the name column — count never inverts.
+                color: root.tertiaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
                 anchors.verticalCenter: parent.verticalCenter

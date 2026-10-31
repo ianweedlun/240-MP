@@ -166,7 +166,10 @@ FocusScope {
 
             Text {
                 text: modelData.count + " GAMES"
-                color: playlistList.currentIndex === index ? root.surfaceColor : root.tertiaryColor
+                // The highlight bar spans only the name text (textClip), never
+                // this right-aligned column — so the count must never take the
+                // inverted surfaceColor, or it goes dark-on-dark when selected.
+                color: root.tertiaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
                 anchors.verticalCenter: parent.verticalCenter
