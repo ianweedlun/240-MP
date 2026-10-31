@@ -13,13 +13,28 @@ FocusScope {
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
         // null/undefined means "never set" — the manifest default (RIGHT),
-        // not "off". Without this, a config whose migration hasn't written
-        // yet hides the panel on every view recreation.
-        return (v === "LEFT" || v === "RIGHT") ? v : "RIGHT"
+        // not "off". OFF itself must stay OFF: it was previously caught by the
+        // default arm and rendered as RIGHT, which made "hide" look identical
+        // to "right side".
+        return (v === "LEFT" || v === "RIGHT" || v === "OFF") ? v : "RIGHT"
     }
     // Thumbnail setting only affects game list view. Playlist view always hides preview.
     readonly property bool showPreview: thumbDisplay !== "OFF"
     readonly property bool previewOnLeft: thumbDisplay === "LEFT"
+
+    // --- Zone geometry -------------------------------------------------------
+    // One defined zone per side: the panel gets a fixed column and the list
+    // occupies the rest, so boxart can never sit on top of text (the old
+    // conditional-anchors-plus-explicit-width setup let the two fight).
+    readonly property real panelW: root.sw * 0.22
+    readonly property real panelX: previewOnLeft ? root.sw * 0.125
+                                                 : root.sw - root.sw * 0.125 - panelW
+    readonly property real listX: (showPreview && previewOnLeft)
+        ? panelX + panelW + root.sw * 0.015625
+        : root.sw * 0.115625
+    readonly property real listRight: (showPreview && !previewOnLeft)
+        ? panelX - root.sw * 0.015625
+        : root.sw - root.sw * 0.115625
 
     signal goBack()
 
@@ -106,11 +121,10 @@ FocusScope {
         id: gameList
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.left: (gamesRoot.showPreview && previewOnLeft) ? previewLoader.right : parent.left
-        anchors.right: (gamesRoot.showPreview && !previewOnLeft) ? parent.right : previewLoader.left
-        anchors.leftMargin: (gamesRoot.showPreview && previewOnLeft) ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
-        anchors.rightMargin: (gamesRoot.showPreview && !previewOnLeft) ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
-        width: gamesRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
+        // Horizontal placement comes from the zone properties (fixed x/width),
+        // not from anchors that the width binding then fights.
+        x: gamesRoot.listX
+        width: gamesRoot.listRight - gamesRoot.listX
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
         clip: true
@@ -186,23 +200,18 @@ FocusScope {
             previewLoader.item.game = ensureThumbnail(model[gameList.currentIndex])
     }
 
-    // Preview pane — the selected game's boxart, when enabled
+    // Preview pane — the selected game's boxart, when enabled. Fixed column
+    // from the zone geometry; it never overlaps the list in any mode.
     Loader {
         id: previewLoader
         visible: gamesRoot.showPreview && gameList.count > 0
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        width: root.sw * 0.22
+        x: gamesRoot.panelX
+        width: gamesRoot.panelW
         height: root.sh * 0.525 //252
         source: "GamePreview.qml"
-        anchors.left: previewOnLeft ? parent.left : undefined
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.125 : undefined //80
-        anchors.right: previewOnLeft ? undefined : parent.right
-        anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
     }
-
-    // When thumbnail_display is OFF, ensure preview is fully hidden and list takes full width
-    // This binding ensures the list anchors update when showPreview changes
 
     // Footer
     Text {

@@ -91,6 +91,48 @@ void RetroArchBackend::loadSettings() {
     }
 }
 
+// ── Live setting changes ─────────────────────────────────────────────────────
+// AppCore::registerBackend connects appCore.moduleSettingChanged to this slot
+// (same pattern as LocalFiles/Weather). Without it, m_playlistSort keeps
+// whatever the boot-time loadSettings() read, and every "live" refresh —
+// including fresh views created after Settings changes — silently re-sorts
+// with the stale value.
+void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &key,
+                                        const QVariant &value)
+{
+    if (moduleId != QStringLiteral("com.240mp.retroarch"))
+        return;
+    if (key == QLatin1String("playlist_sort")) {
+        m_playlistSort = value.toString();
+        if (m_playlistSort.isEmpty())
+            m_playlistSort = QStringLiteral("SYSTEM");
+        return;
+    }
+    if (key == QLatin1String("retroarch_path")) {
+        m_retroarchPath = value.toString();
+        if (m_retroarchPath.isEmpty())
+            m_retroarchPath = QStringLiteral("retroarch");
+        emit retroarchPathChanged();
+        return;
+    }
+    // playlist_directory / rom_directory / thumbnail_directory are submenu
+    // settings edited only via directory_browser — they still change the
+    // backend's own paths so a later browse sees the new roots without a
+    // restart.
+    if (key == QLatin1String("playlist_directory")) {
+        m_playlistDir = value.toString();
+        return;
+    }
+    if (key == QLatin1String("rom_directory")) {
+        m_romDir = value.toString();
+        return;
+    }
+    if (key == QLatin1String("thumbnail_directory")) {
+        m_thumbnailDir = value.toString();
+        return;
+    }
+}
+
 QString RetroArchBackend::playlistSort() const { return m_playlistSort; }
 
 QString RetroArchBackend::playlist_directory() const { return m_playlistDir; }
@@ -298,7 +340,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     QByteArray data = f.readAll();
     if (data.isEmpty()) return entries;
 
-    qInfo("[RetroArch] Parsing playlist: %s (size: %d bytes)", qPrintable(path), data.size());
+    qInfo("[RetroArch] Parsing playlist: %s (size: %lld bytes)", qPrintable(path), data.size());
 
     // Check for RZIP-compressed playlist (RetroArch 1.7.5+ default).
     // Header is 20 bytes:
@@ -323,7 +365,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
                            | (quint64(quint8(data[18])) << 48)
                            | (quint64(quint8(data[19])) << 56));
 
-        qInfo("[RetroArch] RZIP header: total_size=%llu, data.size()=%d",
+        qInfo("[RetroArch] RZIP header: total_size=%llu, data.size()=%lld",
               (qlonglong)totalSize, data.size());
 
         // Parse chunks: each chunk = 4-byte LE compressed_size + zlib data
@@ -403,7 +445,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     // Extract the playlist's default core path — used to resolve "DETECT" entries.
     const QString defaultCorePath = doc.object()["default_core_path"].toString();
     qInfo("[RetroArch] Default core path: %s", qPrintable(defaultCorePath));
-    qInfo("[RetroArch] Parsed %d items from playlist", items.size());
+    qInfo("[RetroArch] Parsed %lld items from playlist", items.size());
     for (const QJsonValue &val : items) {
         QJsonObject item = val.toObject();
         const QString label = item["label"].toString();

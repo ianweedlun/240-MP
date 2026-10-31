@@ -71,6 +71,12 @@ signals:
     void gamesReady(const QVariantList &games);
     void retroarchPathChanged();
 
+public slots:
+    // Auto-wired by AppCore::registerBackend to appCore.moduleSettingChanged.
+    // Without this, config changes (playlist sort) only reach us at startup,
+    // and every refresh keeps sorting with the value from boot.
+    void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
+
 private:
     QString m_appRoot;
     QString m_dataRoot;
