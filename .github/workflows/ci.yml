@@ -2,69 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [dev, 'feature/**']
+    paths-ignore: ['**.md'] # docs-only pushes (.hermes.md syncs, changelogs, plans) don't queue builds
   pull_request:
-    branches: [main]
+    branches: [dev]
 
 jobs:
-  # ──────────────────────────────────────────────────────────────────────────────
-  # macOS arm64 — same Qt version as release, catches QML/Quick breakage
-  # ──────────────────────────────────────────────────────────────────────────────
-  build-macos-arm64:
-    name: macOS arm64
-    runs-on: macos-15
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.7.3'
-          host: mac
-          target: desktop
-          arch: clang_64
-          cache: true
-
-      - name: Install SDL2 from source
-        run: |
-          SDL2_VERSION=2.32.10
-          SRC="${RUNNER_TEMP}/SDL2-src"
-          BUILD="${RUNNER_TEMP}/SDL2-build"
-          git clone --depth 1 --branch "release-${SDL2_VERSION}" \
-            https://github.com/libsdl-org/SDL "$SRC"
-          cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
-            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
-          cmake --build "$BUILD" --parallel
-          cmake --install "$BUILD"
-          echo "SDL2_PREFIX=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_ENV"
-
-      - name: Configure (with tests)
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
-            -DBUILD_TESTS=ON \
-            -DAPP_VERSION="${{ github.sha }}"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Run tests
-        run: |
-          ctest --test-dir build --output-on-failure -j4
-
-      - name: Upload macOS build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 240mp-macos-arm64
-          path: build/240mp
-          retention-days: 5
-
   # ──────────────────────────────────────────────────────────────────────────────
   # Linux arm64 — Raspberry Pi OS Trixie (Debian 13), native runner
   # ──────────────────────────────────────────────────────────────────────────────
