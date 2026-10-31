@@ -679,6 +679,10 @@ void InputManager::releaseAction(Action a) {
     // duplicate release, or a stray release with no matching press.
     if (!m_heldActions.remove(a))
         return;
+#ifdef APP_TELEMETRY
+    if (m_telemLastAction == a)
+        m_telemLastAction = Action::None; // a fresh press of same key logs again
+#endif
     if (m_heldDirection == a) {
         m_heldDirection = Action::None;
         m_repeatDelayTimer.stop();
@@ -756,7 +760,12 @@ void InputManager::deliverPress(Action a, bool autoRepeat) {
     };
     // Input-decision telemetry: the delivered/suppressed call is the ground
     // truth for stack-skew bugs — read it instead of inferring from nav.
-    const bool telemetryFirst = !autoRepeat;
+    // Note: evdev/remote keys arrive with the kernel auto-repeat flag set, so
+    // the gate must be "action changed", not "!autoRepeat" (which hides every
+    // remote press). One line per distinct press run.
+    const bool telemetryFirst = (a != m_telemLastAction);
+    if (telemetryFirst)
+        m_telemLastAction = a;
     // The suppression itself (documented in .hermes.md Input Flow #5): a child
     // game (RetroArch) owns the console and already consumed this key from the
     // same evdev/SDL stream — delivering it too would pop QML nav one extra

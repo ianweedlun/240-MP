@@ -158,6 +158,7 @@ private:
     QTimer m_debugKeyTimer;
     QString m_debugKeyFile;
     qint64 m_debugKeyOffset = 0;
+    Action m_telemLastAction = Action::None; // key-decision log dedup
     void startDebugKeyChannel();
     void pollDebugKeyChannel();
     QTimer m_repeatTimer;
