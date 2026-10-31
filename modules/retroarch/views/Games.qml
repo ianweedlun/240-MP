@@ -8,9 +8,13 @@ FocusScope {
     property var navListState: navParams.navListState || ({})
     readonly property string playlistPath: navParams.playlistPath || ""
     readonly property string playlistName: navParams.playlistName || ""
+    readonly property string playlistBasename: navParams.playlistBasename || ""
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
-        return (v === "LEFT" || v === "RIGHT") ? v : "OFF"
+        // null/undefined means "never set" — the manifest default (RIGHT),
+        // not "off". Without this, a config whose migration hasn't written
+        // yet hides the panel on every view recreation.
+        return (v === "LEFT" || v === "RIGHT") ? v : "RIGHT"
     }
     readonly property bool showPreview: thumbDisplay !== "OFF"
     readonly property bool previewOnLeft: thumbDisplay === "LEFT"
@@ -177,7 +181,7 @@ FocusScope {
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
         }
         onCurrentIndexChanged: if (previewLoader.item)
-            previewLoader.item.game = model[gameList.currentIndex]
+            previewLoader.item.game = ensureThumbnail(model[gameList.currentIndex])
     }
 
     // Preview pane — the selected game's boxart, when enabled
@@ -208,6 +212,14 @@ FocusScope {
         font.pixelSize: root.sh * 0.0333333 //16
     }
 
+    function ensureThumbnail(game) {
+        if (!game) return game
+        if (game.thumbnail === undefined || game.thumbnail === "") {
+            game.thumbnail = retroarchBackend.resolveThumbnail(game.name, playlistBasename)
+        }
+        return game
+    }
+
     Component.onCompleted: {
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
@@ -216,7 +228,7 @@ FocusScope {
             gameList.currentIndex = Math.min(restore, games.length - 1)
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
             if (previewLoader.item)
-                previewLoader.item.game = games[gameList.currentIndex]
+                previewLoader.item.game = ensureThumbnail(games[gameList.currentIndex])
         }
         gameList.forceActiveFocus()
     }

@@ -37,11 +37,7 @@
       "label": "Thumbnail Display",
       "type": "list_single",
       "default": "RIGHT",
-      "options": [
-        { "id": "OFF", "label": "OFF" },
-        { "id": "LEFT", "label": "LEFT" },
-        { "id": "RIGHT", "label": "RIGHT" }
-      ],
+      "options": ["OFF", "LEFT", "RIGHT"],
       "description": "Show thumbnails to the left or right of the game list, or disable."
     },
     {
@@ -50,6 +46,14 @@
       "type": "directory_browser",
       "default": "",
       "description": "Path to RetroArch binary. Leave empty to use 'retroarch' from PATH."
+    },
+    {
+      "key": "playlist_sort",
+      "label": "Playlist Sort",
+      "type": "list_single",
+      "default": "SYSTEM",
+      "options": ["SYSTEM", "ALPHA", "COMPANY"],
+      "description": "How the playlist list is ordered. [SYSTEM] By short system name (default)  [ALPHA] Raw playlist filenames  [COMPANY] Alpha by the manufacturer prefix"
     }
   ]
 }

@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/weather-tests.dir/link.d "CMakeFiles/weather-tests.dir/weather-tests_autogen/mocs_compilation.cpp.o" "CMakeFiles/weather-tests.dir/src/modules/weather/tests/WeatherCodesTest.cpp.o" -o weather-tests  /usr/lib/x86_64-linux-gnu/libQt6Test.so.6.10.2 /usr/lib/x86_64-linux-gnu/libQt6Core.so.6.10.2

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/ian/src/240-MP/build-test/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

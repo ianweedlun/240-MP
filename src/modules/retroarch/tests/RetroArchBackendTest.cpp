@@ -17,8 +17,9 @@ private:
     QTemporaryDir m_tmp;
 
     // A temp-tree config.json pointing every path at the fixture dirs.
-    RetroArchBackend *makeBackend();
+    RetroArchBackend *makeBackend(const QString &playlistSort = QString());
     void writePlaylist(const QString &name, const QString &content);
+    void cleanPlaylistDir();
     void writePlaylistBinary(const QString &name, const QByteArray &content);
     static QString playlistJson(const QString &corePath, const QStringList &labels);
 
@@ -39,6 +40,12 @@ private slots:
     void thumbnailDbUsesPlaylistBasenameOriginalCase();
     void sanitizedLabelMatchesSanitizedDbName();
     void signalsFireAlongsideReturnValues();
+    void archiveRomPathChecksArchiveOnly();
+    void archiveRomPathRelativeResolvesAgainstRomDir();
+    void plainRomPathStillResolves();
+    void playlistSortSystemIsDefault();
+    void playlistSortAlpha();
+    void playlistSortCompanyFallsBackToAlpha();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -48,12 +55,14 @@ void RetroArchBackendTest::initTestCase() {
     QDir().mkpath(m_tmp.path() + "/thumbnails");
 }
 
-RetroArchBackend *RetroArchBackendTest::makeBackend() {
+RetroArchBackend *RetroArchBackendTest::makeBackend(const QString &playlistSort) {
     const QString dataRoot = m_tmp.path();
     QJsonObject mod;
     mod.insert("playlist_directory", dataRoot + "/playlists");
     mod.insert("rom_directory", dataRoot + "/ROMs");
     mod.insert("thumbnail_directory", dataRoot + "/thumbnails");
+    if (!playlistSort.isEmpty())
+        mod.insert("playlist_sort", playlistSort);
     QJsonObject cfg;
     cfg.insert("modules", QJsonObject{ { QStringLiteral("com.240mp.retroarch"), mod } });
     {
@@ -185,6 +194,8 @@ void RetroArchBackendTest::refreshGamesParsesEntries() {
     QCOMPARE(games.at(0).toMap()["corePath"].toString(), core);
     QCOMPARE(games.at(0).toMap()["coreName"].toString(), QString("snes9x_libretro"));
     QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
+    // parsePlaylist no longer resolves thumbnails (lazy — see resolveThumbnail).
+    QVERIFY(games.at(0).toMap()["thumbnail"].toString().isEmpty());
 }
 
 void RetroArchBackendTest::refreshGamesSkipsMalformedItems() {
@@ -272,10 +283,11 @@ void RetroArchBackendTest::thumbnailFoundInNamedBoxarts() {
     writePlaylist("snes9x_libretro.json",
                   playlistJson("/cores/snes9x_libretro.so", { "Super Mario World" }));
 
-    const QVariantList games =
-        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
-    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+    // Lazy API: QML calls this per rendered row instead of parsePlaylist
+    // scanning the tree for every game.
+    QCOMPARE(be->resolveThumbnail("Super Mario World", "snes9x_libretro"),
              thumbs + "/snes9x_libretro/Named_Boxarts/Super Mario World.png");
+    QVERIFY(be->resolveThumbnail("Not In The DB", "snes9x_libretro").isEmpty());
 }
 
 void RetroArchBackendTest::missingThumbnailYieldsEmptyString() {
@@ -304,7 +316,8 @@ void RetroArchBackendTest::thumbnailDbUsesPlaylistBasenameOriginalCase() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/Nintendo - Test Console.lpl");
     QVERIFY(!games.isEmpty());
-    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+    // Original-case playlist basename is what the thumbnail DB dir is named.
+    QCOMPARE(be->resolveThumbnail("Cool Game", "Nintendo - Test Console"),
              thumbs + "/Nintendo - Test Console/Named_Boxarts/Cool Game.png");
 }
 
@@ -325,7 +338,7 @@ void RetroArchBackendTest::sanitizedLabelMatchesSanitizedDbName() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
     QVERIFY(!games.isEmpty());
-    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+    QCOMPARE(be->resolveThumbnail("F/Z Quest [T/S]", "nes_libretro"),
              thumbs + "/nes_libretro/Named_Boxarts/F_Z Quest _T_S_.png");
 }
 
@@ -410,6 +423,152 @@ void RetroArchBackendTest::refreshGamesParsesRzipCompressedPlaylist() {
     QCOMPARE(games.size(), 2);
     QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Super Mario World"));
     QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
+}
+
+void RetroArchBackendTest::archiveRomPathChecksArchiveOnly() {
+    // RetroArch records zipped multi-file sets as "archive.zip#entry.rom".
+    // Only the archive is checked on disk; the full string is passed through
+    // so RetroArch can open the entry itself.
+    RetroArchBackend *be = makeBackend();
+    const QString roms = m_tmp.path() + "/ROMs";
+    QDir().mkpath(roms + "/snes");
+    {
+        QFile zip(roms + "/snes/Aaahh Real Monsters (USA).zip");
+        QVERIFY(zip.open(QIODevice::WriteOnly));
+    }
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Aaahh!!! Real Monsters");
+    item.insert("path", "snes/Aaahh Real Monsters (USA).zip#Aaahh Real Monsters (USA).sfc");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("snes9x_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
+    QCOMPARE(games.size(), 1);
+    // Archive found under the ROM dir: entry suffix must be preserved.
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(),
+             roms + "/snes/Aaahh Real Monsters (USA).zip#Aaahh Real Monsters (USA).sfc");
+}
+
+void RetroArchBackendTest::archiveRomPathRelativeResolvesAgainstRomDir() {
+    RetroArchBackend *be = makeBackend();
+    const QString roms = m_tmp.path() + "/ROMs";
+    QDir().mkpath(roms);
+    {
+        QFile zip(roms + "/Game (USA).zip");
+        QVERIFY(zip.open(QIODevice::WriteOnly));
+    }
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Game");
+    item.insert("path", "Game (USA).zip#Game (USA).nes");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("nes_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QCOMPARE(games.size(), 1);
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(),
+             roms + "/Game (USA).zip#Game (USA).nes");
+}
+
+void RetroArchBackendTest::plainRomPathStillResolves() {
+    // Non-archive entries (loose files, whole-zip FBNeo sets) keep the old
+    // behavior: resolve against playlist dir then ROM dir.
+    RetroArchBackend *be = makeBackend();
+    const QString roms = m_tmp.path() + "/ROMs";
+    QDir().mkpath(roms);
+    {
+        QFile rom(roms + "/gtmr.7z");
+        QVERIFY(rom.open(QIODevice::WriteOnly));
+    }
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Gate of Thunder");
+    item.insert("path", "gtmr.7z");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("fbneo - arcade games.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/fbneo - arcade games.json");
+    QCOMPARE(games.size(), 1);
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(), roms + "/gtmr.7z");
+}
+
+void RetroArchBackendTest::cleanPlaylistDir() {
+    QDir plDir(m_tmp.path() + "/playlists");
+    plDir.removeRecursively();
+    QDir().mkpath(plDir.path());
+}
+
+void RetroArchBackendTest::playlistSortSystemIsDefault() {
+    cleanPlaylistDir();
+    RetroArchBackend *be = makeBackend(); // no playlist_sort -> SYSTEM
+    writePlaylist("Sega - Mega Drive - Genesis.lpl",
+                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 2" }));
+    writePlaylist("Nintendo - Super Nintendo Entertainment System.lpl",
+                  playlistJson("/cores/bsnes_libretro.so", { "Chrono Trigger" }));
+    writePlaylist("Nintendo - Game Boy.lpl",
+                  playlistJson("/cores/mgba_libretro.so", { "Tetris" }));
+
+    const QVariantList pls = be->refreshAllPlaylists();
+    QCOMPARE(pls.size(), 3);
+    // SYSTEM (default), case-sensitive: "GB" is a prefix of "GENESIS", so it
+    // sorts first; SNES last.
+    QCOMPARE(pls.at(0).toMap()["shortName"].toString(), QString("GB"));
+    QCOMPARE(pls.at(1).toMap()["shortName"].toString(), QString("GENESIS"));
+    QCOMPARE(pls.at(2).toMap()["shortName"].toString(), QString("SNES"));
+}
+
+void RetroArchBackendTest::playlistSortAlpha() {
+    cleanPlaylistDir();
+    RetroArchBackend *be = makeBackend(QStringLiteral("ALPHA"));
+    writePlaylist("Sega - Mega Drive - Genesis.lpl",
+                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 2" }));
+    writePlaylist("Nintendo - Super Nintendo Entertainment System.lpl",
+                  playlistJson("/cores/bsnes_libretro.so", { "Chrono Trigger" }));
+    writePlaylist("Nintendo - Game Boy.lpl",
+                  playlistJson("/cores/mgba_libretro.so", { "Tetris" }));
+
+    const QVariantList pls = be->refreshAllPlaylists();
+    QCOMPARE(pls.size(), 3);
+    // ALPHA: raw basenames, N < S
+    QCOMPARE(pls.at(0).toMap()["name"].toString(), QString("Nintendo - Game Boy"));
+    QCOMPARE(pls.at(1).toMap()["name"].toString(),
+             QString("Nintendo - Super Nintendo Entertainment System"));
+    QCOMPARE(pls.at(2).toMap()["name"].toString(), QString("Sega - Mega Drive - Genesis"));
+}
+
+void RetroArchBackendTest::playlistSortCompanyFallsBackToAlpha() {
+    cleanPlaylistDir();
+    RetroArchBackend *be = makeBackend(QStringLiteral("COMPANY"));
+    writePlaylist("Sega - Mega Drive - Genesis.lpl",
+                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 2" }));
+    writePlaylist("Sega - Game Gear.lpl",
+                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 1" }));
+    writePlaylist("Nintendo - Game Boy.lpl",
+                  playlistJson("/cores/mgba_libretro.so", { "Tetris" }));
+    // No " - " separator: the whole name is the company key (fallback rule).
+    writePlaylist("nes.lpl",
+                  playlistJson("/cores/nes_libretro.so", { "Gate of Thunder" }));
+
+    const QVariantList pls = be->refreshAllPlaylists();
+    QCOMPARE(pls.size(), 4);
+    // COMPANY: Nintendo < Sega (x2, alpha within company) < nes (no prefix)
+    QCOMPARE(pls.at(0).toMap()["name"].toString(), QString("Nintendo - Game Boy"));
+    QCOMPARE(pls.at(1).toMap()["name"].toString(), QString("Sega - Game Gear"));
+    QCOMPARE(pls.at(2).toMap()["name"].toString(), QString("Sega - Mega Drive - Genesis"));
+    QCOMPARE(pls.at(3).toMap()["name"].toString(), QString("nes"));
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)

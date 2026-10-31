@@ -53,7 +53,7 @@ if [ "${1:-}" = "--latest" ]; then
 
     echo "=== Fetching latest CI artifact for branch: $BRANCH ==="
 
-    RUN_JSON=$(gh run list --repo "$REPO" --branch "$BRANCH" --event push --status success --json databaseId,headSha,createdAt --limit 1)
+    RUN_JSON=$(gh run list --repo "$REPO" --branch "$BRANCH" --workflow CI --event push --status success --json databaseId,headSha,createdAt --limit 1)
     if [ -z "$RUN_JSON" ] || [ "$RUN_JSON" = "[]" ]; then
         echo "Error: No successful CI run found for branch '$BRANCH' in repo '$REPO'"
         echo "Check: gh run list --repo $REPO --branch $BRANCH"

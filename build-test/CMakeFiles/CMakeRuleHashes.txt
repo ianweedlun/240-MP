@@ -1,0 +1,9 @@
+# Hashes of file build rules.
+885e4132b7649a327335934a44bec10a 240mp_autogen/timestamp
+95f1844c24d3914ab230198282074d91 CMakeFiles/240mp_autogen
+95f1844c24d3914ab230198282074d91 CMakeFiles/mpv-basic-options-tests_autogen
+95f1844c24d3914ab230198282074d91 CMakeFiles/retroarch-tests_autogen
+95f1844c24d3914ab230198282074d91 CMakeFiles/weather-tests_autogen
+6b1cc60e668dbbbae3195934f21fc6db mpv-basic-options-tests_autogen/timestamp
+56b555ea46ffcda4931d83622b8366ea retroarch-tests_autogen/timestamp
+af0132b0ec98e2d8239df8f10589cc52 weather-tests_autogen/timestamp
