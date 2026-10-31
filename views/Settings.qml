@@ -7,7 +7,7 @@ FocusScope {
     signal navigateTo(string path, var params, var listState)
     signal goBack()
     // Debug telemetry signal: highlighted settings row moved (Main.qml logs it).
-    signal rowSelected(name, index)
+    signal rowSelected(name: string, index: int)
 
     property var navParams: ({})
     property var navListState: ({})
