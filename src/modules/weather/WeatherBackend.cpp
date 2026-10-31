@@ -472,9 +472,11 @@ void WeatherBackend::setMusicVolume(int volume) {
     if (!m_music || m_music->state() == QProcess::NotRunning) return;
     volume = qBound(0, volume, 100);
     m_musicVolume = volume;
-    // Emit state change so QML volume OSD shows immediately, even if IPC
-    // hasn't connected yet. The command will be sent when connection is ready.
-    emit musicStateChanged();
+    // Emit volume-only signal so the QML volume OSD shows immediately, even if
+    // IPC hasn't connected yet. musicStateChanged (music start/stop/toggle)
+    // must NOT feed the OSD — opening the module started music and showed a
+    // volume bar nobody had touched.
+    emit musicVolumeChanged(m_musicVolume);
     if (m_musicIpc->state() != QLocalSocket::ConnectedState) {
         qWarning("[Weather] music IPC not connected — volume change queued");
         return;

@@ -121,12 +121,14 @@ FocusScope {
             weatherBackend.toggleMusic()
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
-            weatherBackend.setMusicVolume(
-                Math.min(100, (weatherBackend.musicVolume || 50) + 10))
+            var curUp = weatherBackend.musicVolume
+            if (curUp === undefined) curUp = 50
+            weatherBackend.setMusicVolume(Math.min(100, curUp + 10))
             event.accepted = true
         } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
-            weatherBackend.setMusicVolume(
-                Math.max(0, (weatherBackend.musicVolume || 50) - 10))
+            var curDown = weatherBackend.musicVolume
+            if (curDown === undefined) curDown = 50
+            weatherBackend.setMusicVolume(Math.max(0, curDown - 10))
             event.accepted = true
         }
     }
@@ -266,7 +268,10 @@ FocusScope {
 
     Connections {
         target: weatherBackend
-        function onMusicStateChanged() {
+        // Volume-only listener: musicStateChanged would show the bar on module
+        // open (music autostarts). The handler only runs when setMusicVolume
+        // actually changed volume, so the bar appears exactly on volume keys.
+        function onMusicVolumeChanged(volume) {
             if (weatherBackend.musicPlaying) {
                 volumeBarOverlay.visible = true
                 volumeBarOverlay.opacity = 1

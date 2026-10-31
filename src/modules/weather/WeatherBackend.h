@@ -47,7 +47,7 @@ class WeatherBackend : public QObject {
     // change.
     Q_PROPERTY(bool musicPlaying READ musicPlaying NOTIFY musicStateChanged)
     // Current music volume (0-100). Updated when volume is changed via IPC.
-    Q_PROPERTY(int musicVolume READ musicVolume NOTIFY musicStateChanged)
+    Q_PROPERTY(int musicVolume READ musicVolume NOTIFY musicVolumeChanged)
 
 public:
     explicit WeatherBackend(const QString &appRoot, const QString &dataRoot,
@@ -97,6 +97,9 @@ public:
 signals:
     void dataChanged();
     void musicStateChanged();
+    // Volume-only: the OSD must NOT react to musicStateChanged (music starts
+    // when the module opens — that made the volume bar show on open).
+    void musicVolumeChanged(int volume);
     // reason ∈ {missing, unreadable, empty, notfound, network}
     void locationError(const QString &reason);
     void fetchError(const QString &message);
