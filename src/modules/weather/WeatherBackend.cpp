@@ -33,6 +33,8 @@ const char *kModuleId   = "com.240mp.weather";
 const char *kForecastUrl = "https://api.open-meteo.com/v1/forecast";
 const char *kGeocodeUrl  = "https://geocoding-api.open-meteo.com/v1/search";
 const char *kNwsPointsUrl = "https://api.weather.gov/points";
+// Same coordinates, same free API as the forecast call — separate host.
+const char *kAirQualityUrl = "https://air-quality-api.open-meteo.com/v1/air-quality";
 
 // api.weather.gov answers 403 to requests without a User-Agent, and asks for
 // contact information in it. Qt sends none by default.
@@ -709,7 +711,7 @@ void WeatherBackend::fetchWeather() {
     q.addQueryItem(QStringLiteral("current"),
                    QStringLiteral("temperature_2m,relative_humidity_2m,dew_point_2m,"
                                   "pressure_msl,wind_speed_10m,wind_direction_10m,"
-                                  "visibility,weather_code,is_day"));
+                                  "visibility,weather_code,is_day,uv_index"));
     q.addQueryItem(QStringLiteral("daily"),
                    QStringLiteral("temperature_2m_min,temperature_2m_max,"
                                   "weather_code,sunrise,sunset"));
@@ -769,6 +771,11 @@ void WeatherBackend::fetchWeather() {
         m["visibility"] = us
             ? QString::number(qRound(visMetres / 1609.344)) + QStringLiteral(" MI.")
             : QString::number(qRound(visMetres / 1000.0))   + QStringLiteral(" KM");
+        if (cur.contains(QStringLiteral("uv_index"))) {
+            const double uv = cur["uv_index"].toDouble();
+            m["uvIndex"] = QString::number(qRound(uv)) + QStringLiteral(" ")
+                         + uvCategory(uv);
+        }
 
         m_current = m;
         // m_current has just been rebuilt from scratch, so any station values
@@ -776,11 +783,13 @@ void WeatherBackend::fetchWeather() {
         // where the observation lands — the two requests are concurrent and
         // either can be the one that finishes last.
         applyObservation();
+        applyAirQuality();
         buildForecast(root["daily"].toObject());
         buildAlmanac(root["daily"].toObject());
         m_hasData = true;
         emit dataChanged();
     });
+    fetchAirQuality();
 }
 
 // ── Station observations ─────────────────────────────────────────────────────
@@ -977,6 +986,47 @@ void WeatherBackend::applyObservation() {
             ? QString::number(qRound(m / 1609.344)) + QStringLiteral(" MI.")
             : QString::number(qRound(m / 1000.0))   + QStringLiteral(" KM");
     }
+}
+
+// ── Air quality ──────────────────────────────────────────────────────────────
+// A separate Open-Meteo host, same coordinates and free tier as the forecast
+// call. Nothing here is fatal: regions the air-quality model doesn't cover
+// answer without the layers we ask for, and the line simply never appears.
+void WeatherBackend::fetchAirQuality() {
+    if (!m_resolved) return;
+    QUrl url(QString::fromLatin1(kAirQualityUrl));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("latitude"),  QString::number(m_lat, 'f', 4));
+    q.addQueryItem(QStringLiteral("longitude"), QString::number(m_lon, 'f', 4));
+    q.addQueryItem(QStringLiteral("current"),
+                   QStringLiteral("european_aqi,us_aqi"));
+    url.setQuery(q);
+
+    QNetworkReply *reply = m_nam->get(QNetworkRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) return; // keep last good value
+        const QJsonObject cur = QJsonDocument::fromJson(reply->readAll())
+                                    .object()["current"].toObject();
+        if (cur.isEmpty()) return;
+        const bool us = useUsUnits();
+        // A layer the model lacks arrives as null; toDouble() would read that
+        // as a deceiving zero, so presence is checked before the value.
+        const QString layer = us ? QStringLiteral("us_aqi")
+                                 : QStringLiteral("european_aqi");
+        if (!cur.contains(layer) || cur[layer].isNull()) return;
+        const double v = cur[layer].toDouble();
+        m_airQuality = us
+            ? QStringLiteral("%1 %2").arg(qRound(v)).arg(aqiCategoryUs(v))
+            : QStringLiteral("%1 %2").arg(v, 0, 'f', 1).arg(aqiCategoryEu(v));
+        applyAirQuality();
+    });
+}
+
+void WeatherBackend::applyAirQuality() {
+    if (m_current.isEmpty()) return;
+    if (m_airQuality.isEmpty()) m_current.remove(QStringLiteral("airQuality"));
+    else m_current[QStringLiteral("airQuality")] = m_airQuality;
 }
 
 void WeatherBackend::buildForecast(const QJsonObject &daily) {

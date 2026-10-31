@@ -257,4 +257,34 @@ static inline QString cardinal(double degrees) {
     return QString::fromLatin1(points[idx]);
 }
 
+// UV index categories, NOAA forecast bands: Low 1-2, Moderate 3-5, High 6-7,
+// Very High 8-10, Extreme 11+. Index 0 (night, or no data) reads as LOW.
+static inline QString uvCategory(double index) {
+    if (index < 3.0)   return QStringLiteral("LOW");
+    if (index < 6.0)   return QStringLiteral("MODERATE");
+    if (index < 8.0)   return QStringLiteral("HIGH");
+    if (index < 11.0)  return QStringLiteral("VERY HIGH");
+    return QStringLiteral("EXTREME");
+}
+
+// US EPA AQI bands (0-50, 51-100, 101-150, 151-200, 201-300, 301+), labels
+// compressed: the current-conditions line shares 240px with the prefix.
+static inline QString aqiCategoryUs(double v) {
+    if (v <= 50.0)  return QStringLiteral("GOOD");
+    if (v <= 100.0) return QStringLiteral("MODERATE");
+    if (v <= 150.0) return QStringLiteral("SENSITIVE");
+    if (v <= 200.0) return QStringLiteral("UNHEALTHY");
+    if (v <= 300.0) return QStringLiteral("SEVERE");
+    return QStringLiteral("EXTREME");
+}
+
+// European CAIS air-quality index bands (0-20, 20-40, 40-60, 60-80, 80+).
+static inline QString aqiCategoryEu(double v) {
+    if (v < 20.0) return QStringLiteral("LOW");
+    if (v < 40.0) return QStringLiteral("MODERATE");
+    if (v < 60.0) return QStringLiteral("HIGH");
+    if (v < 80.0) return QStringLiteral("VERY HIGH");
+    return QStringLiteral("EXTREME");
+}
+
 } // namespace wxcodes

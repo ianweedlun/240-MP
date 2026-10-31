@@ -110,6 +110,14 @@ private:
     QJsonObject moduleConfig() const;
     bool        useUsUnits() const;
 
+    // Open-Meteo air-quality companion to fetchWeather(): a display-ready
+    // string ("42 GOOD" / "3.6 MODERATE"), empty when the model lacks the
+    // layer. applyAirQuality() re-inserts it after any current-map rebuild,
+    // same as applyObservation() does for stations.
+    void fetchAirQuality();
+    void applyAirQuality();
+    QString m_airQuality;
+
     void resolveLocation();
     void geocode(const QString &rawLine);
     // '#'-commented, one-entry-per-line config files: the location list and the
