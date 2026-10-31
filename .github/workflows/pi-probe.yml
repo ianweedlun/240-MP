@@ -22,7 +22,7 @@ jobs:
         run: |
           ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 \
             -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
-            "${{ secrets.PI_SSH_USERNAME }}@{{ secrets.PI_SSH_HOSTNAME }}" \
+            "${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}" \
             'echo PI_REACHABLE'
           rc=$?
           case $rc in
