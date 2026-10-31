@@ -1,4 +1,4 @@
-import QtQuick 6.10
+import QtQuick
 
 // Core list primitive: a ListView that tracks its own highlighted row.
 // Views use THIS instead of bare ListView; views/modules never declare or
