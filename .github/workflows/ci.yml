@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [dev, 'feature/**']
+    paths-ignore: ['**.md'] # docs-only pushes (.hermes.md syncs, changelogs, plans) don't queue builds
   pull_request:
     branches: [dev]
 
