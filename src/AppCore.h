@@ -63,6 +63,10 @@ public:
     // EGLFS (non-composited OpenGL), so captureScreenshot prefers
     // QQuickWindow::grabWindow() through this handle.
     void setQuickWindow(QQuickWindow *w);
+    // Records the QML source the active ModuleLoader just loaded (e.g.
+    // "modules/com.240mp.retroarch/views/Games.qml"). Default-named
+    // screenshots embed it: 240mp_screenshot_retroarch-Games_<ts>.png.
+    Q_INVOKABLE void note_view(const QString &source);
     QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 
@@ -101,6 +105,7 @@ private:
     QString m_appRoot;
     QString m_dataRoot;
     QQuickWindow *m_quickWindow = nullptr;   // root window handle for screenshots (set by main.cpp)
+    QString m_activeViewSource;              // last QML source loaded (screenshot filename tag)
     QList<ModuleEntry> m_modules;
     QMap<QString, QObject*> m_backends;
 };

@@ -249,6 +249,9 @@ Window {
 
         onLoaded: {
             item.forceActiveFocus()
+            // Tag AppCore with the live view so default-named screenshots
+            // carry the open view in their filename (debug aid).
+            appCore.note_view(moduleLoader.source)
             if (!root._startupNavigated) {
                 root._startupNavigated = true
                 var entryPoint = appCore.startupModuleEntryPoint()
