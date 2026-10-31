@@ -178,7 +178,6 @@ int main(int argc, char *argv[]) {
                      &mpvController, &MpvController::sendKey);
 
     // Each module backend is wired in one call: stored for action routing, exposed to QML
-    // under its context-property name, and its optional signals/slots connected by
     // introspection. The module ID lives in exactly one place per module.
     QQmlContext *ctx = engine.rootContext();
     appCore.registerModule("com.240mp.local_files",  "localFilesBackend",  &localFiles,  ctx);
@@ -220,6 +219,13 @@ int main(int argc, char *argv[]) {
     // Gamepad key events are posted straight to the root window so they reach
     // the QML focus item even when another window (mpv) holds OS focus.
     inputManager.setTargetWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
+
+    // eventFilter() must be installed on the window or it never runs — without
+    // this, the remap/capture/media/F12/game-suppression channels are dead code
+    // and raw OS keys fall straight through to QML (the exit-after-game stack bug
+    // lived here: the child game already consumed those very keys).
+    if (auto *rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first()))
+        rootWindow->installEventFilter(&inputManager);
 
     // Screenshot debug capture grabs through this window (see AppCore::captureScreenshot).
     appCore.setQuickWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));

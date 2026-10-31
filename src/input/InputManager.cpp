@@ -935,6 +935,38 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     const auto *ke = static_cast<QKeyEvent *>(event);
     const bool synthetic = ke->nativeScanCode() == kSyntheticScanCode;
 
+    // Raw-channel gameplay suppression: while a RetroArch child owns the console
+    // it has already read this very key off the shared evdev stream — remote/
+    // desktop arrows, Enter and Escape arrive HERE as ordinary QKeyEvents via
+    // Qt's EGLFS reader, never touching deliverPress. Letting the raw event
+    // reach QML too pops the nav stack one extra time (user-visible symptom:
+    // exiting after a launched game landed on Settings instead of the module
+    // list). Same condition as deliverPress's gate: gameRunning().
+    if (!synthetic && m_raBackend && m_raBackend->gameRunning()) {
+        switch (ke->key()) {
+        case Qt::Key_Up: case Qt::Key_Down: case Qt::Key_Left: case Qt::Key_Right:
+        case Qt::Key_Return: case Qt::Key_Enter: case Qt::Key_Escape:
+#ifdef APP_TELEMETRY
+            if (type == QEvent::KeyPress && m_appCore) {
+                static const struct { int k; const char *n; } nm[] = {
+                    {Qt::Key_Up, "up"}, {Qt::Key_Down, "down"},
+                    {Qt::Key_Left, "left"}, {Qt::Key_Right, "right"},
+                    {Qt::Key_Return, "select"}, {Qt::Key_Enter, "select"},
+                    {Qt::Key_Escape, "back"}};
+                for (const auto &e : nm)
+                    if (e.k == ke->key()) {
+                        m_appCore->note_state("key",
+                            QStringLiteral("%1 suppressed=raw-game").arg(e.n));
+                        break;
+                    }
+            }
+#endif
+            return true; // consume: the child owns this key, QML must not
+        default:
+            break;
+        }
+    }
+
     if (type == QEvent::KeyPress && !synthetic)
         setLastInputDevice(QStringLiteral("keyboard"));
 
