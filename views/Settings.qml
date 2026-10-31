@@ -131,18 +131,16 @@ FocusScope {
             moduleId: ""
         })
 
-        // Basic mpv knobs at the app level. [Mpv Conf] emits nothing so the
-        // user's ~/.config/mpv/mpv.conf keeps authority; picking any other
-        // value appends the matching CLI option, which by mpv's precedence
-        // (command line > config file) overrides it. Keys keep mpv's own
-        // option names (dots as underscores); the C++ side validates every
-        // token against its own table before anything reaches the CLI.
+        // Basic mpv knobs at the app level. These now READ AND WRITE the
+        // user's ~/.config/mpv/mpv.conf directly: the menu shows the file's
+        // real value (mpv's built-in defaults when unset; "Custom (raw)"
+        // for values outside this menu). No override layer, no pseudo-state.
         items.push({
             type: "list_single",
             key: "replaygain",
             label: "Audio Normalize",
-            options: ["Mpv Conf", "Off", "Track", "Album"],
-            value: appSettings["replaygain"] || "Mpv Conf",
+            options: ["Off", "Track", "Album"],
+            value: appSettings["replaygain"] || "Custom (auto)",
             description: "Level tracks to a common loudness using ReplayGain tags\n[TRACK] Per-track tags (most libraries)  [ALBUM] Keep album flow",
             moduleId: ""
         })
@@ -150,8 +148,8 @@ FocusScope {
             type: "list_single",
             key: "audio_gain",
             label: "Sound Boost",
-            options: ["Mpv Conf", "0", "2", "4", "6", "8", "-4"],
-            value: appSettings["audio_gain"] || "Mpv Conf",
+            options: ["0", "2", "4", "6", "8", "-4"],
+            value: appSettings["audio_gain"] || "0",
             description: "Raise all audio output by decibels (dB)",
             moduleId: ""
         })
@@ -159,8 +157,8 @@ FocusScope {
             type: "list_single",
             key: "deinterlace",
             label: "Deinterlace",
-            options: ["Mpv Conf", "Off", "Auto", "On"],
-            value: appSettings["deinterlace"] || "Mpv Conf",
+            options: ["Off", "Auto", "On"],
+            value: appSettings["deinterlace"] || "Off",
             description: "Un interlaced sources (old TV, 50i DVDs) into progressive lines\n[AUTO] Only when the source is interlaced",
             moduleId: ""
         })
@@ -168,8 +166,8 @@ FocusScope {
             type: "list_single",
             key: "audio_channels",
             label: "Audio Channels",
-            options: ["Mpv Conf", "Auto", "Stereo", "Mono"],
-            value: appSettings["audio_channels"] || "Mpv Conf",
+            options: ["Auto", "Stereo", "Mono"],
+            value: appSettings["audio_channels"] || "Custom (auto)",
             description: "[STEREO] Two channels  [MONO] One channel (shared CRT speaker)",
             moduleId: ""
         })
