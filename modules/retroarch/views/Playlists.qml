@@ -110,7 +110,7 @@ FocusScope {
             var pl = model[currentIndex]
             if (!pl) return
             navigateTo("Games.qml",
-                { playlistPath: pl.path, playlistName: pl.name, playlistBasename: pl.name, systemId: systemId },
+                { playlistPath: pl.path, playlistName: pl.name, playlistBasename: pl.name, shortName: pl.shortName || pl.name, systemId: systemId },
                 { currentIndex: playlistList.currentIndex })
         }
 
