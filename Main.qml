@@ -193,6 +193,16 @@ Window {
         if (!screenSaverActive) return
         screenSaverActive = false
         moduleLoader.forceActiveFocus()
+        logState("screensaver", "dismissed")
+    }
+
+    // --- DEBUG STATE LOG ---
+    // Machine-readable screen-state trail (/tmp/240mp_state.log on desktops/Pi).
+    // A remote test loop tails this instead of OCR'ing screenshots: view loads,
+    // nav transitions with stack depth, screensaver changes.
+    function logState(what, detail) {
+        if (appCore)
+            appCore.note_state(what, detail || "")
     }
 
     // --- APP-LEVEL NAV STACK ---
@@ -252,6 +262,7 @@ Window {
             // Tag AppCore with the live view so default-named screenshots
             // carry the open view in their filename (debug aid).
             appCore.note_view(moduleLoader.source)
+            logState("load", moduleLoader.source + " stack=" + root.appNavStack.length)
             if (!root._startupNavigated) {
                 root._startupNavigated = true
                 var entryPoint = appCore.startupModuleEntryPoint()
@@ -273,6 +284,7 @@ Window {
             function onNavigateTo(path, params, listState) {
                 root.appNavStack.push({ source: moduleLoader.source, params: root.appCurrentParams, listState: listState || {} })
                 root.appCurrentParams = params || {}
+                logState("navigate", "to=" + path + " stack=" + root.appNavStack.length + " listState=" + JSON.stringify(listState || {}))
                 moduleLoader.setSource(path, { "navParams": params || {} })
             }
 
@@ -282,12 +294,14 @@ Window {
                     // Use the full app-level path: a bare "ModuleList.qml" resolves
                     // relative to the last-loaded source's directory (the module's own
                     // views/, which has no such file) — never guess here.
+                    logState("back", "module-exit -> views/ModuleList.qml")
                     moduleLoader.setSource("views/ModuleList.qml", { "navParams": { fromAppStartup: false } })
                     root.appCurrentParams = {}
                     return
                 }
                 var prev = root.appNavStack.pop()
                 root.appCurrentParams = prev.params
+                logState("back", "restore=" + prev.source + " stack=" + root.appNavStack.length)
                 moduleLoader.setSource(prev.source, { "navParams": prev.params, "navListState": prev.listState || {} })
             }
 
@@ -303,6 +317,7 @@ Window {
             // synchronous reset from stealing the key from QML.
             if (idleTracker.active && idleTracker.enabled) {
                 if (!screenSaverActive) {
+                    logState("screensaver", "active")
                     var usableW = screenSaverOverlay.width - bounceLogo.width
                     var usableH = screenSaverOverlay.height - bounceLogo.height
                     bounceLogo.x = Math.random() * (usableW > 0 ? usableW : 1)
@@ -382,6 +397,7 @@ Window {
             }
             screenSaverActive = false
             moduleLoader.forceActiveFocus()
+            logState("screensaver", "dismissed-by-key")
         }
     }
 }
