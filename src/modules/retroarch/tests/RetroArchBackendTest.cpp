@@ -45,6 +45,7 @@ private slots:
     void plainRomPathStillResolves();
     void playlistSortSystemIsDefault();
     void playlistSortCompanyFallsBackToAlpha();
+    void livePlaylistSortChangeReorders();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -551,6 +552,44 @@ void RetroArchBackendTest::playlistSortCompanyFallsBackToAlpha() {
     QCOMPARE(pls.at(1).toMap()["name"].toString(), QString("Sega - Game Gear"));
     QCOMPARE(pls.at(2).toMap()["name"].toString(), QString("Sega - Mega Drive - Genesis"));
     QCOMPARE(pls.at(3).toMap()["name"].toString(), QString("nes"));
+}
+
+void RetroArchBackendTest::livePlaylistSortChangeReorders() {
+    // The live path: appCore.moduleSettingChanged → our onSettingChanged slot
+    // → next refresh sorts with the NEW value, no restart involved.
+    cleanPlaylistDir();
+    RetroArchBackend *be = makeBackend(); // boots as SYSTEM (default)
+    QVERIFY(be != nullptr);
+    writePlaylist("Sega - Mega Drive - Genesis.lpl",
+                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 2" }));
+    writePlaylist("Nintendo - Super Nintendo Entertainment System.lpl",
+                  playlistJson("/cores/bsnes_libretro.so", { "Chrono Trigger" }));
+
+    {
+        const QVariantList before = be->refreshAllPlaylists();
+        QCOMPARE(before.size(), 2);
+        QCOMPARE(before.at(0).toMap()["shortName"].toString(), QString("GENESIS"));
+        QCOMPARE(before.at(1).toMap()["shortName"].toString(), QString("SNES"));
+    }
+
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("playlist_sort"), QStringLiteral("COMPANY"));
+    QCOMPARE(be->playlistSort(), QStringLiteral("COMPANY"));
+
+    {
+        const QVariantList after = be->refreshAllPlaylists();
+        QCOMPARE(after.size(), 2);
+        // COMPANY: "Nintendo" prefix sorts before "Sega".
+        QCOMPARE(after.at(0).toMap()["name"].toString(),
+                 QString("Nintendo - Super Nintendo Entertainment System"));
+        QCOMPARE(after.at(1).toMap()["name"].toString(),
+                 QString("Sega - Mega Drive - Genesis"));
+    }
+
+    // Empty value falls back to the documented default, not garbage.
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("playlist_sort"), QString());
+    QCOMPARE(be->playlistSort(), QStringLiteral("SYSTEM"));
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)
