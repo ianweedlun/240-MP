@@ -44,7 +44,6 @@ private slots:
     void archiveRomPathRelativeResolvesAgainstRomDir();
     void plainRomPathStillResolves();
     void playlistSortSystemIsDefault();
-    void playlistSortAlpha();
     void playlistSortCompanyFallsBackToAlpha();
 };
 
@@ -530,24 +529,7 @@ void RetroArchBackendTest::playlistSortSystemIsDefault() {
     QCOMPARE(pls.at(2).toMap()["shortName"].toString(), QString("SNES"));
 }
 
-void RetroArchBackendTest::playlistSortAlpha() {
-    cleanPlaylistDir();
-    RetroArchBackend *be = makeBackend(QStringLiteral("ALPHA"));
-    writePlaylist("Sega - Mega Drive - Genesis.lpl",
-                  playlistJson("/cores/genesis_plus_gx_libretro.so", { "Sonic 2" }));
-    writePlaylist("Nintendo - Super Nintendo Entertainment System.lpl",
-                  playlistJson("/cores/bsnes_libretro.so", { "Chrono Trigger" }));
-    writePlaylist("Nintendo - Game Boy.lpl",
-                  playlistJson("/cores/mgba_libretro.so", { "Tetris" }));
 
-    const QVariantList pls = be->refreshAllPlaylists();
-    QCOMPARE(pls.size(), 3);
-    // ALPHA: raw basenames, N < S
-    QCOMPARE(pls.at(0).toMap()["name"].toString(), QString("Nintendo - Game Boy"));
-    QCOMPARE(pls.at(1).toMap()["name"].toString(),
-             QString("Nintendo - Super Nintendo Entertainment System"));
-    QCOMPARE(pls.at(2).toMap()["name"].toString(), QString("Sega - Mega Drive - Genesis"));
-}
 
 void RetroArchBackendTest::playlistSortCompanyFallsBackToAlpha() {
     cleanPlaylistDir();

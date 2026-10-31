@@ -6,12 +6,6 @@ FocusScope {
 
     property var navParams: ({})
     property var navListState: navParams.navListState || ({})
-    readonly property string thumbDisplay: {
-        var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
-        return (v === "LEFT" || v === "RIGHT") ? v : "OFF"
-    }
-    readonly property bool showPreview: thumbDisplay !== "OFF"
-    readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
@@ -99,11 +93,11 @@ FocusScope {
         id: systemList
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.left: previewOnLeft ? previewLoader.right : parent.left
-        anchors.right: previewOnLeft ? parent.right : previewLoader.left
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
-        anchors.rightMargin: previewOnLeft ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
-        width: systemsRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: root.sw * 0.115625 //74
+        anchors.rightMargin: root.sw * 0.115625 //74
+        width: root.sw * 0.76875
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
         clip: true
@@ -192,19 +186,15 @@ FocusScope {
             previewLoader.item.system = model[systemList.currentIndex]
     }
 
-    // Preview pane — the selected system's boxart-style summary, when enabled
-    Loader {
-        id: previewLoader
-        visible: systemsRoot.showPreview && systemList.count > 0
-        anchors.top: parent.top
-        anchors.topMargin: root.sh * 0.25 //120
-        width: root.sw * 0.22
-        height: root.sh * 0.525 //252
-        source: "SystemPreview.qml"
-        anchors.left: previewOnLeft ? parent.left : undefined
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.125 : undefined //80
-        anchors.right: previewOnLeft ? undefined : parent.right
-        anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
+    Component.onCompleted: {
+        var systems = retroarchBackend.refreshSystems()
+        systemList.model = systems
+        if (systems.length > 0) {
+            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
+            systemList.currentIndex = Math.min(restore, systems.length - 1)
+            systemList.positionViewAtIndex(systemList.currentIndex, ListView.Contain)
+        }
+        systemList.forceActiveFocus()
     }
 
     // Footer
@@ -218,18 +208,5 @@ FocusScope {
         anchors.bottomMargin: root.sh * 0.1041667 //50
         anchors.leftMargin: root.sw * 0.125 //80
         font.pixelSize: root.sh * 0.0333333 //16
-    }
-
-    Component.onCompleted: {
-        var systems = retroarchBackend.refreshSystems()
-        systemList.model = systems
-        if (systems.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            systemList.currentIndex = Math.min(restore, systems.length - 1)
-            systemList.positionViewAtIndex(systemList.currentIndex, ListView.Contain)
-            if (previewLoader.item)
-                previewLoader.item.system = systems[systemList.currentIndex]
-        }
-        systemList.forceActiveFocus()
     }
 }

@@ -4,14 +4,6 @@ Item {
     id: gamePreview
     property var game: ({})
 
-    // Framed box with subtle background
-    Rectangle {
-        anchors.fill: parent
-        border.color: root.accentColor
-        border.width: root.sw * 0.0015625 //1
-        color: Qt.rgba(0.04, 0.0, 0.58, 0.3)
-    }
-
     // Boxart — the panel highlights the art at full box size. The game name
     // lives on the row, so printing it here too was redundant and forced the
     // image to shrink to make room.

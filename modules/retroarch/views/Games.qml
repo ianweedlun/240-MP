@@ -16,6 +16,7 @@ FocusScope {
         // yet hides the panel on every view recreation.
         return (v === "LEFT" || v === "RIGHT") ? v : "RIGHT"
     }
+    // Thumbnail setting only affects game list view. Playlist view always hides preview.
     readonly property bool showPreview: thumbDisplay !== "OFF"
     readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
