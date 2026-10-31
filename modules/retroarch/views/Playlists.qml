@@ -188,8 +188,6 @@ FocusScope {
             else currentIndex = 0
             playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
         }
-        onCurrentIndexChanged: if (previewLoader.item)
-            previewLoader.item.playlist = model[playlistList.currentIndex]
     }
 
     Component.onCompleted: {
