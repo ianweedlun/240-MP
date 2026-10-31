@@ -1,150 +1,122 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Deploy 240-MP tarball to Raspberry Pi
+# Deploy 240-MP tarball to Raspberry Pi — key-auth only (no password secrets).
 #
 # Usage:
 #   bash deploy-pi.sh <tarball-path> [hostname]
 #   bash deploy-pi.sh --latest <branch> [hostname]
 #
 # Examples:
-#   bash deploy-pi.sh /tmp/240-MP-ci-linux-arm64.tar.gz
-#   bash deploy-pi.sh /tmp/240-MP-ci-linux-arm64.tar.gz execubot.weedlun.me
 #   bash deploy-pi.sh --latest feature/retroarch-playlist-nav
+#   bash deploy-pi.sh --latest feature/retroarch-full-functionality execubot
+#   bash deploy-pi.sh /tmp/240-MP-ci-linux-arm64.tar.gz
+#
+# Auth model (matches .hermes.md "Pi SSH access model"):
+#   - Default LAN/agent path: user ian, identity ~/.ssh/id_pi_agent, host 'execubot'.
+#   - PI_SSH_IDENTITY GitHub repo secret (if present) is preferred and staged to
+#     a temp key file; PI_SSH_KEY env var overrides the local key path.
+#   - No PI_SSH_PASSWORD anywhere — this Pi is key-only.
+#
+# Install runs through the Pi's root wrapper /usr/local/bin/240mp-ci-deploy (the
+# same one the CI deploy-pi.yml chain calls). It reboots the Pi; the caller's
+# ssh dying mid-command is EXPECTED. We then re-SSH to verify service-active and
+# binary md5 against the tarball.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-INSTALL_DIR="/opt/240mp"
-OWNER="ian"
-HOST="${2:-execubot.weedlun.me}"
 REPO="ianweedlun/240-MP"
+PIUSER="${PI_SSH_USER:-ian}"
 
-# ── Get Pi password ────────────────────────────────────────────────────────────
-# Priority:
-# 1. GitHub repo secrets (PI_SSH_PASSWORD) via gh api
-# 2. Local fallback ~/hermes/.env
-get_pi_password() {
-    local pass=""
-
-    # Try GitHub secrets first (works from any machine with gh auth)
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        pass=$(gh secret list --repo "$REPO" --json name,value 2>/dev/null \
-            | jq -r '.[] | select(.name=="PI_SSH_PASSWORD") | .value' 2>/dev/null)
-        if [ -n "$pass" ] && [ "$pass" != "null" ]; then
-            echo "$pass"
-            return 0
-        fi
-    fi
-
-    # Fallback: local .env file
-    pass=$(grep -oP 'EXECUBOT_PASSWORD=\K.*' ~/hermes/.env 2>/dev/null | sed 's/^"//;s/"$//')
-    if [ -n "$pass" ]; then
-        echo "$pass"
-        return 0
-    fi
-
-    echo "Error: Could not find Pi password. Check GitHub secrets (PI_SSH_PASSWORD) or ~/hermes/.env" >&2
-    return 1
-}
-
-# ── Parse arguments ────────────────────────────────────────────────────────────
+# ── Resolve tarball ────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--latest" ]; then
     BRANCH="${2:?Usage: deploy-pi.sh --latest <branch> [hostname]}"
-    HOST="${3:-execubot.weedlun.me}"
+    HOST="${3:-execubot}"
 
     echo "=== Fetching latest CI artifact for branch: $BRANCH ==="
-
-    RUN_JSON=$(gh run list --repo "$REPO" --branch "$BRANCH" --workflow CI --event push --status success --json databaseId,headSha,createdAt --limit 1)
+    RUN_JSON=$(gh run list --repo "$REPO" --branch "$BRANCH" --workflow CI --status success --limit 1 --json databaseId,headSha,createdAt)
     if [ -z "$RUN_JSON" ] || [ "$RUN_JSON" = "[]" ]; then
-        echo "Error: No successful CI run found for branch '$BRANCH' in repo '$REPO'"
-        echo "Check: gh run list --repo $REPO --branch $BRANCH"
+        echo "Error: No successful CI run for branch '$BRANCH' in repo '$REPO'"
         exit 1
     fi
-
     RUN_ID=$(echo "$RUN_JSON" | jq -r '.[0].databaseId')
     COMMIT=$(echo "$RUN_JSON" | jq -r '.[0].headSha' | cut -c1-8)
-
     echo "Found CI run $RUN_ID (commit: $COMMIT)"
 
-    TMPDIR=$(mktemp -d)
-    trap "rm -rf $TMPDIR" EXIT
+    TMPDL=$(mktemp -d)
+    trap "rm -rf $TMPDL" EXIT
 
-    gh run download "$RUN_ID" --repo "$REPO" -n tarball-linux-arm64 -D "$TMPDIR"
-    ORIG=$(ls "$TMPDIR"/*.tar.gz | head -1)
-    TARBALL="$TMPDIR/240-MP-${BRANCH//\//-}-linux-arm64-${COMMIT}.tar.gz"
+    gh run download "$RUN_ID" --repo "$REPO" -n tarball-linux-arm64 -D "$TMPDL"
+    ORIG=$(ls "$TMPDL"/*.tar.gz | head -1)
+    TARBALL="$TMPDL/240-MP-${BRANCH//\//-}-linux-arm64-${COMMIT}.tar.gz"
     mv -- "$ORIG" "$TARBALL" 2>/dev/null || [ "$ORIG" = "$TARBALL" ]  # CI may already name it exactly this
 
     if [ ! -f "$TARBALL" ]; then
         echo "Error: Downloaded artifact not found at $TARBALL"
-        ls -la "$TMPDIR/"
+        ls -la "$TMPDL/"
         exit 1
     fi
-
     echo "Downloaded: $TARBALL"
-
 elif [ -n "${1:-}" ]; then
     TARBALL="$1"
+    HOST="${2:-execubot}"
 else
     echo "Usage: deploy-pi.sh <tarball-path> [hostname]"
     echo "       deploy-pi.sh --latest <branch> [hostname]"
     exit 1
 fi
 
-# ── Get password ───────────────────────────────────────────────────────────────
-PASS=$(get_pi_password)
-
-# ── Verify tarball ────────────────────────────────────────────────────────────
 if [ ! -f "$TARBALL" ]; then
     echo "Error: tarball not found: $TARBALL"
     exit 1
 fi
 
+# ── Arch guard ─────────────────────────────────────────────────────────────────
 # The Pi is aarch64. A fat-fingered local build (or wrong CI job) ships an
 # x86-64 binary, and 240mp-stop's poweroff-on-exit turns that into a
 # boot loop. Verify the arch before we touch the Pi.
-TARBALL_ARCH=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp 2>/dev/null | file - | grep -o 'ARM aarch64' || true)
-if [ "$TARBALL_ARCH" != "ARM aarch64" ]; then
+if [ "$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp 2>/dev/null | file - | grep -o 'ARM aarch64' || true)" != "ARM aarch64" ]; then
     echo "Error: tarball binary is not ARM aarch64 — refusing to deploy."
     echo "       (A non-ARM binary makes the Pi power off on every boot.)"
     exit 1
 fi
+LOCAL_MD5=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
 
-echo "=== Deploying 240-MP to $HOST ==="
+# ── Identity key ───────────────────────────────────────────────────────────────
+# LAN/agent path (user ian): local ~/.ssh/id_pi_agent. For the ghdeploy-style
+# path (PI_SSH_USER set to someone else), stage the PI_SSH_IDENTITY repo secret.
+KEYFILE="${PI_SSH_KEY:-}"
+if [ -z "$KEYFILE" ] && [ "$PIUSER" != "ian" ]; then
+    KEY=$(gh secret list --repo "$REPO" --json name,value 2>/dev/null \
+          | jq -r '.[] | select(.name=="PI_SSH_IDENTITY") | .value' 2>/dev/null || true)
+    if [ -n "$KEY" ] && [ "$KEY" != "null" ]; then
+        KEYFILE=$(mktemp)
+        printf '%s\n' "$KEY" > "$KEYFILE"
+        chmod 600 "$KEYFILE"
+    fi
+fi
+[ -z "$KEYFILE" ] && KEYFILE="$HOME/.ssh/id_pi_agent"
+TARGET="$PIUSER@$HOST"
+
+sshrun() { ssh -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
+scpput() { scp -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
+
+echo "=== Deploying to $TARGET ==="
 echo "Tarball: $TARBALL"
 
-# ── Stop service (if running) — use 240mp-terminal.service to stop 240mp ───────
-# 240mp-terminal.service is a getty on tty1. Starting it stops 240mp.service
-# because they compete for the same VT.
-# Also clear ExecStopPost to avoid poweroff when 240mp exits due to VT loss.
-echo "Stopping 240mp.service via 240mp-terminal.service..."
-sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "echo -e '[Service]\nExecStopPost=' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
-     sudo systemctl daemon-reload && \
-     sudo systemctl stop 240mp-terminal.service 2>/dev/null && \
-     sudo systemctl start 240mp-terminal.service && \
-     sleep 2"
+# ── Upload + root-side deploy (wrapper reboots; dead ssh is expected) ────────
+scpput "$TARBALL" "$TARGET:/tmp/240mp-deploy.tar.gz" || { echo "Error: scp upload failed"; exit 1; }
+sshrun "sudo -n /usr/local/bin/240mp-ci-deploy /tmp/240mp-deploy.tar.gz" || true  # reboot kills the caller's ssh
 
-# Wait for service to fully stop (240mp-terminal takes the VT, forcing 240mp to exit)
-for i in $(seq 1 10); do
-    if sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-        "systemctl is-active 240mp.service 2>/dev/null" | grep -q 'active'; then
-        echo "Waiting for service to stop... ($i/10)"
-        sleep 2
-    else
-        echo "Service stopped"
-        break
+# ── Verify over fresh connections: service active + binary md5 match ──────────
+sleep 30
+for i in $(seq 1 15); do
+    OUT=$(sshrun "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || { sleep 10; continue; }
+    if echo "$OUT" | grep -q "^active" && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+        echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($LOCAL_MD5)"
+        exit 0
     fi
+    echo "verify attempt $i/15: $OUT"
+    sleep 10
 done
-
-# ── Deploy ────────────────────────────────────────────────────────────────────
-echo "Extracting tarball..."
-sshpass -p "$PASS" scp -o StrictHostKeyChecking=no "$TARBALL" "$OWNER@$HOST:/tmp/240-MP-deploy.tar.gz"
-sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no "$OWNER@$HOST" \
-    "sudo tar -xzf /tmp/240-MP-deploy.tar.gz --strip-components=3 -C $INSTALL_DIR && \
-     sudo chown -R $OWNER: $INSTALL_DIR && \
-     rm -f /tmp/240-MP-deploy.tar.gz && \
-     echo -e '[Service]\nExecStopPost=+/usr/local/bin/240mp-stop' | sudo tee /etc/systemd/system/240mp.service.d/override.conf && \
-     sudo systemctl daemon-reload && \
-     sudo systemctl stop 240mp-terminal.service 2>/dev/null; true && \
-     echo 'Deploy complete — restart 240mp.service manually or reboot'"
-
-echo "=== Deploy complete ==="
+echo "VERIFY FAILED: service active + md5 $LOCAL_MD5 not confirmed after 15 tries"
+exit 1
