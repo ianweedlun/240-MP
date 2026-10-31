@@ -67,6 +67,12 @@ public:
     // "modules/com.240mp.retroarch/views/Games.qml"). Default-named
     // screenshots embed it: 240mp_screenshot_retroarch-Games_<ts>.png.
     Q_INVOKABLE void note_view(const QString &source);
+
+    // Debug aid (portable): append a machine-readable screen-state line to
+    // /tmp/240mp_state.log (epoch-time <event> <detail>). Called from Main.qml
+    // at view loads / nav transitions / screensaver changes so a remote test
+    // loop can track app state over SSH without screenshots or vision.
+    Q_INVOKABLE void note_state(const QString &event, const QString &detail);
     QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 
