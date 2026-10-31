@@ -274,7 +274,12 @@ Window {
             }
 
             function onGoBack() {
-                if (root.appNavStack.length === 0) return
+                if (root.appNavStack.length === 0) {
+                    // Module is at its top level — exit module entirely, return to ModuleList
+                    moduleLoader.setSource("ModuleList.qml", { "navParams": { fromAppStartup: false } })
+                    root.appCurrentParams = {}
+                    return
+                }
                 var prev = root.appNavStack.pop()
                 root.appCurrentParams = prev.params
                 moduleLoader.setSource(prev.source, { "navParams": prev.params, "navListState": prev.listState || {} })
