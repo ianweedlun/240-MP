@@ -15,6 +15,7 @@
 #include <QDateTime>
 #include <QQmlContext>
 #include <QStandardPaths>
+#include <QRegularExpression>
 
 // User-level mpv config: ~/.config/mpv/mpv.conf — the same file mpv itself
 // reads at spawn (XDG config dir, same precedent as the RetroArch backend).
@@ -595,8 +596,29 @@ QString AppCore::captureScreenshot(const QString &outputPath)
 {
     QString path = outputPath;
     if (path.isEmpty()) {
-        path = QStringLiteral("/tmp/240mp_screenshot_%1.png").arg(
-            QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+        // Default name embeds the open view: 240mp_screenshot_retroarch-Games_20261031_hhmmss.png
+        // — the filename alone tells the remote loop which screen was captured.
+        auto tagOf = [](const QString &source) {
+            // "modules/com.240mp.retroarch/views/Games.qml" -> "retroarch-Games"
+            // "views/ModuleList.qml"                        -> "ModuleList"
+            const QStringList seg = source.split(QLatin1Char('/'));
+            QString module, view;
+            const int i = seg.indexOf("views");
+            if (i > 0) {
+                module = seg[i - 1];
+                module.remove(QStringLiteral("com.240mp."));
+            }
+            if (!seg.isEmpty()) {
+                view = seg.last();
+                view.remove(QStringLiteral(".qml"));
+            }
+            QString tag = module.isEmpty() ? view : module + QLatin1Char('-') + view;
+            tag.remove(QRegularExpression("[^A-Za-z0-9_-]"));
+            return tag.isEmpty() ? QStringLiteral("app") : tag;
+        };
+        const QString tag = tagOf(m_activeViewSource);
+        path = QStringLiteral("/tmp/240mp_screenshot_%1_%2.png").arg(tag)
+                   .arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
     }
 
     // EGLFS (the Pi's platform) renders through a non-composited GL context:
@@ -635,4 +657,9 @@ QString AppCore::takeScreenshot()
 {
     qInfo("[AppCore] takeScreenshot() called");
     return captureScreenshot();
+}
+
+void AppCore::note_view(const QString &source)
+{
+    m_activeViewSource = source;
 }
