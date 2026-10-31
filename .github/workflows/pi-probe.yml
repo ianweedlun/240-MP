@@ -5,6 +5,7 @@ name: Pi Reachability Probe
 on:
   push:
     branches: ['dev', 'feature/**']
+    paths-ignore: ['**.md'] # docs-only pushes don't probe the Pi
 
 jobs:
   probe:
