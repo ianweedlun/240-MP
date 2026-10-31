@@ -195,8 +195,10 @@ FocusScope {
             else currentIndex = 0
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
         }
-        onRowSelected: if (previewLoader.item)
-            previewLoader.item.game = ensureThumbnail(model[index])
+        onRowSelected: function(index) {
+            if (previewLoader.item)
+                previewLoader.item.game = ensureThumbnail(model[index])
+        }
     }
 
     // Preview pane — the selected game's boxart, when enabled. Fixed column
