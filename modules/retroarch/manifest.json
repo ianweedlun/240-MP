@@ -52,8 +52,8 @@
       "label": "Playlist Sort",
       "type": "list_single",
       "default": "SYSTEM",
-      "options": ["SYSTEM", "ALPHA", "COMPANY"],
-      "description": "How the playlist list is ordered. [SYSTEM] By short system name (default)  [ALPHA] Raw playlist filenames  [COMPANY] Alpha by the manufacturer prefix"
+      "options": ["SYSTEM", "COMPANY"],
+      "description": "[SYSTEM] Alpha by short name (GENESIS, NES, SNES)  [COMPANY] Group by manufacturer prefix from filename, alpha within"
     }
   ]
 }

@@ -219,16 +219,14 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
     }
 
     // Order playlists according to playlist_sort setting:
-    // - SYSTEM (default): short display name ("GENESIS", "NES", "SNES")
-    // - ALPHA: raw playlist basename ("Nintendo - Super Nintendo...", "Sega - Mega Drive...")
-    // - COMPANY: manufacturer prefix (text before first " - "), fallback to alpha
+    // - SYSTEM (default): short display name ("GENESIS", "NES", "SNES") — alpha
+    // - COMPANY: group by manufacturer prefix from playlist filename (text
+    //   before first " - "), alpha within group; no-" - " entries fall back to
+    //   alpha as their own group.
     const QString sortMode = m_playlistSort;
     std::sort(playlists.begin(), playlists.end(), [sortMode](const QVariant &a, const QVariant &b) {
         const auto ma = a.toMap();
         const auto mb = b.toMap();
-        if (sortMode == QStringLiteral("ALPHA")) {
-            return ma.value(QStringLiteral("name")).toString() < mb.value(QStringLiteral("name")).toString();
-        }
         if (sortMode == QStringLiteral("COMPANY")) {
             const QString nameA = ma.value(QStringLiteral("name")).toString();
             const QString nameB = mb.value(QStringLiteral("name")).toString();
@@ -239,7 +237,7 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
             if (compA != compB) return compA < compB;
             return nameA < nameB;
         }
-        // SYSTEM (default)
+        // SYSTEM (default): short name alphabetical
         const QString snA = ma.value(QStringLiteral("shortName")).toString();
         const QString snB = mb.value(QStringLiteral("shortName")).toString();
         const QString sa = snA.isEmpty() ? ma.value(QStringLiteral("name")).toString() : snA;
