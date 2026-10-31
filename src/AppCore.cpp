@@ -674,3 +674,12 @@ void AppCore::note_state(const QString &event, const QString &detail)
     f.write((QString::number(ts) + QLatin1Char(' ') + event + QLatin1Char(' ') + detail + QLatin1Char('\n')).toUtf8());
 #endif
 }
+
+bool AppCore::telemetryEnabled() const
+{
+#ifdef APP_TELEMETRY
+    return true;
+#else
+    return false;
+#endif
+}

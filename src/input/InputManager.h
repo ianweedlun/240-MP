@@ -152,6 +152,14 @@ private:
 
     QTimer m_pollTimer;
     QTimer m_repeatDelayTimer;
+    // TELEMETRY-only debug key channel: appended lines in a plain file
+    // ("up", "back", ...) injected through deliverPress (see below). Drives
+    // local offscreen test runs; never active with TELEMETRY=OFF.
+    QTimer m_debugKeyTimer;
+    QString m_debugKeyFile;
+    qint64 m_debugKeyOffset = 0;
+    void startDebugKeyChannel();
+    void pollDebugKeyChannel();
     QTimer m_repeatTimer;
     QFileSystemWatcher m_watcher;
     QDateTime m_cfgLastModified;
