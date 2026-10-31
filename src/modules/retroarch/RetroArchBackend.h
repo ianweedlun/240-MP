@@ -33,6 +33,12 @@ public:
     // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
     QString playlistSort() const;
 
+    // True while the RetroArch child process launched by launchGame() is alive.
+    // InputManager consults this (the child owns the whole console — the app
+    // reads the same evdev stream) so a ROM-quit Back doesn't double-handle as
+    // an extra goBack() in the QML navigation stack.
+    bool gameRunning() const { return m_gameProcess != nullptr; }
+
     // Path getters for the settings UI.
     Q_INVOKABLE QString playlist_directory() const;
     Q_INVOKABLE QString rom_directory() const;
@@ -86,6 +92,7 @@ private:
     QString m_retroarchPath;
     QString m_playlistSort;
     DisplayHandoff *m_handoff = nullptr;
+    QProcess *m_gameProcess = nullptr; // the live launchGame() child, null when not running
 
     void loadSettings();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds
