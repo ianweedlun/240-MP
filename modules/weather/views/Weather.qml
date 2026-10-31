@@ -308,7 +308,7 @@ FocusScope {
         lines: {
             var c = weatherBackend.current
             if (!weatherBackend.hasData) return []
-            return [
+            var out = [
                 weatherBackend.locationName,
                 "CURRENTLY: " + c.condition + " " + c.temperature,
                 "HUMIDITY: " + c.humidity,
@@ -317,6 +317,13 @@ FocusScope {
                 "WIND: " + c.wind,
                 "VISIBILITY: " + c.visibility
             ]
+            // Both lines are honest-absent: the air-quality API doesn't cover
+            // every region, so the rows only render when the backend has data.
+            if (c.airQuality)
+                out.push("AIR QUALITY: " + c.airQuality)
+            if (c.uvIndex)
+                out.push("UV INDEX: " + c.uvIndex)
+            return out
         }
     }
 }
