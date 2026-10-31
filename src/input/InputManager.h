@@ -14,6 +14,7 @@ class QQuickWindow;
 class QKeyEvent;
 class QSocketNotifier;
 class AppCore;
+class DisplayHandoff;
 
 // Centralized gamepad input. SDL controller buttons/axes are mapped to a small
 // set of named actions (up/down/left/right/select/back/play_pause), and each
@@ -38,6 +39,11 @@ public:
     ~InputManager() override;
 
     void setTargetWindow(QQuickWindow *window);
+
+    // Non-owned: main.cpp hands over the app's single DisplayHandoff so the
+    // input paths can tell when a fullscreen external process (RetroArch
+    // gameplay) has the screen; see the suppression rule in deliverPress().
+    void setDisplayHandoff(DisplayHandoff *handoff);
 
     bool gamepadConnected() const { return !m_controllers.isEmpty(); }
     QString lastInputDevice() const { return m_lastInputDevice; }
@@ -96,6 +102,7 @@ private slots:
 
 private:
     enum class Action { None, Up, Down, Left, Right, Select, Back, PlayPause };
+    DisplayHandoff *m_handoff = nullptr;   // non-owned, set by main.cpp
 
     void initSdl();
     void openController(int deviceIndex);

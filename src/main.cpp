@@ -163,6 +163,7 @@ int main(int argc, char *argv[]) {
     ScriptsBackend      scriptsBackend(appRoot, dataRoot, &displayHandoff);
     MpvController       mpvController(appRoot, dataRoot, &appCore, &displayHandoff);
     InputManager        inputManager(dataRoot, &appCore);
+    inputManager.setDisplayHandoff(&displayHandoff);
     IdleTracker         idleTracker(60);   // disabled until Main.qml applies the saved setting
     UpdateManager       updateManager(appRoot, dataRoot);
 
