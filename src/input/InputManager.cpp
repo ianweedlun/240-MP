@@ -87,6 +87,9 @@ InputManager::InputManager(const QString &dataRoot, AppCore *appCore, QObject *p
     connect(&m_pollTimer,        &QTimer::timeout, this, &InputManager::pollSdl);
     connect(&m_repeatDelayTimer, &QTimer::timeout, this, &InputManager::onRepeatDelayElapsed);
     connect(&m_repeatTimer,      &QTimer::timeout, this, &InputManager::onRepeatTick);
+#ifdef APP_TELEMETRY
+    connect(&m_debugKeyTimer,    &QTimer::timeout, this, [this]{ pollDebugKeyChannel(); });
+#endif
 
     rebuildMapping();
     initSdl();
@@ -94,6 +97,9 @@ InputManager::InputManager(const QString &dataRoot, AppCore *appCore, QObject *p
     loadKeyRemap();
     if (m_appCore)
         connect(m_appCore, &AppCore::appSettingChanged, this, &InputManager::onAppSettingChanged);
+#ifdef APP_TELEMETRY
+    startDebugKeyChannel();
+#endif
 
 #ifdef Q_OS_LINUX
     openConsumerControlDevice();
@@ -690,6 +696,50 @@ void InputManager::releaseAction(Action a) {
 // forwarding does on platforms where the window stays active (RPi/EGLFS).
 // When mpv isn't running either, sendKey is a no-op, so background presses
 // while the user is in another app do nothing — same as keyboard.
+// TELEMETRY-only debug key channel: lines appended to a plain file are
+// injected through deliverPress, the same chokepoint real input uses. Lets an
+// agent drive a local offscreen run with `echo -ne 'down\n' >> /tmp/240mp_key.in`
+// while reading /tmp/240mp_state.log — the Pi keeps the golden CRT gate.
+void InputManager::startDebugKeyChannel()
+{
+#ifdef APP_TELEMETRY
+    m_debugKeyFile = QStringLiteral("/tmp/240mp_key.in");
+    m_debugKeyTimer.setInterval(200);
+    m_debugKeyTimer.start();
+#endif
+}
+
+void InputManager::pollDebugKeyChannel()
+{
+#ifdef APP_TELEMETRY
+    if (m_debugKeyFile.isEmpty())
+        return;
+    QFile f(m_debugKeyFile);
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    f.seek(m_debugKeyOffset);
+    const QByteArray chunk = f.readAll();
+    m_debugKeyOffset += chunk.size();
+    f.close();
+    const QStringList lines = QString::fromUtf8(chunk).split(QChar('\n'));
+    for (const QString &raw : lines) {
+        const QString cmd = raw.trimmed().toLower();
+        if (cmd.isEmpty())
+            continue;
+        Action a = Action::None;
+        if (cmd == QLatin1String("up")) a = Action::Up;
+        else if (cmd == QLatin1String("down")) a = Action::Down;
+        else if (cmd == QLatin1String("left")) a = Action::Left;
+        else if (cmd == QLatin1String("right")) a = Action::Right;
+        else if (cmd == QLatin1String("select") || cmd == QLatin1String("enter")) a = Action::Select;
+        else if (cmd == QLatin1String("back") || cmd == QLatin1String("escape")) a = Action::Back;
+        else if (cmd == QLatin1String("playpause") || cmd == QLatin1String("space")) a = Action::PlayPause;
+        if (a != Action::None)
+            deliverPress(a, false);
+    }
+#endif
+}
+
 void InputManager::deliverPress(Action a, bool autoRepeat) {
 #ifdef APP_TELEMETRY
     const auto actionName = [](Action a) -> QString {

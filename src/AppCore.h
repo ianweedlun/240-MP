@@ -73,6 +73,10 @@ public:
     // at view loads / nav transitions / screensaver changes so a remote test
     // loop can track app state over SSH without screenshots or vision.
     Q_INVOKABLE void note_state(const QString &event, const QString &detail);
+    // Central telemetry kill-switch for QML core primitives (RowTrackingListView
+    // and friends): false in release builds (TELEMETRY=OFF). C++ telemetry bodies
+    // are #ifdef-gated regardless; this lets QML-side logic skip work cheaply.
+    Q_INVOKABLE bool telemetryEnabled() const;
     QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 

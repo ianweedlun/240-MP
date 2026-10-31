@@ -12,8 +12,6 @@ FocusScope {
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
-    // Debug telemetry signal: highlighted row moved (Main.qml logs it).
-    signal rowSelected(name: string, index: int)
 
     focus: true
     Keys.onPressed: function(event) {
@@ -94,7 +92,7 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: playlistList
 
         anchors.top: parent.top
@@ -120,11 +118,6 @@ FocusScope {
         delegate: Item {
             width: playlistList.width
             height: root.sh * 0.0583333 //28
-
-            // Debug telemetry: the row announces its own highlight (Main.qml
-            // logs via appCore; Root.qml bridges module-internal views).
-            property bool selected: playlistList.currentIndex === index
-            onSelectedChanged: if (selected) playlistsRoot.rowSelected(modelData.name, index)
 
             Item {
                 id: textClip

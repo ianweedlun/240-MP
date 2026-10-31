@@ -6,8 +6,6 @@ FocusScope {
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
-    // Debug signal (telemetry): emitted whenever the highlighted row moves.
-    signal rowSelected(name: string, index: int)
 
     property var navParams: ({})
     property var navListState: ({})
@@ -62,7 +60,7 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: menuList;
         model: [];
         anchors.top: parent.top
@@ -78,11 +76,6 @@ FocusScope {
         delegate: Item {
             width: menuList.width;
             height: root.sh * 0.0583333 //28
-
-            // Debug telemetry: the row owns its selection state and announces
-            // it when it becomes highlighted (Main.qml logs via appCore).
-            property bool selected: menuList.currentIndex === index
-            onSelectedChanged: if (selected) appRoot.rowSelected(modelData.name, index)
 
             Item {
                 id: textClipContainer;

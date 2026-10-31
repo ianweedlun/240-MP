@@ -37,8 +37,6 @@ FocusScope {
         : root.sw - root.sw * 0.115625
 
     signal goBack()
-    // Debug telemetry signal: highlighted row moved (Main.qml logs it).
-    signal rowSelected(name: string, index: int)
     focus: true
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
@@ -118,7 +116,7 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: gameList
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
@@ -140,10 +138,6 @@ FocusScope {
         delegate: Item {
             width: gameList.width
             height: root.sh * 0.0583333 //28
-
-            // Debug telemetry: the row announces its own highlight.
-            property bool selected: gameList.currentIndex === index
-            onSelectedChanged: if (selected) gamesRoot.rowSelected(modelData.name, index)
 
             Item {
                 id: textClip
@@ -201,8 +195,8 @@ FocusScope {
             else currentIndex = 0
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
         }
-        onCurrentIndexChanged: if (previewLoader.item)
-            previewLoader.item.game = ensureThumbnail(model[gameList.currentIndex])
+        onRowSelected: if (previewLoader.item)
+            previewLoader.item.game = ensureThumbnail(model[index])
     }
 
     // Preview pane — the selected game's boxart, when enabled. Fixed column
