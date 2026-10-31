@@ -1,0 +1,33 @@
+name: Pi Reachability Probe
+# One-shot diagnostic: can a GitHub runner reach the Pi via the WAN path
+# (Cloudflare grey-cloud DNS -> WAN IP; firewall maps WAN:2222 -> Pi LAN:22)?
+# Informational — always exits 0; read the verdict line.
+on:
+  push:
+    branches: ['dev', 'feature/**']
+
+jobs:
+  probe:
+    name: Probe ghdeploy@Pi over WAN:2222
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stage identity key
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          {{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -l /tmp/pi_id
+      - name: Probe
+        run: |
+          ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            "${{ secrets.PI_SSH_USERNAME }}@{{ secrets.PI_SSH_HOSTNAME }}" \
+            'echo PI_REACHABLE'
+          rc=$?
+          case $rc in
+            0) echo "VERDICT: REACHABLE — runner -> Pi path works" ;;
+            124|126) echo "VERDICT: ssh connected, command denied (auth issue)" ;;
+            *) echo "VERDICT: NOT REACHABLE (rc=$rc) — Pi cold, DNS stale, or WAN blocked" ;;
+          esac
+          exit 0
