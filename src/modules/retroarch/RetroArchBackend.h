@@ -77,7 +77,8 @@ private:
     // .lpl. Both are scanned so either install works without configuration.
     static QStringList playlistFilters();
     QVariantList parsePlaylist(const QString &path, const QString &systemId);
-    QString findThumbnail(const QString &gameName, const QString &systemId) const;
+    QString findThumbnail(const QString &gameName, const QString &dirName) const;
+    QString sanitizeForThumbnailDb(const QString &label) const;
     QString resolveRomPath(const QString &playlistPath, const QString &romPath) const;
     // Core .so location for an item: its core_path if present, else the cores
     // directory next to the config (where RetroArch installs cores).

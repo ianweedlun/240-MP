@@ -394,7 +394,11 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
             { "corePath", resolveCorePath(item["core_path"].toString(), defaultCorePath) },
             { "coreName", QFileInfo(item["core_path"].toString()).baseName() },
             { "dbName", item["db_name"].toString() },
-            { "thumbnail", findThumbnail(label, systemId) },
+            // Thumbnail DBs are keyed by the playlist file's BASENAME WITH
+            // ORIGINAL CASE (RetroArch's own convention), while systemId is
+            // lower-cased for our internal identity. Keep them separate so
+            // any install — named or human-playlists — resolves.
+            { "thumbnail", findThumbnail(label, QFileInfo(path).baseName()) },
             { "systemId", systemId }
         });
     }
@@ -438,11 +442,13 @@ QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString
 }
 
 QString RetroArchBackend::findThumbnail(const QString &gameName,
-                                        const QString &systemId) const {
+                                        const QString &dirName) const {
     // RetroArch organises thumbnails as
-    // <thumbnails>/<core_name>/<Type>/<name>.png, Type being one of
-    // Named_Boxarts, Named_Snaps, Named_Titles, Boxarts, … — the "Named_"
-    // variants match the label, which is what we key on.
+    // <thumbnails>/<playlist basename, original case>/<Type>/<name>.png,
+    // Type being one of Named_Boxarts, Named_Snaps, Named_Titles, Boxarts, …
+    // — the "Named_" variants match the playlist label. dirName is the
+    // playlist basename WITH CASE PRESERVED; never pass the lower-cased
+    // internal systemId here.
     const QStringList thumbTypes = {
         QStringLiteral("Named_Boxarts"), QStringLiteral("Named_Snaps"),
         QStringLiteral("Named_Titles"),  QStringLiteral("Boxarts"),
@@ -454,23 +460,45 @@ QString RetroArchBackend::findThumbnail(const QString &gameName,
     const QStringList globs = { QStringLiteral("*.png"), QStringLiteral("*.jpg") };
 
     for (const QString &type : thumbTypes) {
-        const QDir thumbDir(m_thumbnailDir + "/" + systemId + "/" + type);
+        const QDir thumbDir(m_thumbnailDir + QStringLiteral("/") + dirName + QStringLiteral("/") + type);
         if (!thumbDir.exists()) continue;
 
-        // Cheap exact checks first.
-        for (const QString &ext : extensions) {
-            const QString exact = thumbDir.filePath(gameName + ext);
-            if (QFileInfo(exact).exists()) return exact;
+        // Exact, then RetroArcName-sanitized (thumbnail DBs mangle "/\\:*?|<>[]"
+        // etc. to "_" when generated from labels), then case-insensitive —
+        // three escalating attempts without pre-listing the directory.
+        const QString sanitized = sanitizeForThumbnailDb(gameName);
+        for (const QString &candidate : { gameName, sanitized }) {
+            for (const QString &ext : extensions) {
+                const QString exact = thumbDir.filePath(candidate + ext);
+                if (QFileInfo(exact).exists()) return exact;
+            }
         }
 
-        // Case-insensitive match (labels and filenames disagree on case).
         const QFileInfoList files = thumbDir.entryInfoList(globs, QDir::Files);
         for (const QFileInfo &file : files) {
-            if (file.completeBaseName().compare(gameName, Qt::CaseInsensitive) == 0)
+            const QString base = file.completeBaseName();
+            if (base.compare(gameName, Qt::CaseInsensitive) == 0
+                || base.compare(sanitizeForThumbnailDb(gameName), Qt::CaseInsensitive) == 0)
                 return file.absoluteFilePath();
         }
     }
     return QString();
+}
+
+// Same character mangling RetroArch applies when naming thumbnail DB files
+// from labels: reserved path characters and brackets collapse to "_".
+QString RetroArchBackend::sanitizeForThumbnailDb(const QString &label) const {
+    QString out;
+    for (const QChar c : label) {
+        if (c == QLatin1Char('/') || c == QLatin1Char('\\') || c == QLatin1Char(':')
+            || c == QLatin1Char('*') || c == QLatin1Char('?') || c == QLatin1Char('|')
+            || c == QLatin1Char('<') || c == QLatin1Char('>') || c == QLatin1Char('[')
+            || c == QLatin1Char(']') || c == QLatin1Char('\n') || c == QLatin1Char('\t'))
+            out += QLatin1Char('_');
+        else
+            out += c;
+    }
+    return out;
 }
 
 // ── Launch ───────────────────────────────────────────────────────────────────

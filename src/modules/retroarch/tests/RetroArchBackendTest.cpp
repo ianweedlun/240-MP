@@ -36,6 +36,8 @@ private slots:
     void absoluteRomPassesThrough();
     void thumbnailFoundInNamedBoxarts();
     void missingThumbnailYieldsEmptyString();
+    void thumbnailDbUsesPlaylistBasenameOriginalCase();
+    void sanitizedLabelMatchesSanitizedDbName();
     void signalsFireAlongsideReturnValues();
 };
 
@@ -283,6 +285,48 @@ void RetroArchBackendTest::missingThumbnailYieldsEmptyString() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
     QVERIFY(games.at(0).toMap()["thumbnail"].toString().isEmpty());
+}
+
+void RetroArchBackendTest::thumbnailDbUsesPlaylistBasenameOriginalCase() {
+    // The generalization: on case-sensitive filesystems a lower-cased key
+    // against a mixed-case DB directory is a hard miss. Real RetroArch
+    // installs name both playlists and thumbnail DBs with human casing.
+    RetroArchBackend *be = makeBackend();
+    const QString thumbs = m_tmp.path() + "/thumbnails";
+    QDir().mkpath(thumbs + "/Nintendo - Test Console/Named_Boxarts");
+    {
+        QFile f(thumbs + "/Nintendo - Test Console/Named_Boxarts/Cool Game.png");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+    }
+    writePlaylist("Nintendo - Test Console.lpl",
+                  playlistJson("/cores/test_libretro.so", { "Cool Game" }));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/Nintendo - Test Console.lpl");
+    QVERIFY(!games.isEmpty());
+    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+             thumbs + "/Nintendo - Test Console/Named_Boxarts/Cool Game.png");
+}
+
+void RetroArchBackendTest::sanitizedLabelMatchesSanitizedDbName() {
+    // Thumbnail DB file names mangle label characters ("/" "[]" etc.) to "_".
+    // The lookup must apply the same rule, so any install's DB resolves —
+    // no fixture-specific name is hardcoded.
+    RetroArchBackend *be = makeBackend();
+    const QString thumbs = m_tmp.path() + "/thumbnails";
+    QDir().mkpath(thumbs + "/nes_libretro/Named_Boxarts");
+    {
+        QFile f(thumbs + "/nes_libretro/Named_Boxarts/F_Z Quest _T_S_.png");
+        QVERIFY(f.open(QIODevice::WriteOnly));
+    }
+    writePlaylist("nes_libretro.json",
+                  playlistJson("/cores/nes_libretro.so", { "F/Z Quest [T/S]" }));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QVERIFY(!games.isEmpty());
+    QCOMPARE(games.at(0).toMap()["thumbnail"].toString(),
+             thumbs + "/nes_libretro/Named_Boxarts/F_Z Quest _T_S_.png");
 }
 
 void RetroArchBackendTest::signalsFireAlongsideReturnValues() {
