@@ -1,0 +1,8 @@
+set(__QT_DEPLOY_TARGET_240mp_FILE /home/ian/src/240-MP/build-test/240mp)
+set(__QT_DEPLOY_TARGET_240mp_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_retroarch-tests_FILE /home/ian/src/240-MP/build-test/retroarch-tests)
+set(__QT_DEPLOY_TARGET_retroarch-tests_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_weather-tests_FILE /home/ian/src/240-MP/build-test/weather-tests)
+set(__QT_DEPLOY_TARGET_weather-tests_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_mpv-basic-options-tests_FILE /home/ian/src/240-MP/build-test/mpv-basic-options-tests)
+set(__QT_DEPLOY_TARGET_mpv-basic-options-tests_TYPE EXECUTABLE)

@@ -12,15 +12,13 @@ Item {
         color: Qt.rgba(0.04, 0.0, 0.58, 0.3)
     }
 
-    // Boxart, if RetroArch has one for this game
+    // Boxart — the panel highlights the art at full box size. The game name
+    // lives on the row, so printing it here too was redundant and forced the
+    // image to shrink to make room.
     Image {
         id: boxart
         visible: gamePreview.game.thumbnail && gamePreview.game.thumbnail !== ""
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: parent.top
-        anchors.topMargin: root.sh * 0.03 //14
-        width: parent.width * 0.85
-        height: parent.height * 0.55
+        anchors.fill: parent
         fillMode: Image.PreserveAspectFit
         source: gamePreview.game.thumbnail
         asynchronous: true
@@ -49,23 +47,6 @@ Item {
             verticalAlignment: Text.AlignVCenter
             font.pixelSize: root.sh * 0.0333333 //16
         }
-    }
-
-    // Game name below the art with better styling
-    Text {
-        id: gameName
-        text: gamePreview.game.name || ""
-        color: root.primaryColor
-        font.family: root.globalFont
-        font.capitalization: Font.AllUppercase
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
-        width: parent.width * 0.9
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: root.sh * 0.04 //18
-        font.pixelSize: root.sh * 0.0333333 //16
-        font.bold: true
     }
 
     // Bottom accent line

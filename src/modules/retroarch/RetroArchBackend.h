@@ -30,6 +30,9 @@ public:
 
     QString retroarchPath() const { return m_retroarchPath; }
 
+    // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
+    QString playlistSort() const;
+
     // Path getters for the settings UI.
     Q_INVOKABLE QString playlist_directory() const;
     Q_INVOKABLE QString rom_directory() const;
@@ -46,6 +49,11 @@ public:
     Q_INVOKABLE QVariantList refreshPlaylists(const QString &systemId);
     // Parse one playlist file into its game entries.
     Q_INVOKABLE QVariantList refreshGames(const QString &playlistPath);
+    // Resolve a game's thumbnail on demand — called by QML for the visible
+    // rows only, so opening a playlist never scans the thumbnail tree for
+    // every game in it. Same rules as findThumbnail; covered by tests.
+    Q_INVOKABLE QString resolveThumbnail(const QString &gameName,
+                                         const QString &playlistBasename) const;
     // Launch a game: hand the display to RetroArch, run it with the item's
     // core, restore the display when it exits.
     Q_INVOKABLE void launchGame(const QVariantMap &game, const QString &systemId);
@@ -70,6 +78,7 @@ private:
     QString m_romDir;
     QString m_thumbnailDir;
     QString m_retroarchPath;
+    QString m_playlistSort;
     DisplayHandoff *m_handoff = nullptr;
 
     void loadSettings();
