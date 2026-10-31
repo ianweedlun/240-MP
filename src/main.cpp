@@ -164,6 +164,7 @@ int main(int argc, char *argv[]) {
     MpvController       mpvController(appRoot, dataRoot, &appCore, &displayHandoff);
     InputManager        inputManager(dataRoot, &appCore);
     inputManager.setDisplayHandoff(&displayHandoff);
+    inputManager.setGameObserver(&retroArchBackend);
     IdleTracker         idleTracker(60);   // disabled until Main.qml applies the saved setting
     UpdateManager       updateManager(appRoot, dataRoot);
 

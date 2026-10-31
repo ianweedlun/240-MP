@@ -1,6 +1,7 @@
 #include "InputManager.h"
 #include "../AppCore.h"
 #include "../util/DisplayHandoff.h"
+#include "../modules/retroarch/RetroArchBackend.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -128,6 +129,10 @@ void InputManager::setTargetWindow(QQuickWindow *window) {
 
 void InputManager::setDisplayHandoff(DisplayHandoff *handoff) {
     m_handoff = handoff;
+}
+
+void InputManager::setGameObserver(RetroArchBackend *backend) {
+    m_raBackend = backend;
 }
 
 // ── SDL lifecycle ─────────────────────────────────────────────────────────────
@@ -691,8 +696,13 @@ void InputManager::deliverPress(Action a, bool autoRepeat) {
     // same evdev/SDL stream: a ROM-quit "Back" would double-handle here and
     // skew the QML nav stack by one extra goBack. Drop QML-bound delivery for
     // that owner only. mpv playback deliberately keeps delivering — the Player
-    // views translate keys into mpv IPC on their own. isHeldBy() is false on
-    // macOS/desktop where DisplayHandoff is a no-op, so this is Pi-only.
+    // views translate keys into mpv IPC on their own. Two signals, either one
+    // suffices: the DisplayHandoff owner token (where a VT/DRM hand-off exists)
+    // and the backend's live child process (where none is recorded). isHeldBy()
+    // is false on macOS/desktop where DisplayHandoff is a no-op, so this is
+    // Pi-only behaviour.
+    if (m_raBackend && m_raBackend->gameRunning())
+        return;
     if (m_handoff && m_handoff->isHeldBy(QStringLiteral("retroarch")))
         return;
     if (windowActive())
