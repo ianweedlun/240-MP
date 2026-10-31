@@ -305,6 +305,12 @@ Window {
                 moduleLoader.setSource(prev.source, { "navParams": prev.params, "navListState": prev.listState || {} })
             }
 
+            // Central listener for the row-selection telemetry signal. Views
+            // (ModuleList, Settings; module views bridged via Root.qml) emit
+            // rowSelected(name, index); we log it for remote test loops.
+            function onRowSelected(name, index) {
+                logState("select", name + " idx=" + index)
+            }
         }
     }
 

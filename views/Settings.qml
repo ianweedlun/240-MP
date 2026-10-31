@@ -6,6 +6,8 @@ FocusScope {
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
+    // Debug telemetry signal: highlighted settings row moved (Main.qml logs it).
+    signal rowSelected(name, index)
 
     property var navParams: ({})
     property var navListState: ({})
@@ -286,6 +288,7 @@ FocusScope {
     ListView {
         id: settingsList
         model: settingsItems
+
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.25 //120
@@ -375,6 +378,10 @@ FocusScope {
         delegate: Item {
             width: settingsList.width
             height: root.sh * 0.0583333 //28
+
+            // Debug telemetry: the row announces its own highlight.
+            property bool selected: settingsList.currentIndex === index
+            onSelectedChanged: if (selected) settingsRoot.rowSelected(modelData.label || modelData.id || modelData.type, index)
 
             // --- SECTION LABEL ---
             Text {

@@ -5,6 +5,8 @@ FocusScope {
 
     // Exit signal — emitted to leave the module entirely
     signal goBack()
+    // Debug telemetry: forward row-selection signals from any inner view.
+    signal rowSelected(name, index)
 
     property var navParams: ({})
 
@@ -22,6 +24,7 @@ FocusScope {
     function navigateTo(viewPath, params, fromState) {
         var resolved = Qt.resolvedUrl(viewPath)
         navStack.push({ source: internalLoader.source, params: currentParams, listState: fromState || {} })
+        appCore.note_state("nav-internal", "to=" + viewPath + " stack=" + navStack.length)
         currentParams = params || {}
         internalLoader.setSource(resolved, { "navParams": params || {} })
     }
@@ -34,10 +37,12 @@ FocusScope {
 
     function navigateBack() {
         if (navStack.length === 0) {
+            appCore.note_state("nav-internal", "top -> module-exit (goBack)")
             moduleRoot.goBack()
             return
         }
         var prev = navStack.pop()
+        appCore.note_state("nav-internal", "back=" + (prev.source || "(root)") + " stack=" + navStack.length)
         if (!prev.source || prev.source.toString() === "") {
             moduleRoot.goBack()
             return
@@ -60,6 +65,7 @@ FocusScope {
             function onNavigateTo(path, params, listState) { moduleRoot.navigateTo(path, params, listState) }
             function onReplaceWith(path, params) { moduleRoot.replaceWith(path, params) }
             function onGoBack() { moduleRoot.navigateBack() }
+            function onRowSelected(name, index) { moduleRoot.rowSelected(name, index) }
         }
     }
 
