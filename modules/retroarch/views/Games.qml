@@ -9,6 +9,7 @@ FocusScope {
     readonly property string playlistPath: navParams.playlistPath || ""
     readonly property string playlistName: navParams.playlistName || ""
     readonly property string playlistBasename: navParams.playlistBasename || ""
+    readonly property string shortName: navParams.shortName || ""
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
         // null/undefined means "never set" — the manifest default (RIGHT),
@@ -37,7 +38,7 @@ FocusScope {
     AppBar {
         iconSource: moduleRoot.moduleIcon
         title: moduleRoot.moduleName
-        subtitle: playlistName
+        subtitle: shortName || playlistName
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
