@@ -278,8 +278,11 @@ Window {
 
             function onGoBack() {
                 if (root.appNavStack.length === 0) {
-                    // Module is at its top level — exit module entirely, return to ModuleList
-                    moduleLoader.setSource("ModuleList.qml", { "navParams": { fromAppStartup: false } })
+                    // Module is at its top level — exit module entirely, return to ModuleList.
+                    // Use the full app-level path: a bare "ModuleList.qml" resolves
+                    // relative to the last-loaded source's directory (the module's own
+                    // views/, which has no such file) — never guess here.
+                    moduleLoader.setSource("views/ModuleList.qml", { "navParams": { fromAppStartup: false } })
                     root.appCurrentParams = {}
                     return
                 }
