@@ -111,5 +111,21 @@ Item {
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
         }
+        // Honest-absent rows: the air-quality API doesn't cover every region.
+        // Column relayouts around invisible children, so nothing shifts.
+        Text {
+            visible: screen.wx.airQuality !== undefined
+            text: "AIR QUALITY: " + (screen.wx.airQuality || "")
+            color: root.primaryColor
+            font.family: root.globalFont
+            font.pixelSize: screen.lineSize
+        }
+        Text {
+            visible: screen.wx.uvIndex !== undefined
+            text: "UV INDEX: " + (screen.wx.uvIndex || "")
+            color: root.primaryColor
+            font.family: root.globalFont
+            font.pixelSize: screen.lineSize
+        }
     }
 }
