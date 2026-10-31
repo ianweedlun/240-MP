@@ -68,7 +68,7 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125 //80
     }
 
-    ListView {
+    RowTrackingListView {
         id: optionsList
         model: options
         anchors.top: parent.top

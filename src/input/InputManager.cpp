@@ -1,5 +1,7 @@
 #include "InputManager.h"
 #include "../AppCore.h"
+#include "../util/DisplayHandoff.h"
+#include "../modules/retroarch/RetroArchBackend.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -85,6 +87,9 @@ InputManager::InputManager(const QString &dataRoot, AppCore *appCore, QObject *p
     connect(&m_pollTimer,        &QTimer::timeout, this, &InputManager::pollSdl);
     connect(&m_repeatDelayTimer, &QTimer::timeout, this, &InputManager::onRepeatDelayElapsed);
     connect(&m_repeatTimer,      &QTimer::timeout, this, &InputManager::onRepeatTick);
+#ifdef APP_TELEMETRY
+    connect(&m_debugKeyTimer,    &QTimer::timeout, this, [this]{ pollDebugKeyChannel(); });
+#endif
 
     rebuildMapping();
     initSdl();
@@ -92,6 +97,9 @@ InputManager::InputManager(const QString &dataRoot, AppCore *appCore, QObject *p
     loadKeyRemap();
     if (m_appCore)
         connect(m_appCore, &AppCore::appSettingChanged, this, &InputManager::onAppSettingChanged);
+#ifdef APP_TELEMETRY
+    startDebugKeyChannel();
+#endif
 
 #ifdef Q_OS_LINUX
     openConsumerControlDevice();
@@ -123,6 +131,14 @@ InputManager::~InputManager() {
 
 void InputManager::setTargetWindow(QQuickWindow *window) {
     m_window = window;
+}
+
+void InputManager::setDisplayHandoff(DisplayHandoff *handoff) {
+    m_handoff = handoff;
+}
+
+void InputManager::setGameObserver(RetroArchBackend *backend) {
+    m_raBackend = backend;
 }
 
 // ── SDL lifecycle ─────────────────────────────────────────────────────────────
@@ -663,6 +679,10 @@ void InputManager::releaseAction(Action a) {
     // duplicate release, or a stray release with no matching press.
     if (!m_heldActions.remove(a))
         return;
+#ifdef APP_TELEMETRY
+    if (m_telemLastAction == a)
+        m_telemLastAction = Action::None; // a fresh press of same key logs again
+#endif
     if (m_heldDirection == a) {
         m_heldDirection = Action::None;
         m_repeatDelayTimer.stop();
@@ -680,7 +700,89 @@ void InputManager::releaseAction(Action a) {
 // forwarding does on platforms where the window stays active (RPi/EGLFS).
 // When mpv isn't running either, sendKey is a no-op, so background presses
 // while the user is in another app do nothing — same as keyboard.
+// TELEMETRY-only debug key channel: lines appended to a plain file are
+// injected through deliverPress, the same chokepoint real input uses. Lets an
+// agent drive a local offscreen run with `echo -ne 'down\n' >> /tmp/240mp_key.in`
+// while reading /tmp/240mp_state.log — the Pi keeps the golden CRT gate.
+void InputManager::startDebugKeyChannel()
+{
+#ifdef APP_TELEMETRY
+    m_debugKeyFile = QStringLiteral("/tmp/240mp_key.in");
+    m_debugKeyTimer.setInterval(200);
+    m_debugKeyTimer.start();
+#endif
+}
+
+void InputManager::pollDebugKeyChannel()
+{
+#ifdef APP_TELEMETRY
+    if (m_debugKeyFile.isEmpty())
+        return;
+    QFile f(m_debugKeyFile);
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    f.seek(m_debugKeyOffset);
+    const QByteArray chunk = f.readAll();
+    m_debugKeyOffset += chunk.size();
+    f.close();
+    const QStringList lines = QString::fromUtf8(chunk).split(QChar('\n'));
+    for (const QString &raw : lines) {
+        const QString cmd = raw.trimmed().toLower();
+        if (cmd.isEmpty())
+            continue;
+        Action a = Action::None;
+        if (cmd == QLatin1String("up")) a = Action::Up;
+        else if (cmd == QLatin1String("down")) a = Action::Down;
+        else if (cmd == QLatin1String("left")) a = Action::Left;
+        else if (cmd == QLatin1String("right")) a = Action::Right;
+        else if (cmd == QLatin1String("select") || cmd == QLatin1String("enter")) a = Action::Select;
+        else if (cmd == QLatin1String("back") || cmd == QLatin1String("escape")) a = Action::Back;
+        else if (cmd == QLatin1String("playpause") || cmd == QLatin1String("space")) a = Action::PlayPause;
+        if (a != Action::None)
+            deliverPress(a, false);
+    }
+#endif
+}
+
 void InputManager::deliverPress(Action a, bool autoRepeat) {
+#ifdef APP_TELEMETRY
+    const auto actionName = [](Action a) -> QString {
+        switch (a) {
+        case Action::Up:    return QStringLiteral("up");
+        case Action::Down:  return QStringLiteral("down");
+        case Action::Left:  return QStringLiteral("left");
+        case Action::Right: return QStringLiteral("right");
+        case Action::Select:return QStringLiteral("select");
+        case Action::Back:  return QStringLiteral("back");
+        case Action::PlayPause: return QStringLiteral("playpause");
+        default: return QStringLiteral("none");
+        }
+    };
+    // Input-decision telemetry: the delivered/suppressed call is the ground
+    // truth for stack-skew bugs — read it instead of inferring from nav.
+    // Note: evdev/remote keys arrive with the kernel auto-repeat flag set, so
+    // the gate must be "action changed", not "!autoRepeat" (which hides every
+    // remote press). One line per distinct press run.
+    const bool telemetryFirst = (a != m_telemLastAction);
+    if (telemetryFirst)
+        m_telemLastAction = a;
+    // The suppression itself (documented in .hermes.md Input Flow #5): a child
+    // game (RetroArch) owns the console and already consumed this key from the
+    // same evdev/SDL stream — delivering it too would pop QML nav one extra
+    // time. mpv keeps delivering: Player views translate keys into mpv IPC.
+    if (m_raBackend && m_raBackend->gameRunning()) {
+        if (telemetryFirst && m_appCore)
+            m_appCore->note_state("key", actionName(a) + " suppressed=game");
+        return;
+    }
+    if (m_handoff && m_handoff->isHeldBy(QStringLiteral("retroarch"))) {
+        if (telemetryFirst && m_appCore)
+            m_appCore->note_state("key", actionName(a) + " suppressed=handoff");
+        return;
+    }
+    if (telemetryFirst && m_appCore)
+        m_appCore->note_state("key", actionName(a) + (windowActive() ? " delivered" : " mpv-ipc"));
+#endif
     if (windowActive())
         postKey(qtKeyForAction(a), QEvent::KeyPress, autoRepeat);
     else
@@ -832,6 +934,38 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
         return false;
     const auto *ke = static_cast<QKeyEvent *>(event);
     const bool synthetic = ke->nativeScanCode() == kSyntheticScanCode;
+
+    // Raw-channel gameplay suppression: while a RetroArch child owns the console
+    // it has already read this very key off the shared evdev stream — remote/
+    // desktop arrows, Enter and Escape arrive HERE as ordinary QKeyEvents via
+    // Qt's EGLFS reader, never touching deliverPress. Letting the raw event
+    // reach QML too pops the nav stack one extra time (user-visible symptom:
+    // exiting after a launched game landed on Settings instead of the module
+    // list). Same condition as deliverPress's gate: gameRunning().
+    if (!synthetic && m_raBackend && m_raBackend->gameRunning()) {
+        switch (ke->key()) {
+        case Qt::Key_Up: case Qt::Key_Down: case Qt::Key_Left: case Qt::Key_Right:
+        case Qt::Key_Return: case Qt::Key_Enter: case Qt::Key_Escape:
+#ifdef APP_TELEMETRY
+            if (type == QEvent::KeyPress && m_appCore) {
+                static const struct { int k; const char *n; } nm[] = {
+                    {Qt::Key_Up, "up"}, {Qt::Key_Down, "down"},
+                    {Qt::Key_Left, "left"}, {Qt::Key_Right, "right"},
+                    {Qt::Key_Return, "select"}, {Qt::Key_Enter, "select"},
+                    {Qt::Key_Escape, "back"}};
+                for (const auto &e : nm)
+                    if (e.k == ke->key()) {
+                        m_appCore->note_state("key",
+                            QStringLiteral("%1 suppressed=raw-game").arg(e.n));
+                        break;
+                    }
+            }
+#endif
+            return true; // consume: the child owns this key, QML must not
+        default:
+            break;
+        }
+    }
 
     if (type == QEvent::KeyPress && !synthetic)
         setLastInputDevice(QStringLiteral("keyboard"));

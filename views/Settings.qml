@@ -283,9 +283,10 @@ FocusScope {
         rightPadding: root.sw * 0.00625 //4
     }
 
-    ListView {
+    RowTrackingListView {
         id: settingsList
         model: settingsItems
+
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.25 //120

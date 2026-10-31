@@ -63,6 +63,20 @@ public:
     // EGLFS (non-composited OpenGL), so captureScreenshot prefers
     // QQuickWindow::grabWindow() through this handle.
     void setQuickWindow(QQuickWindow *w);
+    // Records the QML source the active ModuleLoader just loaded (e.g.
+    // "modules/com.240mp.retroarch/views/Games.qml"). Default-named
+    // screenshots embed it: 240mp_screenshot_retroarch-Games_<ts>.png.
+    Q_INVOKABLE void note_view(const QString &source);
+
+    // Debug aid (portable): append a machine-readable screen-state line to
+    // /tmp/240mp_state.log (epoch-time <event> <detail>). Called from Main.qml
+    // at view loads / nav transitions / screensaver changes so a remote test
+    // loop can track app state over SSH without screenshots or vision.
+    Q_INVOKABLE void note_state(const QString &event, const QString &detail);
+    // Central telemetry kill-switch for QML core primitives (RowTrackingListView
+    // and friends): false in release builds (TELEMETRY=OFF). C++ telemetry bodies
+    // are #ifdef-gated regardless; this lets QML-side logic skip work cheaply.
+    Q_INVOKABLE bool telemetryEnabled() const;
     QString captureScreenshot(const QString &outputPath = QString());
     Q_INVOKABLE QString takeScreenshot();
 
@@ -101,6 +115,7 @@ private:
     QString m_appRoot;
     QString m_dataRoot;
     QQuickWindow *m_quickWindow = nullptr;   // root window handle for screenshots (set by main.cpp)
+    QString m_activeViewSource;              // last QML source loaded (screenshot filename tag)
     QList<ModuleEntry> m_modules;
     QMap<QString, QObject*> m_backends;
 };

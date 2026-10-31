@@ -182,7 +182,7 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125 //80
     }
 
-    ListView {
+    RowTrackingListView {
         id: settingsList
         model: schemaItems
         anchors.top: parent.top

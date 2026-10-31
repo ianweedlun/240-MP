@@ -50,6 +50,10 @@ void RetroArchBackend::loadSettings() {
             if (m_retroarchPath.isEmpty())
                 m_retroarchPath = QStringLiteral("retroarch"); // from PATH
 
+            m_playlistSort = mod["playlist_sort"].toString();
+            if (m_playlistSort.isEmpty())
+                m_playlistSort = QStringLiteral("SYSTEM");
+
             // ── Migrate old show_preview (toggle) → thumbnail_display (list_single) ──
             bool needsSave = false;
             QString thumbDisplay;
@@ -86,6 +90,50 @@ void RetroArchBackend::loadSettings() {
         }
     }
 }
+
+// ── Live setting changes ─────────────────────────────────────────────────────
+// AppCore::registerBackend connects appCore.moduleSettingChanged to this slot
+// (same pattern as LocalFiles/Weather). Without it, m_playlistSort keeps
+// whatever the boot-time loadSettings() read, and every "live" refresh —
+// including fresh views created after Settings changes — silently re-sorts
+// with the stale value.
+void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &key,
+                                        const QVariant &value)
+{
+    if (moduleId != QStringLiteral("com.240mp.retroarch"))
+        return;
+    if (key == QLatin1String("playlist_sort")) {
+        m_playlistSort = value.toString();
+        if (m_playlistSort.isEmpty())
+            m_playlistSort = QStringLiteral("SYSTEM");
+        return;
+    }
+    if (key == QLatin1String("retroarch_path")) {
+        m_retroarchPath = value.toString();
+        if (m_retroarchPath.isEmpty())
+            m_retroarchPath = QStringLiteral("retroarch");
+        emit retroarchPathChanged();
+        return;
+    }
+    // playlist_directory / rom_directory / thumbnail_directory are submenu
+    // settings edited only via directory_browser — they still change the
+    // backend's own paths so a later browse sees the new roots without a
+    // restart.
+    if (key == QLatin1String("playlist_directory")) {
+        m_playlistDir = value.toString();
+        return;
+    }
+    if (key == QLatin1String("rom_directory")) {
+        m_romDir = value.toString();
+        return;
+    }
+    if (key == QLatin1String("thumbnail_directory")) {
+        m_thumbnailDir = value.toString();
+        return;
+    }
+}
+
+QString RetroArchBackend::playlistSort() const { return m_playlistSort; }
 
 QString RetroArchBackend::playlist_directory() const { return m_playlistDir; }
 QString RetroArchBackend::rom_directory() const { return m_romDir; }
@@ -212,10 +260,26 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
         });
     }
 
-    // Rows are labeled with the short name, so order by what the user sees.
-    std::sort(playlists.begin(), playlists.end(), [](const QVariant &a, const QVariant &b) {
+    // Order playlists according to playlist_sort setting:
+    // - SYSTEM (default): short display name ("GENESIS", "NES", "SNES") — alpha
+    // - COMPANY: group by manufacturer prefix from playlist filename (text
+    //   before first " - "), alpha within group; no-" - " entries fall back to
+    //   alpha as their own group.
+    const QString sortMode = m_playlistSort;
+    std::sort(playlists.begin(), playlists.end(), [sortMode](const QVariant &a, const QVariant &b) {
         const auto ma = a.toMap();
         const auto mb = b.toMap();
+        if (sortMode == QStringLiteral("COMPANY")) {
+            const QString nameA = ma.value(QStringLiteral("name")).toString();
+            const QString nameB = mb.value(QStringLiteral("name")).toString();
+            const int atA = nameA.indexOf(QStringLiteral(" - "));
+            const int atB = nameB.indexOf(QStringLiteral(" - "));
+            const QString compA = (atA >= 0) ? nameA.left(atA) : nameA;
+            const QString compB = (atB >= 0) ? nameB.left(atB) : nameB;
+            if (compA != compB) return compA < compB;
+            return nameA < nameB;
+        }
+        // SYSTEM (default): short name alphabetical
         const QString snA = ma.value(QStringLiteral("shortName")).toString();
         const QString snB = mb.value(QStringLiteral("shortName")).toString();
         const QString sa = snA.isEmpty() ? ma.value(QStringLiteral("name")).toString() : snA;
@@ -276,7 +340,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     QByteArray data = f.readAll();
     if (data.isEmpty()) return entries;
 
-    qInfo("[RetroArch] Parsing playlist: %s (size: %d bytes)", qPrintable(path), data.size());
+    qInfo("[RetroArch] Parsing playlist: %s (size: %lld bytes)", qPrintable(path), data.size());
 
     // Check for RZIP-compressed playlist (RetroArch 1.7.5+ default).
     // Header is 20 bytes:
@@ -301,7 +365,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
                            | (quint64(quint8(data[18])) << 48)
                            | (quint64(quint8(data[19])) << 56));
 
-        qInfo("[RetroArch] RZIP header: total_size=%llu, data.size()=%d",
+        qInfo("[RetroArch] RZIP header: total_size=%llu, data.size()=%lld",
               (qlonglong)totalSize, data.size());
 
         // Parse chunks: each chunk = 4-byte LE compressed_size + zlib data
@@ -381,7 +445,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
     // Extract the playlist's default core path — used to resolve "DETECT" entries.
     const QString defaultCorePath = doc.object()["default_core_path"].toString();
     qInfo("[RetroArch] Default core path: %s", qPrintable(defaultCorePath));
-    qInfo("[RetroArch] Parsed %d items from playlist", items.size());
+    qInfo("[RetroArch] Parsed %lld items from playlist", items.size());
     for (const QJsonValue &val : items) {
         QJsonObject item = val.toObject();
         const QString label = item["label"].toString();
@@ -389,12 +453,20 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
         if (label.isEmpty() || romPath.isEmpty()) continue;
 
         entries.append(QVariantMap{
+            // Thumbnail resolution moved out of parsePlaylist: it scanned the
+            // thumbnail tree for every game in every playlist at module open
+            // (~9s for 4.7k games). QML resolves per visible row via
+            // retroarchBackend.resolveThumbnail(name, playlistBasename).
             { "name", label },
             { "romPath", resolveRomPath(path, romPath) },
             { "corePath", resolveCorePath(item["core_path"].toString(), defaultCorePath) },
             { "coreName", QFileInfo(item["core_path"].toString()).baseName() },
             { "dbName", item["db_name"].toString() },
-            { "thumbnail", findThumbnail(label, systemId) },
+            // Thumbnail DBs are keyed by the playlist file's BASENAME WITH
+            // ORIGINAL CASE (RetroArch's own convention), while systemId is
+            // lower-cased for our internal identity. Keep them separate so
+            // any install — named or human-playlists — resolves.
+            { "thumbnail", QString() },
             { "systemId", systemId }
         });
     }
@@ -406,6 +478,34 @@ QString RetroArchBackend::resolveRomPath(const QString &playlistPath,
     // Absolute paths are used as-is — the playlist is the source of truth.
     if (QFileInfo(romPath).isAbsolute()) return romPath;
 
+    // RetroArch stores archive-internal entries as "archive.zip#entry.rom".
+    // The archive part is what must exist on disk; the whole string is what
+    // RetroArch needs to open it (it handles the '#' itself). Check the
+    // archive, not the composite path — QFileInfo treats "zip#entry" as a
+    // literal filename and always reports it missing.
+    const int hashAt = romPath.indexOf(QLatin1Char('#'));
+    const QString archivePart = (hashAt >= 0) ? romPath.left(hashAt) : romPath;
+
+    auto archiveResolved = [&](const QString &candidate) -> QString {
+        // Returns the path to pass to RetroArch when the archive exists at
+        // (or relative to) one of the known bases; empty string otherwise.
+        const QString full = QFileInfo(candidate).isAbsolute()
+                            ? candidate : QFileInfo(playlistPath).absoluteDir().filePath(candidate);
+        if (QFileInfo(full).exists())
+            return (hashAt >= 0) ? romPath : full;
+        // QDir::filePath passes absolute paths through, so try the relative
+        // candidate against the ROM root separately.
+        const QString underRom = QFileInfo(candidate).isAbsolute()
+                                ? QString() : QDir(m_romDir).filePath(candidate);
+        if (!underRom.isEmpty() && QFileInfo(underRom).exists())
+            return (hashAt >= 0) ? QDir(m_romDir).filePath(romPath) : underRom;
+        return QString();
+    };
+
+    const QString resolvedArchive = archiveResolved(archivePart);
+    if (!resolvedArchive.isEmpty())
+        return resolvedArchive;
+
     // Relative paths are stored relative to RetroArch's config dir (where the
     // playlists live), so try the playlist directory first…
     QFileInfo plInfo(playlistPath);
@@ -414,7 +514,7 @@ QString RetroArchBackend::resolveRomPath(const QString &playlistPath,
 
     // …then the configured ROM root (people commonly keep relative paths
     // rooted at their ROM folder).
-    candidate = QDir(m_romDir).filePath(romPath);
+    candidate =QDir(m_romDir).filePath(romPath);
     if (QFileInfo(candidate).exists()) return candidate;
 
     // Nothing on disk — return as-is so RetroArch still gets the path the
@@ -438,11 +538,13 @@ QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString
 }
 
 QString RetroArchBackend::findThumbnail(const QString &gameName,
-                                        const QString &systemId) const {
+                                        const QString &dirName) const {
     // RetroArch organises thumbnails as
-    // <thumbnails>/<core_name>/<Type>/<name>.png, Type being one of
-    // Named_Boxarts, Named_Snaps, Named_Titles, Boxarts, … — the "Named_"
-    // variants match the label, which is what we key on.
+    // <thumbnails>/<playlist basename, original case>/<Type>/<name>.png,
+    // Type being one of Named_Boxarts, Named_Snaps, Named_Titles, Boxarts, …
+    // — the "Named_" variants match the playlist label. dirName is the
+    // playlist basename WITH CASE PRESERVED; never pass the lower-cased
+    // internal systemId here.
     const QStringList thumbTypes = {
         QStringLiteral("Named_Boxarts"), QStringLiteral("Named_Snaps"),
         QStringLiteral("Named_Titles"),  QStringLiteral("Boxarts"),
@@ -454,23 +556,50 @@ QString RetroArchBackend::findThumbnail(const QString &gameName,
     const QStringList globs = { QStringLiteral("*.png"), QStringLiteral("*.jpg") };
 
     for (const QString &type : thumbTypes) {
-        const QDir thumbDir(m_thumbnailDir + "/" + systemId + "/" + type);
+        const QDir thumbDir(m_thumbnailDir + QStringLiteral("/") + dirName + QStringLiteral("/") + type);
         if (!thumbDir.exists()) continue;
 
-        // Cheap exact checks first.
-        for (const QString &ext : extensions) {
-            const QString exact = thumbDir.filePath(gameName + ext);
-            if (QFileInfo(exact).exists()) return exact;
+        // Exact, then RetroArcName-sanitized (thumbnail DBs mangle "/\\:*?|<>[]"
+        // etc. to "_" when generated from labels), then case-insensitive —
+        // three escalating attempts without pre-listing the directory.
+        const QString sanitized = sanitizeForThumbnailDb(gameName);
+        for (const QString &candidate : { gameName, sanitized }) {
+            for (const QString &ext : extensions) {
+                const QString exact = thumbDir.filePath(candidate + ext);
+                if (QFileInfo(exact).exists()) return exact;
+            }
         }
 
-        // Case-insensitive match (labels and filenames disagree on case).
         const QFileInfoList files = thumbDir.entryInfoList(globs, QDir::Files);
         for (const QFileInfo &file : files) {
-            if (file.completeBaseName().compare(gameName, Qt::CaseInsensitive) == 0)
+            const QString base = file.completeBaseName();
+            if (base.compare(gameName, Qt::CaseInsensitive) == 0
+                || base.compare(sanitizeForThumbnailDb(gameName), Qt::CaseInsensitive) == 0)
                 return file.absoluteFilePath();
         }
     }
     return QString();
+}
+
+QString RetroArchBackend::resolveThumbnail(const QString &gameName,
+                                          const QString &playlistBasename) const {
+    return findThumbnail(gameName, playlistBasename);
+}
+
+// Same character mangling RetroArch applies when naming thumbnail DB files
+// from labels: reserved path characters and brackets collapse to "_".
+QString RetroArchBackend::sanitizeForThumbnailDb(const QString &label) const {
+    QString out;
+    for (const QChar c : label) {
+        if (c == QLatin1Char('/') || c == QLatin1Char('\\') || c == QLatin1Char(':')
+            || c == QLatin1Char('*') || c == QLatin1Char('?') || c == QLatin1Char('|')
+            || c == QLatin1Char('<') || c == QLatin1Char('>') || c == QLatin1Char('[')
+            || c == QLatin1Char(']') || c == QLatin1Char('\n') || c == QLatin1Char('\t'))
+            out += QLatin1Char('_');
+        else
+            out += c;
+    }
+    return out;
 }
 
 // ── Launch ───────────────────────────────────────────────────────────────────
@@ -484,7 +613,12 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
         qWarning("[RetroArch] No ROM path for game: %s", qPrintable(game["name"].toString()));
         return;
     }
-    if (!QFileInfo(romPath).exists()) {
+    // Archive entries ("archive.zip#entry.rom") are recorded as one string;
+    // QFileInfo would treat it as a literal filename and report it missing.
+    // The archive itself is what has to exist — RetroArch opens the entry.
+    const int hashAt = romPath.indexOf(QLatin1Char('#'));
+    const QString onDisk = (hashAt >= 0) ? romPath.left(hashAt) : romPath;
+    if (!QFileInfo(onDisk).exists()) {
         qWarning("[RetroArch] ROM not found: %s", qPrintable(romPath));
         return;
     }
@@ -522,6 +656,7 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
             [this, process](QProcess::ProcessError error) {
         Q_UNUSED(error)
         qWarning("[RetroArch] process error: %s", qPrintable(process->errorString()));
+        m_gameProcess = nullptr;
         if (m_handoff)
             m_handoff->releaseDeferred(QLatin1String("retroarch"), []() {});
         process->deleteLater();
@@ -529,9 +664,11 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this, process](int exitCode, QProcess::ExitStatus) {
         qInfo("[RetroArch] exited with code %d", exitCode);
+        m_gameProcess = nullptr;
         if (m_handoff)
             m_handoff->releaseDeferred(QLatin1String("retroarch"), []() {});
         process->deleteLater();
     });
     process->start();
+    m_gameProcess = process;
 }
