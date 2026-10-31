@@ -1,5 +1,6 @@
 #include "InputManager.h"
 #include "../AppCore.h"
+#include "../util/DisplayHandoff.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -123,6 +124,10 @@ InputManager::~InputManager() {
 
 void InputManager::setTargetWindow(QQuickWindow *window) {
     m_window = window;
+}
+
+void InputManager::setDisplayHandoff(DisplayHandoff *handoff) {
+    m_handoff = handoff;
 }
 
 // ── SDL lifecycle ─────────────────────────────────────────────────────────────
@@ -681,6 +686,15 @@ void InputManager::releaseAction(Action a) {
 // When mpv isn't running either, sendKey is a no-op, so background presses
 // while the user is in another app do nothing — same as keyboard.
 void InputManager::deliverPress(Action a, bool autoRepeat) {
+    // While a child process whose semantics are entirely its own (RetroArch
+    // gameplay) holds the fullscreen display, it already consumes the very
+    // same evdev/SDL stream: a ROM-quit "Back" would double-handle here and
+    // skew the QML nav stack by one extra goBack. Drop QML-bound delivery for
+    // that owner only. mpv playback deliberately keeps delivering — the Player
+    // views translate keys into mpv IPC on their own. isHeldBy() is false on
+    // macOS/desktop where DisplayHandoff is a no-op, so this is Pi-only.
+    if (m_handoff && m_handoff->isHeldBy(QStringLiteral("retroarch")))
+        return;
     if (windowActive())
         postKey(qtKeyForAction(a), QEvent::KeyPress, autoRepeat);
     else
