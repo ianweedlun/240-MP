@@ -5,8 +5,6 @@ FocusScope {
 
     // Exit signal — emitted to leave the module entirely
     signal goBack()
-    // Debug telemetry: forward row-selection signals from any inner view.
-    signal rowSelected(name, index)
 
     property var navParams: ({})
 
@@ -65,7 +63,6 @@ FocusScope {
             function onNavigateTo(path, params, listState) { moduleRoot.navigateTo(path, params, listState) }
             function onReplaceWith(path, params) { moduleRoot.replaceWith(path, params) }
             function onGoBack() { moduleRoot.navigateBack() }
-            function onRowSelected(name, index) { moduleRoot.rowSelected(name, index) }
         }
     }
 
