@@ -38,7 +38,7 @@ FocusScope {
 
     signal goBack()
     // Debug telemetry signal: highlighted row moved (Main.qml logs it).
-    signal rowSelected(name, index)
+    signal rowSelected(name: string, index: int)
     focus: true
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
