@@ -104,9 +104,20 @@ private:
     // App-level "smooth_playback" setting (default ON). On the Pi 3 this selects the
     // smooth zero-copy overlay path; turning it OFF restores the crop-capable scaler path.
     bool smoothPlaybackEnabled() const;
-    // App-level "auto_crop" setting (default OFF). When ON, playback starts with
-    // panscan=1 so video fills a CRT/4:3 screen by default (still toggleable live).
-    bool autoCropEnabled() const;
+    // App-level "auto_fit" setting (default OFF). When ON, the fit mode is
+    // decided per load rather than at launch: content at or below the window's
+    // aspect gets panscan=1 (fills the screen, overflow cropped); wider content
+    // keeps its aspect (letterboxes) — the decision itself is the pure table
+    // in mpvfit::fitPanscanTarget (src/util/AutoFit.h).
+    bool autoFitEnabled() const;
+    // Apply the fit for one just-loaded video, once both aspects are known:
+    // window aspect from get_async on "width"/"height", content aspect from an
+    // observed "video-params/aspect". Nothing fires before mpv knows geometry.
+    void applyAutoFit(double contentAspect);
+    double m_windowAspect = 0.0;
+    double m_windowW = 0.0;
+    double m_windowH = 0.0;
+    double m_pendingContentAspect = 0.0;
     // True when the active decode path can't crop (Pi 3 overlay path with smooth
     // playback ON): --panscan blanks the video there. Gates auto-crop and tells
     // the OSC scripts to hide their CROP button.
