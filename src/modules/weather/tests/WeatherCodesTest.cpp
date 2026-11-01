@@ -16,6 +16,8 @@ private slots:
     void fogMistRequiresLowVisibility();
     void cardinalIsSixteenPoint();
     void skyRankOrdersByCoverage();
+    void uvCategoryMatchesNoaaBands();
+    void aqiCategoryMatchesUsAndEuTables();
 };
 
 void WeatherCodesTest::conditionForCodeMapsAllWmoCodes() {
@@ -158,6 +160,41 @@ void WeatherCodesTest::skyRankOrdersByCoverage() {
     QVERIFY(skyRank(kCodeMostlyCloudy) < skyRank(3));
     // Non-sky codes are not rankable.
     QCOMPARE(skyRank(61), -1);
+}
+
+void WeatherCodesTest::uvCategoryMatchesNoaaBands() {
+    // NOAA bands: Low 1-2, Moderate 3-5, High 6-7, Very High 8-10, Extreme 11+.
+    QCOMPARE(uvCategory(0.0),  QString("LOW"));
+    QCOMPARE(uvCategory(2.9),  QString("LOW"));
+    QCOMPARE(uvCategory(3.0),  QString("MODERATE"));
+    QCOMPARE(uvCategory(5.9),  QString("MODERATE"));
+    QCOMPARE(uvCategory(6.0),  QString("HIGH"));
+    QCOMPARE(uvCategory(7.9),  QString("HIGH"));
+    QCOMPARE(uvCategory(8.0),  QString("VERY HIGH"));
+    QCOMPARE(uvCategory(10.9), QString("VERY HIGH"));
+    QCOMPARE(uvCategory(11.0), QString("EXTREME"));
+}
+
+void WeatherCodesTest::aqiCategoryMatchesUsAndEuTables() {
+    // US EPA: 0-50, 51-100, 101-150, 151-200, 201-300, 301+.
+    QCOMPARE(aqiCategoryUs(0.0),   QString("GOOD"));
+    QCOMPARE(aqiCategoryUs(50.0),  QString("GOOD"));
+    QCOMPARE(aqiCategoryUs(51.0),  QString("MODERATE"));
+    QCOMPARE(aqiCategoryUs(100.0), QString("MODERATE"));
+    QCOMPARE(aqiCategoryUs(101.0), QString("SENSITIVE"));
+    QCOMPARE(aqiCategoryUs(150.0), QString("SENSITIVE"));
+    QCOMPARE(aqiCategoryUs(151.0), QString("UNHEALTHY"));
+    QCOMPARE(aqiCategoryUs(200.0), QString("UNHEALTHY"));
+    QCOMPARE(aqiCategoryUs(201.0), QString("SEVERE"));
+    QCOMPARE(aqiCategoryUs(300.0), QString("SEVERE"));
+    QCOMPARE(aqiCategoryUs(301.0), QString("EXTREME"));
+    // European CAIS: 0-20, 20-40, 40-60, 60-80, 80+.
+    QCOMPARE(aqiCategoryEu(0.0),  QString("LOW"));
+    QCOMPARE(aqiCategoryEu(19.9), QString("LOW"));
+    QCOMPARE(aqiCategoryEu(20.0), QString("MODERATE"));
+    QCOMPARE(aqiCategoryEu(40.0), QString("HIGH"));
+    QCOMPARE(aqiCategoryEu(60.0), QString("VERY HIGH"));
+    QCOMPARE(aqiCategoryEu(80.0), QString("EXTREME"));
 }
 
 QTEST_GUILESS_MAIN(WeatherCodesTest)
