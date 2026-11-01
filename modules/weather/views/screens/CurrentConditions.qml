@@ -42,11 +42,11 @@ Item {
     // row set never draws through the status bar. The glyph-advance estimate
     // is deliberately pessimistic (1.0em) — over-reserving leaves a gap,
     // under-reserving is what we must avoid.
-    function reservedLines(int i) {
+    function reservedLines(i) {
         var cap = Math.max(8, Math.floor(rowArea.width / screen.lineSize))
         return rowTexts()[i].length > cap ? 2 : 1
     }
-    function reservedOffset(int idx) {
+    function reservedOffset(idx) {
         var y = 0
         for (var i = 0; i < idx; ++i)
             y += reservedLines(i) * (screen.lineSize + screen.lineGap)
