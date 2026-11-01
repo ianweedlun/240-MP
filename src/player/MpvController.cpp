@@ -100,7 +100,7 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     // uses. Stopped whenever applyAutoFit finds no horizontal overflow.
     m_panTimer = new QTimer(this);
     m_panTimer->setInterval(100);
-    connect(m_panTimer, &QTimer::tick, this, [this] {
+    connect(m_panTimer, &QTimer::timeout, this, [this] {
         if (m_panAmp <= 0.0) { m_panTimer->stop(); return; }
         const double step = m_panAmp / 40.0; // 40 ticks = 4 s per side
         m_panValue += m_panDir * step;
