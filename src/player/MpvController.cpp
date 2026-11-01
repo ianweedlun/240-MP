@@ -3,6 +3,7 @@
 #include "../util/YtDlpLocator.h"
 #include "../util/MpvLocator.h"
 #include "../util/MpvBasicOptions.h"
+#include "../util/AutoFit.h"
 #include "../util/DisplayHandoff.h"
 #include "../util/FontconfigOverride.h"
 #include <QCoreApplication>
@@ -59,6 +60,14 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         sendCommand({"observe_property", 2, "duration"});
         sendCommand({"observe_property", 3, "playlist-pos"});
         sendCommand({"observe_property", 4, "pause"});
+        // Auto Fit watch wires: one-shot async reads for the output window size
+        // (fires even though these properties never "change"), and an observer
+        // for the loaded video's aspect — re-fires per file on playlist advance.
+        if (autoFitEnabled()) {
+            sendCommand({"get_async", "fit-w", "width"});
+            sendCommand({"get_async", "fit-h", "height"});
+            sendCommand({"observe_property", 5, "video-params/aspect"});
+        }
     });
     connect(m_ipc, &QLocalSocket::readyRead, this, &MpvController::onIpcReadyRead);
 
@@ -320,11 +329,12 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     if (QUrl(url).host().endsWith(QStringLiteral(".plex.direct")))
         args << QStringLiteral("--tls-verify=no");
 
-    // Auto Crop: start with panscan=1 unless the current decode path can't crop.
-    // The Pi3 overlay (smooth) path blanks video under panscan, so suppress there —
-    // matching the 1080p Playback trade-off. The OSC CROP button still toggles live.
-    if (autoCropEnabled() && !cropUnavailable())
-        args << QStringLiteral("--panscan=1");
+    // Auto Fit is NOT decided here: stream geometry (YouTube, Plex, Jellyfin)
+    // is unknown at launch, so the fit is applied per load through IPC once mpv
+    // reports window + content geometry — see the "video-params/aspect"
+    // observer in onIpcReadyRead and applyAutoFit(). The OSC CROP button still
+    // toggles live, and hide-crop=1 (set below) hides it on crop-incapable
+    // decode paths.
 
     // Video Levels: the RGB range mpv converts YUV into. Emitted only when the
     // user has overridden it, so "Auto" leaves both mpv's own default and
@@ -513,6 +523,28 @@ void MpvController::onIpcReadyRead() {
         const QByteArray line = m_ipc->readLine().trimmed();
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         if (obj.isEmpty()) continue;
+        // get_async replies (Auto Fit window-size reads) carry no "event" key —
+        // they complete once each; a null "error" means success. Compute the
+        // window aspect as soon as both halves are in, then flush any content
+        // aspect that arrived out of order.
+        const QString requestId = obj["request_id"].toString();
+        if (!requestId.isEmpty()) {
+            if (requestId == "fit-w" || requestId == "fit-h") {
+                if (obj.contains("error") && !obj["error"].isNull()) continue; // property unavailable
+                const double v = obj["data"].toDouble();
+                if (v > 0.0) {
+                    if (requestId == "fit-w") m_windowW = v; else m_windowH = v;
+                    if (m_windowW > 0.0 && m_windowH > 0.0) {
+                        m_windowAspect = m_windowW / m_windowH;
+                        if (m_pendingContentAspect > 0.0) {
+                            applyAutoFit(m_pendingContentAspect);
+                            m_pendingContentAspect = 0.0;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         const QString event = obj["event"].toString();
         // property-change is the hot path (fires many times per second), so test
         // it first; only other events pay for the end-file check below.
@@ -567,6 +599,15 @@ void MpvController::onIpcReadyRead() {
         } else if (name == "playlist-pos") {
             m_playlistPos = int(val);
             emit playlistPosChanged(m_playlistPos);
+        } else if (name == "video-params/aspect") {
+            // Auto Fit: fires once per file load (and on every aspect-changing
+            // property update). Defer if the window size hasn't reported yet.
+            if (val > 0.0) {
+                if (m_windowAspect > 0.0)
+                    applyAutoFit(val);
+                else
+                    m_pendingContentAspect = val;
+            }
         }
     }
 }
@@ -738,13 +779,24 @@ void MpvController::setTargetDisplay(int index, const QString &screenName) {
     m_displayScreenName = screenName;
 }
 
-bool MpvController::autoCropEnabled() const {
+bool MpvController::autoFitEnabled() const {
     // Default OFF: only an explicit "On" opts in. Stored by Settings as a string
     // ("On"/"Off") via the list_single row, so compare on the string form.
     if (!m_appCore)
         return false;
-    const QVariant v = m_appCore->get_setting(QString(), "auto_crop");
+    const QVariant v = m_appCore->get_setting(QString(), "auto_fit");
     return v.toString().compare(QStringLiteral("On"), Qt::CaseInsensitive) == 0;
+}
+
+void MpvController::applyAutoFit(const double contentAspect)
+{
+    // The per-load fit decision (#30 "auto-fit" replaces auto-crop): pure
+    // aspect comparison lives in mpvfit::fitPanscanTarget; here we only wire
+    // the verdict to mpv. Suppressed on decode paths where panscan blanks the
+    // picture (same gate as the old auto-crop), and before geometry is known.
+    if (!autoFitEnabled() || cropUnavailable() || contentAspect <= 0.0 || m_windowAspect <= 0.0)
+        return;
+    sendCommand({"set_property", "panscan", mpvfit::fitPanscanTarget(contentAspect, m_windowAspect)});
 }
 
 QString MpvController::videoOutputLevels() const {

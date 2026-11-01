@@ -112,15 +112,18 @@ FocusScope {
             })
         }
 
-        // Auto Crop — default crop (panscan) state for every video. Off by default;
-        // crop can still be toggled live during playback via the mpv OSC.
+        // Auto Fit — replaces the old blanket Auto Crop: the fit is decided per
+        // load through MpvController IPC (see applyAutoFit), not at launch.
+        // Content at or below the display's aspect fills the screen (its
+        // overflow is cropped); wider content keeps its aspect (letterbox).
+        // Off by default; live CROP toggle in the OSC is unchanged.
         items.push({
             type: "list_single",
-            key: "auto_crop",
-            label: "Auto Crop",
+            key: "auto_fit",
+            label: "Auto Fit",
             options: ["Off", "On"],
-            value: appSettings["auto_crop"] || "Off",
-            description: "[ON] Video starts cropped to fill screen\n[OFF] Video starts at its original aspect ratio",
+            value: appSettings["auto_fit"] || "Off",
+            description: "[ON] At/below display aspect: fill and crop. Above: keep aspect (letterbox)\n[OFF] Video starts at its original aspect ratio",
             moduleId: ""
         })
 
