@@ -87,6 +87,16 @@ FocusScope {
             moduleId: ""
         })
 
+        // PLAYBACK section — every setting that changes mpv's playback behavior
+        // lives together under one header (#18: "collect playback-behavior
+        // settings"; flat-nav preserved — a section header, not a nested
+        // submenu). Members: the Pi decode-path tradeoff (1080p playback),
+        // default crop state, video output levels, and the four mpv.conf
+        // options below them. Screen Saver stays OUTSIDE: it changes what is
+        // ON SCREEN when idle/paused (a burn-in aid), not how media plays.
+        // Color Scheme and Start on Module are shell behavior, not playback.
+        items.push({ type: "section", label: "Playback" })
+
         // Smooth Playback — only shown on devices whose smooth decode path can't
         // crop/zoom (the Pi 3 overlay path). Default ON; turning it off restores the
         // crop-capable video output. Takes effect on the next video.
