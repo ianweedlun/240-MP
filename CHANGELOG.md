@@ -4,6 +4,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Housekeeping & policy (dev, #31/#33)
+- Issue-post attribution now carries the git commit identity as a trailer-style footer
+  line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);
+  the marker phrase keeps the issue-feed watcher's detection contract unchanged (#31).
+- Artwork & attribution policy defined in `.hermes.md` (AI art = testing only; production
+  art human-made + libre, attribution mandatory) and `THANKS.md` created with verified
+  provenance for the bundled fonts, the RetroArch-derived module mark, and base
+  dependencies (#33). Weather condition-icon provenance flagged pending.
+
 ### Fixed — Weather module OSD behaviors (feature/weather-osd-signals, #17)
 - Opening the module no longer shows the volume-bar OSD (bar now appears only on real volume-key changes; the old `musicStateChanged` signal fired from autostarted music at open).
 - Volume clamps at 0/MUTE instead of bouncing to 50 (`musicVolume || 50` treated 0 as falsy — the reported wrap-to-middle).
