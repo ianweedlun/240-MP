@@ -1,5 +1,9 @@
 # 240-MP Development Guidelines
 
+**Agent contract first:** the project rules, communication pipeline, and definition-of-done
+live in **[.hermes.md](.hermes.md)** (repo root, single-sourced on `dev`, mirrored to every
+branch). Read it before working; this file must never duplicate it.
+
 240-MP is a retro VHS-style media app built with C++ Qt6 + QML, targeting Raspberry Pi 4 and macOS. Modules are self-contained media integrations (Plex, Local Files, Ambient Mode, etc.) that the app shell discovers and loads at startup.
 
 **Playback engine**: 240-MP launches **mpv** as a subprocess for video playback. mpv must be installed separately (`apt install mpv` on RPi/Debian, `brew install mpv` on macOS). The app handles all browsing, auth, and settings; when a video is selected it hands off to mpv fullscreen via `MpvController`, then resumes when mpv exits.
