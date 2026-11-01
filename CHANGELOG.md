@@ -4,13 +4,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Housekeeping & policy (dev, #31/#33)
+- Issue-post attribution now carries the git commit identity as a trailer-style footer
+  line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);
+  the marker phrase keeps the issue-feed watcher's detection contract unchanged (#31).
+- Artwork & attribution policy defined in `.hermes.md` (AI art = testing only; production
+  art human-made + libre, attribution mandatory) and `THANKS.md` created with verified
+  provenance for the bundled fonts, the RetroArch-derived module mark, and base
+  dependencies (#33). Weather condition-icon provenance flagged pending.
+
 ### Fixed — Weather module OSD behaviors (feature/weather-osd-signals, #17)
 - Opening the module no longer shows the volume-bar OSD (bar now appears only on real volume-key changes; the old `musicStateChanged` signal fired from autostarted music at open).
 - Volume clamps at 0/MUTE instead of bouncing to 50 (`musicVolume || 50` treated 0 as falsy — the reported wrap-to-middle).
 - Backed by a volume-only `musicVolumeChanged(int)` signal split; 10/10 weather unit tests green.
-
-### Changed — Weather volume OSD matches the Player OSD (#27, feature/weather-osd-signals)
-- QML volume bar re-authored 1:1 from `scripts/mpv-media-keys.lua` (the bar every Player view shows): same font (VCR OSD Mono), same two rows (fs×3 label above the bar row at 0.798/0.833 of frame height), same 20 ticks, filled = full-height opaque rect / unlit = short vertically-centred dash at ~31% alpha (\1a&HB0&), 35% slot gaps, and the lua's round-half-up fill rule instead of the old floor; fade window matches BAR_TIMEOUT (1.5 s).
 
 ### Added — RetroArch full functionality (feature/retroarch-full-functionality)
 - Live playlist sort (SYSTEM/ALPHA/COMPANY) re-applied on settings change; short-name section headers; playlist game counts.
