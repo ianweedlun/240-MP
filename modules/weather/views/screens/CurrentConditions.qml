@@ -35,6 +35,34 @@ Item {
         return out
     }
 
+    // Wrap-aware vertical reservation. Qt 6 has no Item.clipContent (the
+    // first fix attempt threw "Cannot assign to non-existent property" in the
+    // journal and blanked the view), so rows are CONTAINED BY BUDGET: a row
+    // that would wrap reserves two slots, following rows shift down, and the
+    // row set never draws through the status bar. The glyph-advance estimate
+    // is deliberately pessimistic (1.0em) — over-reserving leaves a gap,
+    // under-reserving is what we must avoid.
+    function reservedLines(int i) {
+        var cap = Math.max(8, Math.floor(rowArea.width / screen.lineSize))
+        return rowTexts()[i].length > cap ? 2 : 1
+    }
+    function reservedOffset(int idx) {
+        var y = 0
+        for (var i = 0; i < idx; ++i)
+            y += reservedLines(i) * (screen.lineSize + screen.lineGap)
+        return y
+    }
+    function rowFit() {
+        var used = 0, fit = 0
+        var n = rowTexts().length
+        for (var i = 0; i < n; ++i) {
+            used += reservedLines(i) * (screen.lineSize + screen.lineGap)
+            if (used > rowArea.height) break
+            fit++
+        }
+        return fit
+    }
+
     Text {
         id: title
         text: "CURRENTLY IN " + screen.locationName
@@ -92,10 +120,9 @@ Item {
         font.pixelSize: root.sh * 0.0875 //42
     }
 
-    // Data-line area: bottom-clipped to the screen (a wrapped-pathological row
-    // is cut at the frame edge, never drawn through the footer), and the row
-    // count clamped to what actually fits (the z-fighting over the status bar
-    // found on Pi screenshots came from unbounded row height).
+    // Data-line area: bottom-bounded to the screen; rows past the vertical
+    // budget are hidden instead of overrunning into the status bar (the z-
+    // fighting on Pi screenshots came from an unbounded row set).
     Item {
         id: rowArea
         anchors.top: conditions.bottom
@@ -103,15 +130,12 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        color: "transparent"
-        clipContent: true
 
         Repeater {
-            model: Math.min(screen.rowTexts().length,
-                            Math.floor(rowArea.height / (screen.lineSize + screen.lineGap)))
+            model: Math.min(screen.rowTexts().length, screen.rowFit())
             Text {
                 x: 0
-                y: index * (screen.lineSize + screen.lineGap)
+                y: screen.reservedOffset(index)
                 width: rowArea.width
                 wrapMode: Text.WordWrap
                 text: screen.rowTexts()[index]
