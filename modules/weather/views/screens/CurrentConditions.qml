@@ -96,7 +96,7 @@ Item {
     // is cut at the frame edge, never drawn through the footer), and the row
     // count clamped to what actually fits (the z-fighting over the status bar
     // found on Pi screenshots came from unbounded row height).
-    Rectangle {
+    Item {
         id: rowArea
         anchors.top: conditions.bottom
         anchors.topMargin: root.sh * 0.0395833 //19
