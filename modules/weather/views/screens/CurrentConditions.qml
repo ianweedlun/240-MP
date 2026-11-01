@@ -74,6 +74,10 @@ Item {
         font.pixelSize: root.sh * 0.0875 //42
     }
 
+    // Data lines are width-bounded and wrap (like ExtendedForecast's
+    // condition text) instead of running off the right edge: the worst-case
+    // rows ("AIR QUALITY: 312.5 EXTREME", "UV INDEX: 11 EXTREME") exceed the
+    // column width at lineSize, and unbounded Text drew past the screen.
     Column {
         anchors.top: conditions.bottom
         anchors.topMargin: root.sh * 0.0395833 //19
@@ -82,31 +86,61 @@ Item {
         spacing: screen.lineGap
 
         Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
             text: "HUMIDITY: " + (screen.wx.humidity || "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
         }
         Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
             text: "DEWPOINT: " + (screen.wx.dewPoint || "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
         }
         Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
             text: "PRESSURE: " + (screen.wx.pressure || "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
         }
         Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
             text: "WIND: " + (screen.wx.wind || "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
         }
         Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
             text: "VISIBILITY: " + (screen.wx.visibility || "")
+            color: root.primaryColor
+            font.family: root.globalFont
+            font.pixelSize: screen.lineSize
+        }
+        // Honest-absent rows: the air-quality API doesn't cover every region.
+        // Column relayouts around invisible children, so nothing shifts.
+        Text {
+            visible: screen.wx.airQuality !== undefined
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "AIR QUALITY: " + (screen.wx.airQuality || "")
+            color: root.primaryColor
+            font.family: root.globalFont
+            font.pixelSize: screen.lineSize
+        }
+        Text {
+            visible: screen.wx.uvIndex !== undefined
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "UV INDEX: " + (screen.wx.uvIndex || "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: screen.lineSize
