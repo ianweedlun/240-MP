@@ -17,6 +17,24 @@ Item {
     readonly property real lineSize: root.sh * 0.05 //24
     readonly property real lineGap:  root.sh * 0.0138021 //6.625
 
+    // Ordered row set: always-present rows first, then honest-absent ones
+    // (the air-quality/UV APIs don't cover every region). The status-bar
+    // ticker no longer carries this set (it duplicated the screen); this
+    // view is the single renderer for current-conditions rows.
+    function rowTexts() {
+        var w = screen.wx
+        var out = [
+            "HUMIDITY: " + (w.humidity || ""),
+            "DEWPOINT: " + (w.dewPoint || ""),
+            "PRESSURE: " + (w.pressure || ""),
+            "WIND: " + (w.wind || ""),
+            "VISIBILITY: " + (w.visibility || "")
+        ]
+        if (w.airQuality !== undefined) out.push("AIR QUALITY: " + (w.airQuality || ""))
+        if (w.uvIndex !== undefined) out.push("UV INDEX: " + (w.uvIndex || ""))
+        return out
+    }
+
     Text {
         id: title
         text: "CURRENTLY IN " + screen.locationName
@@ -74,76 +92,33 @@ Item {
         font.pixelSize: root.sh * 0.0875 //42
     }
 
-    // Data lines are width-bounded and wrap (like ExtendedForecast's
-    // condition text) instead of running off the right edge: the worst-case
-    // rows ("AIR QUALITY: 312.5 EXTREME", "UV INDEX: 11 EXTREME") exceed the
-    // column width at lineSize, and unbounded Text drew past the screen.
-    Column {
+    // Data-line area: bottom-clipped to the screen (a wrapped-pathological row
+    // is cut at the frame edge, never drawn through the footer), and the row
+    // count clamped to what actually fits (the z-fighting over the status bar
+    // found on Pi screenshots came from unbounded row height).
+    Rectangle {
+        id: rowArea
         anchors.top: conditions.bottom
         anchors.topMargin: root.sh * 0.0395833 //19
         anchors.left: parent.left
         anchors.right: parent.right
-        spacing: screen.lineGap
+        anchors.bottom: parent.bottom
+        color: "transparent"
+        clipContent: true
 
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "HUMIDITY: " + (screen.wx.humidity || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "DEWPOINT: " + (screen.wx.dewPoint || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "PRESSURE: " + (screen.wx.pressure || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "WIND: " + (screen.wx.wind || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "VISIBILITY: " + (screen.wx.visibility || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        // Honest-absent rows: the air-quality API doesn't cover every region.
-        // Column relayouts around invisible children, so nothing shifts.
-        Text {
-            visible: screen.wx.airQuality !== undefined
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "AIR QUALITY: " + (screen.wx.airQuality || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
-        }
-        Text {
-            visible: screen.wx.uvIndex !== undefined
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "UV INDEX: " + (screen.wx.uvIndex || "")
-            color: root.primaryColor
-            font.family: root.globalFont
-            font.pixelSize: screen.lineSize
+        Repeater {
+            model: Math.min(screen.rowTexts().length,
+                            Math.floor(rowArea.height / (screen.lineSize + screen.lineGap)))
+            Text {
+                x: 0
+                y: index * (screen.lineSize + screen.lineGap)
+                width: rowArea.width
+                wrapMode: Text.WordWrap
+                text: screen.rowTexts()[index]
+                color: root.primaryColor
+                font.family: root.globalFont
+                font.pixelSize: screen.lineSize
+            }
         }
     }
 }
