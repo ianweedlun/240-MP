@@ -316,25 +316,12 @@ FocusScope {
 
         utcOffsetSeconds: weatherBackend.utcOffsetSeconds
         twelveHour: weatherRoot.twelveHour
-        lines: {
-            var c = weatherBackend.current
-            if (!weatherBackend.hasData) return []
-            var out = [
-                weatherBackend.locationName,
-                "CURRENTLY: " + c.condition + " " + c.temperature,
-                "HUMIDITY: " + c.humidity,
-                "DEWPOINT: " + c.dewPoint,
-                "PRESSURE: " + c.pressure,
-                "WIND: " + c.wind,
-                "VISIBILITY: " + c.visibility
-            ]
-            // Both lines are honest-absent: the air-quality API doesn't cover
-            // every region, so the rows only render when the backend has data.
-            if (c.airQuality)
-                out.push("AIR QUALITY: " + c.airQuality)
-            if (c.uvIndex)
-                out.push("UV INDEX: " + c.uvIndex)
-            return out
-        }
+        // Ticker lines empty by design: current-conditions data is rendered
+        // once, fully, by the active screen (CurrentConditions.qml). The module
+        // used to feed the status-bar ticker this whole row set, which
+        // duplicated the screen's rows (a rotating DEWPOINT under a static
+        // DEWPOINT) and drew the rotating line through the footer area.
+        // Status bar keeps its one fixed row: location-local date + clock.
+        lines: []
     }
 }
