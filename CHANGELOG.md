@@ -4,11 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
-### Changed — Settings: consolidated playback-behavior settings into a Playback section (#18, feature/mpv-conf-direct-edit)
-- One section header ("Playback") groups every mpv-owned playback control — 1080p Playback tradeoff, Auto Crop, Video Levels, the four mpv.conf knobs (Audio Normalize, Sound Boost, Deinterlace, Audio Channels) — flat-nav preserved (section header, not nested submenu). Screen Saver stays outside (burn-in idle aid, not playback behavior); Color Scheme / Start on Module are shell behavior.
-
-### Added — mpv.conf as single source of truth for basic mpv knobs (#26, feature/mpv-conf-direct-edit)
-- The four basic mpv knobs read and write `~/.config/mpv/mpv.conf` directly (last-assignment-wins parse, comments skipped, underscore spellings tolerated, one-level `include` followed, byte-preserving in-place write-back); the "Mpv Conf" pseudo-value and config.json override layer are gone, with a one-time migration of legacy app-section keys at startup; out-of-menu values display honestly as `Custom (<raw>)`; mpv spawn args unchanged. Pure parser covered by unit tests.
+### Added — Housekeeping & policy (dev, #31/#33)
+- Issue-post attribution now carries the git commit identity as a trailer-style footer
+  line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);
+  the marker phrase keeps the issue-feed watcher's detection contract unchanged (#31).
+- Artwork & attribution policy defined in `.hermes.md` (AI art = testing only; production
+  art human-made + libre, attribution mandatory) and `THANKS.md` created with verified
+  provenance for the bundled fonts, the RetroArch-derived module mark, and base
+  dependencies (#33). Weather condition-icon provenance flagged pending.
 
 ### Fixed — Weather module OSD behaviors (feature/weather-osd-signals, #17)
 - Opening the module no longer shows the volume-bar OSD (bar now appears only on real volume-key changes; the old `musicStateChanged` signal fired from autostarted music at open).
