@@ -272,14 +272,15 @@ void WeatherBackend::onSettingChanged(const QString &moduleId, const QString &ke
         fetchWeather();
         fetchOthers();
     }
-    // Music volume: parse "50%" -> 50 and apply if music is playing.
+    // Music volume: parse "50%" -> 50 and apply if music is playing. This is
+    // the settings-sync path — silent apply, no OSD (a user volume change
+    // arrives via the QML volume keys through setMusicVolume).
     if (key == QLatin1String("music_volume")) {
         QString volStr = value.toString();
         bool ok = false;
         int volume = volStr.replace('%', "").toInt(&ok);
-        if (ok) {
-            setMusicVolume(volume);
-        }
+        if (ok)
+            setMusicVolumeSilent(volume);
     }
 }
 
@@ -485,6 +486,26 @@ void WeatherBackend::setMusicVolume(int volume) {
     }
     // Send volume command to mpv. The OSD bar is drawn in QML (Weather.qml)
     // because mpv's --vo=null doesn't reliably render OSD overlays.
+    const QJsonObject cmd{
+        { QStringLiteral("command"),
+          QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
+                      volume } }
+    };
+    m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
+}
+
+// Same apply, no OSD announce: the app re-applies module settings on open,
+// and that sync must not show a volume bar nobody touched (issue #27 design
+// note — the bar appears exactly on volume keys).
+void WeatherBackend::setMusicVolumeSilent(int volume)
+{
+    if (!m_music || m_music->state() == QProcess::NotRunning) return;
+    volume = qBound(0, volume, 100);
+    m_musicVolume = volume;
+    if (m_musicIpc->state() != QLocalSocket::ConnectedState) {
+        qWarning("[Weather] music IPC not connected — silent volume apply queued");
+        return;
+    }
     const QJsonObject cmd{
         { QStringLiteral("command"),
           QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),

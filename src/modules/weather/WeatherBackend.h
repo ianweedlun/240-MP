@@ -89,6 +89,9 @@ public:
     Q_INVOKABLE void toggleMusic();
     // Set music volume (0-100). Sends command to mpv via IPC and triggers OSD bar.
     Q_INVOKABLE void setMusicVolume(int volume);
+    // Settings-sync path: apply volume without feeding the OSD bar (opening a
+    // module re-applies music_volume; that is not a user volume change).
+    Q_INVOKABLE void setMusicVolumeSilent(int volume);
 
     // options_slot for the "displays" multiselect. Ids match Weather.qml's
     // allScreens list.
