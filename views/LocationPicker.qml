@@ -85,10 +85,10 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
     }
 
-    // The dial itself. A core GridView: cells fill the item from its top
-    // left, so the cursor rectangle can be positioned from the same
-    // metrics and can never drift off the cells.
-    GridView {
+    // The dial itself: a Repeater grid — same primitive the NfcCardWriter's
+    // card picker uses (GridView is not in this Qt build). Delegates lay out
+    // row-major with wrapping; a quarter-width delegate fixes the grid at 4x4.
+    Repeater {
         id: dial
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.30
@@ -96,26 +96,23 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125
-        columns: 4
-        model: locationPicker.glyphs.length
-        cellWidth: width / columns
-        cellHeight: height / 4
-        delegate: Text {
-            anchors.centerIn: parent
-            text: locationPicker.glyphs[index]
-            font.pixelSize: root.sh * 0.030
-            color: "#ffffff"
-        }
-    }
+        model: locationPicker.glyphs
+        delegate: Item {
+            width: parent.width / 4
+            height: root.sh * 0.09
 
-    Rectangle {
-        x: dial.x + (locationPicker.cell % 4) * dial.cellWidth
-        y: dial.y + Math.floor(locationPicker.cell / 4) * dial.cellHeight
-        width: dial.cellWidth
-        height: dial.cellHeight
-        color: "transparent"
-        borderColor: "#ffffff"
-        border.width: Math.max(1, root.sw * 0.006)
+            Rectangle {
+                anchors.fill: parent
+                color: index === locationPicker.cell ? root.accentColor : "transparent"
+            }
+            Text {
+                anchors.centerIn: parent
+                text: modelData
+                color: index === locationPicker.cell ? root.surfaceColor : "#ffffff"
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.030
+            }
+        }
     }
 
     // The composed spec, live. Nothing takes effect until OK.
