@@ -55,10 +55,20 @@ FocusScope {
         goBack()
     }
 
+    function move(target) {
+        locationPicker.cell = target
+        locationPicker.notice = ""
+    }
+
     Keys.onPressed: function(event) {
         // Arrows come through the same event as all keys: a key-code test
         // rather than per-handler signal (this Qt build's Keys namespace has
         // none of the directional handlers).
+        if (event.key === Qt.Key_F12) {
+            const out = appCore.takeScreenshot()
+            if (out.length) { console.log("[screenshot] wrote:", out) }
+            return
+        }
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
             locationPicker.goBack()
             event.accepted = true
