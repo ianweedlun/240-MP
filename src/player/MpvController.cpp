@@ -163,6 +163,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     m_watchdogTimer->stop();
     m_ipc->abort();
     m_connLogged = false;
+    m_rxLogged = 0;
     QFile::remove(m_socketPath);
     m_position    = 0;
     m_duration    = 0;
@@ -561,6 +562,8 @@ void MpvController::tryConnectIpc() {
 void MpvController::onIpcReadyRead() {
     while (m_ipc->canReadLine()) {
         const QByteArray line = m_ipc->readLine().trimmed();
+        if (++m_rxLogged <= 40)
+            qInfo("[MpvController] ipc rx: %.120s", line.constData());
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         if (obj.isEmpty()) continue;
         // Window-size replies (Auto Fit display reads) echo our integer
