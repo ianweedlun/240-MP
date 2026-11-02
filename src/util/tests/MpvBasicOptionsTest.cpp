@@ -40,8 +40,9 @@ private slots:
     void setUiValueReplacesInPlace();
     void setUiValueAppendsWhenAbsent();
     void unknownUiTokenIsRejected();
-    void autoFitFillsAtOrBelowWindowAspect();
+    void autoFitAlwaysFillsKnownGeometry();
     void autoFitUnknownGeometryKeepsAspect();
+    void autoFitWideContentPanAmplitude();
 };
 
 void MpvsBasicOptionsTest::absentFileKeepsBuiltInDefaults()
@@ -153,14 +154,15 @@ void MpvsBasicOptionsTest::unknownUiTokenIsRejected()
     rmTmpTree();
 }
 
-void MpvsBasicOptionsTest::autoFitFillsAtOrBelowWindowAspect()
+void MpvsBasicOptionsTest::autoFitAlwaysFillsKnownGeometry()
 {
-    // #30 auto-fit decision table: content at or below the display's aspect
-    // fills (panscan 1, overflow cropped); wider content keeps its aspect.
-    // Equal aspects take either path — geometry is identical.
-    QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 16.0 / 9.0), 1); // 4:3 on 16:9: fill+crop
+    // #30 + maintainer refinement: any known geometry FILLS (panscan 1) —
+    // bars are never produced. Wider content gets the pan & scan sweep
+    // (see autoFitWideContentPanAmplitude); narrower gets scaled up and
+    // center-cropped. Equal aspects take either path — geometry identical.
+    QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 16.0 / 9.0), 1); // below: scale+center-crop
     QCOMPARE(mpvfit::fitPanscanTarget(1.0, 1.0), 1);               // 1:1 on square display
-    QCOMPARE(mpvfit::fitPanscanTarget(2.35, 16.0 / 9.0), 0);       // anamorphic: letterbox
+    QCOMPARE(mpvfit::fitPanscanTarget(2.35, 16.0 / 9.0), 1);       // anamorphic: now pans
     QCOMPARE(mpvfit::fitPanscanTarget(9.0 / 16.0, 16.0 / 9.0), 1); // vertical phone clip
 }
 
@@ -170,6 +172,20 @@ void MpvsBasicOptionsTest::autoFitUnknownGeometryKeepsAspect()
     QCOMPARE(mpvfit::fitPanscanTarget(0.0, 16.0 / 9.0), 0);
     QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 0.0), 0);
     QCOMPARE(mpvfit::fitPanscanTarget(-1.0, -1.0), 0);
+}
+
+void MpvsBasicOptionsTest::autoFitWideContentPanAmplitude()
+{
+    // Pan-x units: half the fill box's horizontal overflow as a fraction of the
+    // scaled width (fill box = max(windowW, windowH*aspect) per aspect.c).
+    // 4:3 window, 16:9 content: fill box 5.333 units, overflow 1.333 -> ±0.125,
+    // which is exactly the outer quarters of the 16:9 frame that get cropped.
+    QVERIFY(qAbs(mpvfit::panSweepAmplitude(4.0, 3.0, 16.0 / 9.0) - 0.125) < 1e-9);
+    // No horizontal overflow -> no sweep (square on 4:3; tall in a wide window).
+    QCOMPARE(mpvfit::panSweepAmplitude(4.0, 3.0, 1.0), 0.0);
+    QCOMPARE(mpvfit::panSweepAmplitude(16.0, 9.0, 9.0 / 16.0), 0.0);
+    // Unknown geometry is never guessed.
+    QCOMPARE(mpvfit::panSweepAmplitude(0.0, 3.0, 16.0 / 9.0), 0.0);
 }
 
 QTEST_MAIN(MpvsBasicOptionsTest)

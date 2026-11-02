@@ -40,6 +40,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (0→Down+Right→`5`), capture `240mp-LocationPicker_v6_20261102_020145.png`;
   CI + macOS + Pi-probe green for `edcbdbf8`; deploy md5 `467c7d02…`.
 
+### Added — mpv playback settings (feature/mpv-conf-direct-edit, #30)
+- Settings → Settings tab → Playback submenu: live-editable playback controls (`auto_fit`,
+  video pan-scan levels, audio normalize/boost, `deinterlace`, `audio_channels`), read from and
+  persisted via `appCore.get_settings()`/`save_setting` and applied to mpv.conf at playback
+  (`src/player/MpvController`).
+- Auto-fit fills the display for any content; oversized content pans & scans across the CRT
+  (sweep timer connected via `QTimer::timeout` — the Qt6 signal house idiom).
+- Settings tab made reachable: Tab capture key ungated (injected key events are raw,
+  not app-synthetic; the 37c0d1e synthetic-event gate never fired).
+- PlaybackSettings.qml rewritten onto the proven Settings/Repeater subview contract: the
+  previous file was pseudo-QML the engine never parsed (blank blue submenu on the CRT).
+  Validated with the Pi's `qmldom` (new file PARSE-OK; old file confirmed invalid by the
+  same validator).
+
 ### Added — Housekeeping & policy (dev, #31/#33)
 - Issue-post attribution now carries the git commit identity as a trailer-style footer
   line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);

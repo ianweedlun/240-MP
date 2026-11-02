@@ -87,104 +87,9 @@ FocusScope {
             moduleId: ""
         })
 
-        // PLAYBACK section — every setting that changes mpv's playback behavior
-        // lives together under one header (#18: "collect playback-behavior
-        // settings"; flat-nav preserved — a section header, not a nested
-        // submenu). Members: the Pi decode-path tradeoff (1080p playback),
-        // default crop state, video output levels, and the four mpv.conf
-        // options below them. Screen Saver stays OUTSIDE: it changes what is
-        // ON SCREEN when idle/paused (a burn-in aid), not how media plays.
-        // Color Scheme and Start on Module are shell behavior, not playback.
-        items.push({ type: "section", label: "Playback" })
-
-        // Smooth Playback — only shown on devices whose smooth decode path can't
-        // crop/zoom (the Pi 3 overlay path). Default ON; turning it off restores the
-        // crop-capable video output. Takes effect on the next video.
-        if (mpvController.hasSmoothPlaybackTradeoff()) {
-            items.push({
-                type: "list_single",
-                key: "smooth_playback",
-                label: "1080p Playback",
-                options: ["On", "Off"],
-                value: appSettings["smooth_playback"] || "On",
-                description: "[ON] Enable 1080p content playback, crop will not function\n[OFF] Enable crop, 1080p content playback will stutter",
-                moduleId: ""
-            })
-        }
-
-        // Auto Fit — replaces the old blanket Auto Crop: the fit is decided per
-        // load through MpvController IPC (see applyAutoFit), not at launch.
-        // Content at or below the display's aspect fills the screen (its
-        // overflow is cropped); wider content keeps its aspect (letterbox).
-        // Off by default; live CROP toggle in the OSC is unchanged.
-        items.push({
-            type: "list_single",
-            key: "auto_fit",
-            label: "Auto Fit",
-            options: ["Off", "On"],
-            value: appSettings["auto_fit"] || "Off",
-            description: "[ON] At/below display aspect: fill and crop. Above: keep aspect (letterbox)\n[OFF] Video starts at its original aspect ratio",
-            moduleId: ""
-        })
-
-        // Video Output Range, the RGB range mpv converts YUV into. mpv's default
-        // is full range; a display expecting studio (limited) levels renders that
-        // as crushed blacks and blown whites, and the reverse reads as washed-out
-        // gray. Takes effect on the next video.
-        // The key keeps mpv's own name for the option; the label uses the wording
-        // TVs and GPU drivers use for the same control (HDMI RGB range, DRM
-        // "Broadcast RGB"), since that's what the setting is matching.
-        items.push({
-            type: "list_single",
-            key: "video_output_levels",
-            label: "Video Levels",
-            options: ["Auto", "Limited", "Full"],
-            value: appSettings["video_output_levels"] || "Auto",
-            description: "Match the color range your display expects\n[LIMITED] If blacks crush  [FULL] If blacks look gray",
-            moduleId: ""
-        })
-
-        // Basic mpv knobs at the app level. These now READ AND WRITE the
-        // user's ~/.config/mpv/mpv.conf directly: the menu shows the file's
-        // real value (mpv's built-in defaults when unset; "Custom (raw)"
-        // for values outside this menu). No override layer, no pseudo-state.
-        items.push({
-            type: "list_single",
-            key: "replaygain",
-            label: "Audio Normalize",
-            options: ["Off", "Track", "Album"],
-            value: appSettings["replaygain"] || "Custom (auto)",
-            description: "Level tracks to a common loudness using ReplayGain tags\n[TRACK] Per-track tags (most libraries)  [ALBUM] Keep album flow",
-            moduleId: ""
-        })
-        items.push({
-            type: "list_single",
-            key: "audio_gain",
-            label: "Sound Boost",
-            options: ["0", "2", "4", "6", "8", "-4"],
-            value: appSettings["audio_gain"] || "0",
-            description: "Raise all audio output by decibels (dB)",
-            moduleId: ""
-        })
-        items.push({
-            type: "list_single",
-            key: "deinterlace",
-            label: "Deinterlace",
-            options: ["Off", "Auto", "On"],
-            value: appSettings["deinterlace"] || "Off",
-            description: "Un interlaced sources (old TV, 50i DVDs) into progressive lines\n[AUTO] Only when the source is interlaced",
-            moduleId: ""
-        })
-        items.push({
-            type: "list_single",
-            key: "audio_channels",
-            label: "Audio Channels",
-            options: ["Auto", "Stereo", "Mono"],
-            value: appSettings["audio_channels"] || "Custom (auto)",
-            description: "[STEREO] Two channels  [MONO] One channel (shared CRT speaker)",
-            moduleId: ""
-        })
-
+        // PLAYBACK subview — all mpv-facing knobs live in their own view
+        // (views/PlaybackSettings.qml), entered from the Application section's
+        // list per the maintainer's refinement; rows preserved verbatim there.
         // SCREEN SAVER section — single control: OFF disables, a number sets the
         // timeout for both menu idle and playback pause (handled inside mpv).
         items.push({
@@ -215,6 +120,14 @@ FocusScope {
 
         // SYSTEM section
         items.push({ type: "section", label: "Application" })
+        // Playback subview first, above Controls: the maintainer asked that the
+        // user find every exposed mpv knob by entering "PLAYBACK" here.
+        items.push({
+            type: "submenu",
+            key: "playback_settings",
+            label: "Playback",
+            moduleId: ""
+        })
         items.push({
             type: "submenu",
             key: "remap_controls",
@@ -369,6 +282,8 @@ FocusScope {
             if (row && row.type === "submenu") {
                 if (row.key === "software_update")
                     settingsRoot.navigateTo("views/Update.qml", {}, { currentIndex: settingsList.currentIndex })
+                else if (row.key === "playback_settings")
+                    settingsRoot.navigateTo("views/PlaybackSettings.qml", {}, { currentIndex: settingsList.currentIndex })
                 else if (row.key === "remap_controls")
                     settingsRoot.navigateTo("views/RemapControls.qml", {}, { currentIndex: settingsList.currentIndex })
                 else
