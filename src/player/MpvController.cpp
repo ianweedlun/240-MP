@@ -107,24 +107,6 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                      silenceMs / 1000);
         }
     });
-    // Auto Fit pan & scan sweep: applyAutoFit() starts this timer when the just-
-    // loaded content is WIDER than the display (panscan=1 would crop its sides
-    // permanently). Each 100 ms tick nudges video-pan-x toward the opposite
-    // extreme and bounces off the ±amp limits (~4 s per side), so every column
-    // of the frame gets shown. mpv pans mid-playback via set_property without
-    // restarting the video output — same mechanism mpv's own positioning.lua
-    // uses. Stopped whenever applyAutoFit finds no horizontal overflow.
-    m_panTimer = new QTimer(this);
-    m_panTimer->setInterval(100);
-    connect(m_panTimer, &QTimer::timeout, this, [this] {
-        if (m_panAmp <= 0.0) { m_panTimer->stop(); return; }
-        const double step = m_panAmp / 40.0; // 40 ticks = 4 s per side
-        m_panValue += m_panDir * step;
-        if (m_panValue >= m_panAmp) { m_panValue = m_panAmp; m_panDir = -1.0; }
-        else if (m_panValue <= -m_panAmp) { m_panValue = -m_panAmp; m_panDir = 1.0; }
-        sendCommand({"set_property", "video-pan-x",
-                    QString::number(m_panValue, 'f', 4)});
-    });
 }
 
 MpvController::~MpvController() {
@@ -162,8 +144,6 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     }
     m_watchdogTimer->stop();
     m_ipc->abort();
-    m_connLogged = false;
-    m_rxLogged = 0;
     QFile::remove(m_socketPath);
     m_position    = 0;
     m_duration    = 0;
@@ -548,12 +528,8 @@ void MpvController::clearOsdPrompt() {
 }
 
 void MpvController::tryConnectIpc() {
-    if (m_ipc->state() == QLocalSocket::ConnectedState ||
-        m_ipc->state() == QLocalSocket::ConnectingState) {
-        if (m_ipc->state() == QLocalSocket::ConnectedState && !m_connLogged) {
-            m_connLogged = true;
-            qInfo("[MpvController] ipc socket connected (session)");
-        }
+    if (m_ipc->state() == QLocalSocket::ConnectedState
+        || m_ipc->state() == QLocalSocket::ConnectingState) {
         return;
     }
     m_ipc->connectToServer(m_socketPath);
@@ -562,8 +538,6 @@ void MpvController::tryConnectIpc() {
 void MpvController::onIpcReadyRead() {
     while (m_ipc->canReadLine()) {
         const QByteArray line = m_ipc->readLine().trimmed();
-        if (++m_rxLogged <= 40)
-            qInfo("[MpvController] ipc rx: %.120s", line.constData());
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         if (obj.isEmpty()) continue;
         // Window-size replies (Auto Fit display reads) echo our integer
@@ -618,19 +592,17 @@ void MpvController::onIpcReadyRead() {
         // property-change is the hot path (fires many times per second), so test
         // it first; only other events pay for the end-file check below.
         if (event != "property-change") {
-            qInfo("[MpvController] ipc event: %s", event.toUtf8().constData());
             // mpv reports why playback ended: "eof" (played to the end),
             // "quit"/"stop" (user exited), "error", etc. Remember the last one
             // so onProcessFinished can distinguish a natural finish from a quit.
             if (event == "end-file") {
                 m_lastEndFileReason = obj["reason"].toString();
             } else if (event == "video-reconfig") {
-                // mpv 0.40's IPC event stream for a file load is exactly:
-                // video-reconfig, then end-file (verified with a raw socket probe;
-                // start/playback-restart/file-loaded are NOT emitted over IPC).
-                // video-reconfig fires when the output is (re)configured at file
-                // load — params are ready there and no frame has decoded yet —
-                // so the aspect read + fit apply before frame one, per file.
+                // Fires at the output (re)configuration point of each file load —
+                // observed live in this app's session (event stream: file-loaded,
+                // property registrations, video-reconfig, playback-restart).
+                // Params are ready here and no frame has decoded yet, so the
+                // aspect read + static fit land before frame one, per file.
                 if (autoFitEnabled())
                     sendCommand({"get_property", "video-params/aspect"}, 9003);
             } else if (event == "playback-restart" && m_pendingStartClear) {
@@ -704,7 +676,6 @@ void MpvController::onProcessFinished() {
         qWarning("[MpvController] mpv exited with code %d", exitCode);
     m_connectTimer->stop();
     m_watchdogTimer->stop();
-    m_panTimer->stop();
     // Drain any buffered-but-unread IPC data before tearing the socket down.
     // readyRead and QProcess::finished are independent event-loop signals with
     // no ordering guarantee, so mpv's final "end-file" event may still be sitting
@@ -888,13 +859,13 @@ bool MpvController::autoFitEnabled() const {
 
 void MpvController::applyAutoFit(const double contentAspect)
 {
-    // The per-load fit decision (#30, maintainer-refined): with AUTO FIT ON,
+    // The per-load fit decision (maintainer-refined): with AUTO FIT ON,
     // a video with known geometry ALWAYS FILLS the display (panscan = 1) —
-    // bars are never produced. Wider content additionally gets the pan & scan
-    // sweep (the panTimer above), so the cropped side columns get shown;
-    // narrower content is scaled up and its vertical overflow center-cropped.
-    // The pure verdict + amplitude live in mpvfit (AutoFit.h); here we only
-    // wire the verdict to mpv. Nothing here is module-specific: Plex,
+    // bars are never produced, applied once at playback start; wider content is
+    // centered with its side columns permanently cropped, narrower content is
+    // scaled up and its vertical overflow center-cropped. No continuous re-framing.
+    // Pure fit verdict math lives in mpvfit (AutoFit.h); here we only wire the
+    // verdict to mpv. Nothing here is module-specific: Plex,
     // Jellyfin/Emby, YouTube, and Local Files all inherit identical treatment
     // through this one entry point. Suppressed on decode paths where panscan
     // blanks the picture (same gate as the old auto-crop), and while geometry
@@ -906,20 +877,13 @@ void MpvController::applyAutoFit(const double contentAspect)
     // Reset pan so a previous file's sweep position (or a manual pan) cannot
     // leak into this load's geometry decision.
     sendCommand({"set_property", "video-pan-x", "0"});
-    m_panValue = 0.0;
-    const double amp = mpvfit::panSweepAmplitude(m_windowW, m_windowH, contentAspect);
+    // Static fill by design (maintainer decision): auto-fit right-sizes the frame
+    // ONCE at playback start (video-reconfig point, before frame one) and the
+    // frame stays still — no continuous re-framing, no pan sweep. Wider content
+    // is centered, its side columns permanently cropped.
     // The verdict is the ground truth for this feature — visible, greppable.
-    qInfo("[MpvController] auto-fit verdict: content aspect %.3f vs display %.3f -> panscan %.2f, pan amp %.3f%s",
-          contentAspect, m_windowAspect, panscan, amp,
-          amp > 0.001 ? " (sweep on)" : "");
-    if (amp > 0.001) {
-        m_panAmp = amp;
-        m_panDir = 1.0;
-        m_panTimer->start();
-    } else {
-        m_panAmp = 0.0;
-        m_panTimer->stop();
-    }
+    qInfo("[MpvController] auto-fit verdict: content aspect %.3f vs display %.3f -> panscan %.2f, static centered fill",
+          contentAspect, m_windowAspect, panscan);
 }
 
 QString MpvController::videoOutputLevels() const {

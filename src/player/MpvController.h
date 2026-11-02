@@ -119,11 +119,6 @@ private:
     double m_windowW = 0.0;
     double m_windowH = 0.0;
     double m_pendingContentAspect = 0.0;
-    // Auto Fit pan & scan sweep state (only meaningful while a wide video is
-    // loaded; applyAutoFit starts/stops m_panTimer per load).
-    double m_panAmp = 0.0;   // amplitude in video-pan-x units
-    double m_panValue = 0.0; // current pan-x
-    double m_panDir = 0.0;   // ping-pong direction (±1)
     // True when the active decode path can't crop (Pi 3 overlay path with smooth
     // playback ON): --panscan blanks the video there. Gates auto-crop and tells
     // the OSC scripts to hide their CROP button.
@@ -142,11 +137,8 @@ private:
     QLocalSocket *m_ipc            = nullptr;
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
-    QTimer       *m_panTimer       = nullptr;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
-    bool          m_connLogged     = false;  // per-session 'ipc connected' debug line
-    int           m_rxLogged       = 0;      // per-session raw-IPC-line debug cap
     QString       m_appRoot;
     QString       m_dataRoot;
     QString       m_socketPath;

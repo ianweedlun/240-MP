@@ -113,6 +113,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   gate, property-change `data` gate); a WSL Qt6 probe over the captured Pi
   journal lines confirms the three branches now dispatch correctly.
 
+### Changed — Auto Fit: static centered fill, pan-sweep removed (dev)
+- Product decision (maintainer): auto-fit means right-size ONCE at playback
+  start, frame stays still — "not meant to fix that runs all the time". The
+  pan & scan sweep (a 100 ms timer walking video-pan-x ±amp, ~4 s/side) made
+  wider-than-CRT content dance on the CRT; removed for good, not an opt-in.
+- Cut: m_panTimer + m_pan{Amp,Value,Dir} members + ctor tick block + start/
+  stop/reset sites; mpvfit::panSweepAmplitude (+ its helper fillBoxWidth, +
+  include <algorithm>) deleted from AutoFit.h with the matching test method
+  removed from MpvBasicOptionsTest. applyAutoFit now: one set of
+  `panscan=1` + `video-pan-x 0` at the video-reconfig point, verdict logs
+  `static centered fill`. Same commit strips the debug trio (raw ipc-rx dump,
+  per-session connect marker, generic ipc-event echo) — the verdict line stays
+  as the feature's evidence tier.
+
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
   chokepoint as real input) now accepts `shot`/`f12` lines: invokes the same

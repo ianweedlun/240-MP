@@ -42,7 +42,6 @@ private slots:
     void unknownUiTokenIsRejected();
     void autoFitAlwaysFillsKnownGeometry();
     void autoFitUnknownGeometryKeepsAspect();
-    void autoFitWideContentPanAmplitude();
 };
 
 void MpvsBasicOptionsTest::absentFileKeepsBuiltInDefaults()
@@ -157,9 +156,8 @@ void MpvsBasicOptionsTest::unknownUiTokenIsRejected()
 void MpvsBasicOptionsTest::autoFitAlwaysFillsKnownGeometry()
 {
     // #30 + maintainer refinement: any known geometry FILLS (panscan 1) —
-    // bars are never produced. Wider content gets the pan & scan sweep
-    // (see autoFitWideContentPanAmplitude); narrower gets scaled up and
-    // center-cropped. Equal aspects take either path — geometry identical.
+    // bars are never produced, applied once at playback start (static, centered).
+    // Equal aspects take either path — geometry identical.
     QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 16.0 / 9.0), 1); // below: scale+center-crop
     QCOMPARE(mpvfit::fitPanscanTarget(1.0, 1.0), 1);               // 1:1 on square display
     QCOMPARE(mpvfit::fitPanscanTarget(2.35, 16.0 / 9.0), 1);       // anamorphic: now pans
@@ -172,20 +170,6 @@ void MpvsBasicOptionsTest::autoFitUnknownGeometryKeepsAspect()
     QCOMPARE(mpvfit::fitPanscanTarget(0.0, 16.0 / 9.0), 0);
     QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 0.0), 0);
     QCOMPARE(mpvfit::fitPanscanTarget(-1.0, -1.0), 0);
-}
-
-void MpvsBasicOptionsTest::autoFitWideContentPanAmplitude()
-{
-    // Pan-x units: half the fill box's horizontal overflow as a fraction of the
-    // scaled width (fill box = max(windowW, windowH*aspect) per aspect.c).
-    // 4:3 window, 16:9 content: fill box 5.333 units, overflow 1.333 -> ±0.125,
-    // which is exactly the outer quarters of the 16:9 frame that get cropped.
-    QVERIFY(qAbs(mpvfit::panSweepAmplitude(4.0, 3.0, 16.0 / 9.0) - 0.125) < 1e-9);
-    // No horizontal overflow -> no sweep (square on 4:3; tall in a wide window).
-    QCOMPARE(mpvfit::panSweepAmplitude(4.0, 3.0, 1.0), 0.0);
-    QCOMPARE(mpvfit::panSweepAmplitude(16.0, 9.0, 9.0 / 16.0), 0.0);
-    // Unknown geometry is never guessed.
-    QCOMPARE(mpvfit::panSweepAmplitude(0.0, 3.0, 16.0 / 9.0), 0.0);
 }
 
 QTEST_MAIN(MpvsBasicOptionsTest)
