@@ -26,6 +26,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Evidence screenshots (`evidence/**`, 17 files) untracked from the tree — validation artifacts live
   on the tracking issues; older ones remain recoverable via git history at the commits that validated them.
 
+### Fixed — Deploy skip-gate keying (dev)
+- The tree-skip fast path broke on its first live run: the workflow's GITHUB_TOKEN is
+  Actions/Metadata-scoped, so the `/repos/.../commits` tree lookup 404'd (and a `${GITHUB_TOKEN}`
+  reference was empty), failing the deploy step outright. Re-keyed to the commit-level gate
+  (`~/.240mp-last-deployed-rev`) sourced event-natively from `github.event.workflow_run.head_sha`
+  — no API call; never-wrong skip preserved, tree-level rationale kept in the workflow comments.
+
 ### Changed — Telemetry portability contract line (dev)
 - Contract gains a Code Conventions section: telemetry primitives (CMake `TELEMETRY` option,
   `telemetryEnabled` signals, `AppCore::log/startTelemetrySession`) are pinned app-level, outside
