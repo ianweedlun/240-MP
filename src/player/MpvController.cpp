@@ -67,8 +67,23 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         // and an observer for the loaded video's aspect — re-fires per file on
         // playlist advance. Replies carry error:"success" on OK (mpv 0.38+).
         if (autoFitEnabled()) {
-            sendCommand({"get_property", "display-width"}, 9001);
-            sendCommand({"get_property", "display-height"}, 9002);
+            // Fit target. The DRM path (vo=drm, the Pi) has NO windowing backend:
+            // mpv's display-width/display-height IPC read answers 'property
+            // unavailable' there. The app knows the plane (main.cpp handed its
+            // startup QScreen enumeration to AppCore — the same KMS page vo=drm
+            // draws to), so seed from that; only fall back to the mpv read when
+            // the app has no geometry (desktop VOs do report it).
+            const QSize g = m_appCore ? m_appCore->displayGeometry() : QSize();
+            if (g.width() > 0 && g.height() > 0) {
+                m_windowW = g.width();
+                m_windowH = g.height();
+                m_windowAspect = g.width() / double(g.height());
+                qInfo("[MpvController] auto-fit: display size from app (%dx%d px, aspect %.3f)",
+                      g.width(), g.height(), m_windowAspect);
+            } else {
+                sendCommand({"get_property", "display-width"}, 9001);
+                sendCommand({"get_property", "display-height"}, 9002);
+            }
             sendCommand({"observe_property", 5, "video-params/aspect"});
         }
     });

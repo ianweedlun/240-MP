@@ -78,6 +78,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and `auto-fit verdict: … panscan … (sweep on|)` per file load. If the VO can't
   report display size, a `display-size read failed` warning explains why fit stays
   off. Pure fit math (mpvfit/AutoFit.h) unchanged, still unit-tested.
+- Follow-up (same day): DRM VOs have no windowing backend at all — `display-width`
+  read answered `property unavailable` on the Pi. The fit target now comes from the
+  app's own startup display enumeration (main.cpp hands its QScreen geometry to
+  `AppCore::setDisplayGeometry`; on EGLFS that IS the KMS plane `vo=drm` draws to).
+  The mpv IPC read remains only as the desktop fallback. Journal now logs
+  `auto-fit: display size from app (…px)` at mpv connect.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`

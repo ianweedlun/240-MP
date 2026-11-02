@@ -592,6 +592,11 @@ void AppCore::setQuickWindow(QQuickWindow *w)
     m_quickWindow = w;
 }
 
+void AppCore::setDisplayGeometry(int width, int height)
+{
+    m_displayGeometry = QSize(width, height);
+}
+
 QString AppCore::captureScreenshot(const QString &outputPath)
 {
     QString path = outputPath;

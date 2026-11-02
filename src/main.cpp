@@ -149,6 +149,10 @@ int main(int argc, char *argv[]) {
     const QRect screenGeo = targetScreen ? targetScreen->geometry() : QRect(0, 0, 1920, 1080);
     qInfo("[main] UI target display index %d -> %dx%d at (%d,%d)",
           displayIndex, screenGeo.width(), screenGeo.height(), screenGeo.x(), screenGeo.y());
+    // Auto Fit fit-target source: mpv's DRM VOs (the Pi path) have no windowing
+    // backend and can't report display size over IPC; the app's own startup
+    // enumeration IS the KMS plane vo=drm draws to. Hand it to AppCore once.
+    appCore.setDisplayGeometry(screenGeo.width(), screenGeo.height());
 
     LocalFilesBackend   localFiles(appRoot, dataRoot);
     PlexBackend         plexBackend(appRoot, dataRoot);

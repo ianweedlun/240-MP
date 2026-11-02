@@ -3,6 +3,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QJsonObject>
+#include <QSize>
 #include <QMap>
 #include <QCoreApplication>
 #include <QQuickWindow>
@@ -63,6 +64,13 @@ public:
     // EGLFS (non-composited OpenGL), so captureScreenshot prefers
     // QQuickWindow::grabWindow() through this handle.
     void setQuickWindow(QQuickWindow *w);
+    // Startup physical display geometry (px): main.cpp hands over its QScreen
+    // enumeration result after applying display_index. On EGLFS this IS the
+    // DRM/KMS plane — i.e. the exact area mpv's vo=drm draws into. Auto Fit
+    // seeds its fit target from this because DRM VOs have no windowing backend
+    // to report display-width/height over IPC.
+    void setDisplayGeometry(int width, int height);
+    QSize displayGeometry() const { return m_displayGeometry; }
     // Records the QML source the active ModuleLoader just loaded (e.g.
     // "modules/com.240mp.retroarch/views/Games.qml"). Default-named
     // screenshots embed it: 240mp_screenshot_retroarch-Games_<ts>.png.
@@ -119,6 +127,7 @@ private:
     QString m_appRoot;
     QString m_dataRoot;
     QQuickWindow *m_quickWindow = nullptr;   // root window handle for screenshots (set by main.cpp)
+    QSize m_displayGeometry;                 // physical display px at startup (set by main.cpp; Auto Fit target on DRM paths)
     QString m_activeViewSource;              // last QML source loaded (screenshot filename tag)
     QList<ModuleEntry> m_modules;
     QMap<QString, QObject*> m_backends;
