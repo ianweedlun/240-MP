@@ -60,7 +60,7 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: menuList;
         model: [];
         anchors.top: parent.top
@@ -71,6 +71,7 @@ FocusScope {
         height: root.sh * 0.525 //252
         clip: true;
         focus: true;
+
 
         delegate: Item {
             width: menuList.width;

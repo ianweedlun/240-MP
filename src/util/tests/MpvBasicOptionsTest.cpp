@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QVariantMap>
 #include "../MpvBasicOptions.h"
+#include "../AutoFit.h"
 
 // All cases write mpv.conf fixtures under a temp dir and check effectiveTokens
 // / setUiValue against them: pure file-in, tokens-out. No mpv spawning.
@@ -39,6 +40,8 @@ private slots:
     void setUiValueReplacesInPlace();
     void setUiValueAppendsWhenAbsent();
     void unknownUiTokenIsRejected();
+    void autoFitFillsAtOrBelowWindowAspect();
+    void autoFitUnknownGeometryKeepsAspect();
 };
 
 void MpvsBasicOptionsTest::absentFileKeepsBuiltInDefaults()
@@ -148,6 +151,25 @@ void MpvsBasicOptionsTest::unknownUiTokenIsRejected()
     QCOMPARE(QString::fromUtf8(f.readAll()), QStringLiteral("contrast=1.2")); // untouched
     f.close();
     rmTmpTree();
+}
+
+void MpvsBasicOptionsTest::autoFitFillsAtOrBelowWindowAspect()
+{
+    // #30 auto-fit decision table: content at or below the display's aspect
+    // fills (panscan 1, overflow cropped); wider content keeps its aspect.
+    // Equal aspects take either path — geometry is identical.
+    QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 16.0 / 9.0), 1); // 4:3 on 16:9: fill+crop
+    QCOMPARE(mpvfit::fitPanscanTarget(1.0, 1.0), 1);               // 1:1 on square display
+    QCOMPARE(mpvfit::fitPanscanTarget(2.35, 16.0 / 9.0), 0);       // anamorphic: letterbox
+    QCOMPARE(mpvfit::fitPanscanTarget(9.0 / 16.0, 16.0 / 9.0), 1); // vertical phone clip
+}
+
+void MpvsBasicOptionsTest::autoFitUnknownGeometryKeepsAspect()
+{
+    // Unknown geometry (property unavailable / zero) never guesses: keep aspect.
+    QCOMPARE(mpvfit::fitPanscanTarget(0.0, 16.0 / 9.0), 0);
+    QCOMPARE(mpvfit::fitPanscanTarget(4.0 / 3.0, 0.0), 0);
+    QCOMPARE(mpvfit::fitPanscanTarget(-1.0, -1.0), 0);
 }
 
 QTEST_MAIN(MpvsBasicOptionsTest)

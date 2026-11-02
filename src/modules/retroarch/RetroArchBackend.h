@@ -30,6 +30,15 @@ public:
 
     QString retroarchPath() const { return m_retroarchPath; }
 
+    // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
+    QString playlistSort() const;
+
+    // True while the RetroArch child process launched by launchGame() is alive.
+    // InputManager consults this (the child owns the whole console — the app
+    // reads the same evdev stream) so a ROM-quit Back doesn't double-handle as
+    // an extra goBack() in the QML navigation stack.
+    bool gameRunning() const { return m_gameProcess != nullptr; }
+
     // Path getters for the settings UI.
     Q_INVOKABLE QString playlist_directory() const;
     Q_INVOKABLE QString rom_directory() const;
@@ -46,6 +55,11 @@ public:
     Q_INVOKABLE QVariantList refreshPlaylists(const QString &systemId);
     // Parse one playlist file into its game entries.
     Q_INVOKABLE QVariantList refreshGames(const QString &playlistPath);
+    // Resolve a game's thumbnail on demand — called by QML for the visible
+    // rows only, so opening a playlist never scans the thumbnail tree for
+    // every game in it. Same rules as findThumbnail; covered by tests.
+    Q_INVOKABLE QString resolveThumbnail(const QString &gameName,
+                                         const QString &playlistBasename) const;
     // Launch a game: hand the display to RetroArch, run it with the item's
     // core, restore the display when it exits.
     Q_INVOKABLE void launchGame(const QVariantMap &game, const QString &systemId);
@@ -63,6 +77,12 @@ signals:
     void gamesReady(const QVariantList &games);
     void retroarchPathChanged();
 
+public slots:
+    // Auto-wired by AppCore::registerBackend to appCore.moduleSettingChanged.
+    // Without this, config changes (playlist sort) only reach us at startup,
+    // and every refresh keeps sorting with the value from boot.
+    void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
+
 private:
     QString m_appRoot;
     QString m_dataRoot;
@@ -70,14 +90,17 @@ private:
     QString m_romDir;
     QString m_thumbnailDir;
     QString m_retroarchPath;
+    QString m_playlistSort;
     DisplayHandoff *m_handoff = nullptr;
+    QProcess *m_gameProcess = nullptr; // the live launchGame() child, null when not running
 
     void loadSettings();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds
     // .lpl. Both are scanned so either install works without configuration.
     static QStringList playlistFilters();
     QVariantList parsePlaylist(const QString &path, const QString &systemId);
-    QString findThumbnail(const QString &gameName, const QString &systemId) const;
+    QString findThumbnail(const QString &gameName, const QString &dirName) const;
+    QString sanitizeForThumbnailDb(const QString &label) const;
     QString resolveRomPath(const QString &playlistPath, const QString &romPath) const;
     // Core .so location for an item: its core_path if present, else the cores
     // directory next to the config (where RetroArch installs cores).

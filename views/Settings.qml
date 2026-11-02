@@ -87,6 +87,16 @@ FocusScope {
             moduleId: ""
         })
 
+        // PLAYBACK section — every setting that changes mpv's playback behavior
+        // lives together under one header (#18: "collect playback-behavior
+        // settings"; flat-nav preserved — a section header, not a nested
+        // submenu). Members: the Pi decode-path tradeoff (1080p playback),
+        // default crop state, video output levels, and the four mpv.conf
+        // options below them. Screen Saver stays OUTSIDE: it changes what is
+        // ON SCREEN when idle/paused (a burn-in aid), not how media plays.
+        // Color Scheme and Start on Module are shell behavior, not playback.
+        items.push({ type: "section", label: "Playback" })
+
         // Smooth Playback — only shown on devices whose smooth decode path can't
         // crop/zoom (the Pi 3 overlay path). Default ON; turning it off restores the
         // crop-capable video output. Takes effect on the next video.
@@ -102,15 +112,18 @@ FocusScope {
             })
         }
 
-        // Auto Crop — default crop (panscan) state for every video. Off by default;
-        // crop can still be toggled live during playback via the mpv OSC.
+        // Auto Fit — replaces the old blanket Auto Crop: the fit is decided per
+        // load through MpvController IPC (see applyAutoFit), not at launch.
+        // Content at or below the display's aspect fills the screen (its
+        // overflow is cropped); wider content keeps its aspect (letterbox).
+        // Off by default; live CROP toggle in the OSC is unchanged.
         items.push({
             type: "list_single",
-            key: "auto_crop",
-            label: "Auto Crop",
+            key: "auto_fit",
+            label: "Auto Fit",
             options: ["Off", "On"],
-            value: appSettings["auto_crop"] || "Off",
-            description: "[ON] Video starts cropped to fill screen\n[OFF] Video starts at its original aspect ratio",
+            value: appSettings["auto_fit"] || "Off",
+            description: "[ON] At/below display aspect: fill and crop. Above: keep aspect (letterbox)\n[OFF] Video starts at its original aspect ratio",
             moduleId: ""
         })
 
@@ -283,9 +296,10 @@ FocusScope {
         rightPadding: root.sw * 0.00625 //4
     }
 
-    ListView {
+    RowTrackingListView {
         id: settingsList
         model: settingsItems
+
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.25 //120

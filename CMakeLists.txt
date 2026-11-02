@@ -8,6 +8,14 @@ set(CMAKE_AUTOMOC ON)
 # Strip qDebug(...) calls in Release builds to reduce CPU/disk noise on Pi
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DQT_NO_DEBUG_OUTPUT")
 
+# Debug telemetry (screen-state log, row-selection and input-decision signals
+# for remote test loops). Production builds: -DTELEMETRY=OFF compiles the C++
+# bodies out; the QML emit/listener wiring then calls an inert stub.
+option(TELEMETRY "Debug telemetry for remote test loops" ON)
+if(TELEMETRY)
+    add_compile_definitions(APP_TELEMETRY)
+endif()
+
 # Release version string. CI passes the git tag (-DAPP_VERSION=vX.Y.Z); local
 # builds report "dev", which disables the in-app self-update download path.
 set(APP_VERSION "dev" CACHE STRING "Release version (CI passes the git tag)")

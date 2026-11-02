@@ -9,12 +9,6 @@ FocusScope {
     readonly property string systemId: navParams.systemId || ""
     readonly property string systemName: navParams.systemName || ""
     readonly property bool showAllPlaylists: systemId === ""
-    readonly property string thumbDisplay: {
-        var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
-        return (v === "LEFT" || v === "RIGHT") ? v : "OFF"
-    }
-    readonly property bool showPreview: thumbDisplay !== "OFF"
-    readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
@@ -98,15 +92,16 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: playlistList
+
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.left: previewOnLeft ? previewLoader.right : parent.left
-        anchors.right: previewOnLeft ? parent.right : previewLoader.left
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
-        anchors.rightMargin: previewOnLeft ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
-        width: playlistsRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.leftMargin: root.sw * 0.115625 //74
+        anchors.rightMargin: root.sw * 0.115625 //74
+        width: root.sw * 0.76875
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
         clip: true
@@ -116,7 +111,7 @@ FocusScope {
             var pl = model[currentIndex]
             if (!pl) return
             navigateTo("Games.qml",
-                { playlistPath: pl.path, playlistName: pl.name, systemId: systemId },
+                { playlistPath: pl.path, playlistName: pl.name, playlistBasename: pl.name, shortName: pl.shortName || pl.name, systemId: systemId },
                 { currentIndex: playlistList.currentIndex })
         }
 
@@ -172,7 +167,10 @@ FocusScope {
 
             Text {
                 text: modelData.count + " GAMES"
-                color: playlistList.currentIndex === index ? root.surfaceColor : root.tertiaryColor
+                // The highlight bar spans only the name text (textClip), never
+                // this right-aligned column — so the count must never take the
+                // inverted surfaceColor, or it goes dark-on-dark when selected.
+                color: root.tertiaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
                 anchors.verticalCenter: parent.verticalCenter
@@ -194,23 +192,32 @@ FocusScope {
             else currentIndex = 0
             playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
         }
-        onCurrentIndexChanged: if (previewLoader.item)
-            previewLoader.item.playlist = model[playlistList.currentIndex]
     }
 
-    // Preview pane — the selected playlist's identity, when enabled
-    Loader {
-        id: previewLoader
-        visible: playlistsRoot.showPreview && playlistList.count > 0
-        anchors.top: parent.top
-        anchors.topMargin: root.sh * 0.25 //120
-        width: root.sw * 0.22
-        height: root.sh * 0.525 //252
-        source: "PlaylistPreview.qml"
-        anchors.left: previewOnLeft ? parent.left : undefined
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.125 : undefined //80
-        anchors.right: previewOnLeft ? undefined : parent.right
-        anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
+    Component.onCompleted: {
+        refreshPlaylistModel()
+        playlistList.forceActiveFocus()
+    }
+
+    function refreshPlaylistModel() {
+        var pls = showAllPlaylists
+            ? retroarchBackend.refreshAllPlaylists()
+            : retroarchBackend.refreshPlaylists(systemId)
+        playlistList.model = pls
+        if (pls.length > 0) {
+            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
+            playlistList.currentIndex = Math.min(restore, pls.length - 1)
+            playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
+        }
+    }
+
+    Connections {
+        target: appCore
+        function onModuleSettingChanged(mid, key, value) {
+            if (mid === moduleRoot.moduleId && key === "playlist_sort") {
+                refreshPlaylistModel()
+            }
+        }
     }
 
     // Footer
@@ -224,20 +231,5 @@ FocusScope {
         anchors.bottomMargin: root.sh * 0.1041667 //50
         anchors.leftMargin: root.sw * 0.125 //80
         font.pixelSize: root.sh * 0.0333333 //16
-    }
-
-    Component.onCompleted: {
-        var pls = showAllPlaylists
-            ? retroarchBackend.refreshAllPlaylists()
-            : retroarchBackend.refreshPlaylists(systemId)
-        playlistList.model = pls
-        if (pls.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            playlistList.currentIndex = Math.min(restore, pls.length - 1)
-            playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
-            if (previewLoader.item)
-                previewLoader.item.playlist = pls[playlistList.currentIndex]
-        }
-        playlistList.forceActiveFocus()
     }
 }

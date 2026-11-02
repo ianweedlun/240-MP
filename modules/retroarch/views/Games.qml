@@ -8,15 +8,35 @@ FocusScope {
     property var navListState: navParams.navListState || ({})
     readonly property string playlistPath: navParams.playlistPath || ""
     readonly property string playlistName: navParams.playlistName || ""
+    readonly property string playlistBasename: navParams.playlistBasename || ""
+    readonly property string shortName: navParams.shortName || ""
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
-        return (v === "LEFT" || v === "RIGHT") ? v : "OFF"
+        // null/undefined means "never set" — the manifest default (RIGHT),
+        // not "off". OFF itself must stay OFF: it was previously caught by the
+        // default arm and rendered as RIGHT, which made "hide" look identical
+        // to "right side".
+        return (v === "LEFT" || v === "RIGHT" || v === "OFF") ? v : "RIGHT"
     }
+    // Thumbnail setting only affects game list view. Playlist view always hides preview.
     readonly property bool showPreview: thumbDisplay !== "OFF"
     readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
-    signal goBack()
+    // --- Zone geometry -------------------------------------------------------
+    // One defined zone per side: the panel gets a fixed column and the list
+    // occupies the rest, so boxart can never sit on top of text (the old
+    // conditional-anchors-plus-explicit-width setup let the two fight).
+    readonly property real panelW: root.sw * 0.22
+    readonly property real panelX: previewOnLeft ? root.sw * 0.125
+                                                 : root.sw - root.sw * 0.125 - panelW
+    readonly property real listX: (showPreview && previewOnLeft)
+        ? panelX + panelW + root.sw * 0.015625
+        : root.sw * 0.115625
+    readonly property real listRight: (showPreview && !previewOnLeft)
+        ? panelX - root.sw * 0.015625
+        : root.sw - root.sw * 0.115625
 
+    signal goBack()
     focus: true
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
@@ -32,7 +52,7 @@ FocusScope {
     AppBar {
         iconSource: moduleRoot.moduleIcon
         title: moduleRoot.moduleName
-        subtitle: playlistName
+        subtitle: shortName || playlistName
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
@@ -96,15 +116,14 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: gameList
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        anchors.left: previewOnLeft ? previewLoader.right : parent.left
-        anchors.right: previewOnLeft ? parent.right : previewLoader.left
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.015625 : root.sw * 0.115625 //10 : 74
-        anchors.rightMargin: previewOnLeft ? root.sw * 0.115625 : root.sw * 0.015625 //74 : 10
-        width: gamesRoot.showPreview ? root.sw * 0.5 : root.sw * 0.76875
+        // Horizontal placement comes from the zone properties (fixed x/width),
+        // not from anchors that the width binding then fights.
+        x: gamesRoot.listX
+        width: gamesRoot.listRight - gamesRoot.listX
         height: root.sh * 0.525 //252
         keyNavigationEnabled: true
         clip: true
@@ -176,23 +195,23 @@ FocusScope {
             else currentIndex = 0
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
         }
-        onCurrentIndexChanged: if (previewLoader.item)
-            previewLoader.item.game = model[gameList.currentIndex]
+        onRowSelected: function(index) {
+            if (previewLoader.item)
+                previewLoader.item.game = ensureThumbnail(model[index])
+        }
     }
 
-    // Preview pane — the selected game's boxart, when enabled
+    // Preview pane — the selected game's boxart, when enabled. Fixed column
+    // from the zone geometry; it never overlaps the list in any mode.
     Loader {
         id: previewLoader
         visible: gamesRoot.showPreview && gameList.count > 0
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
-        width: root.sw * 0.22
+        x: gamesRoot.panelX
+        width: gamesRoot.panelW
         height: root.sh * 0.525 //252
         source: "GamePreview.qml"
-        anchors.left: previewOnLeft ? parent.left : undefined
-        anchors.leftMargin: previewOnLeft ? root.sw * 0.125 : undefined //80
-        anchors.right: previewOnLeft ? undefined : parent.right
-        anchors.rightMargin: previewOnLeft ? undefined : root.sw * 0.125 //80
     }
 
     // Footer
@@ -208,6 +227,14 @@ FocusScope {
         font.pixelSize: root.sh * 0.0333333 //16
     }
 
+    function ensureThumbnail(game) {
+        if (!game) return game
+        if (game.thumbnail === undefined || game.thumbnail === "") {
+            game.thumbnail = retroarchBackend.resolveThumbnail(game.name, playlistBasename)
+        }
+        return game
+    }
+
     Component.onCompleted: {
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
@@ -216,7 +243,7 @@ FocusScope {
             gameList.currentIndex = Math.min(restore, games.length - 1)
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
             if (previewLoader.item)
-                previewLoader.item.game = games[gameList.currentIndex]
+                previewLoader.item.game = ensureThumbnail(games[gameList.currentIndex])
         }
         gameList.forceActiveFocus()
     }
