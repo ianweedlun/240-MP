@@ -11,6 +11,12 @@
       "default": "OFF"
     },
     {
+      "key": "location",
+      "label": "Location",
+      "type": "location_picker",
+      "description": "Dial the coordinates (LAT, LNG) and OK commits: written as the primary line of weather_location.txt, forecast re-resolves live. Place names stay conf-file only"
+    },
+    {
       "key": "displays",
       "label": "Displays",
       "type": "multiselect_submenu",
