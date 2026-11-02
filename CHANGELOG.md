@@ -16,6 +16,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   table and the picker list from source, asserts exact agreement, five well-formed hex
   keys per built-in, and the five new names present. Pure text-in, no QML engine.
 
+### Changed — Dev-first branch model (dev)
+- Contract (`.hermes.md` + megacave mirror, same commit): area branches retired. Feature work lands
+  on `dev` directly; `feature/<area>-<burst>` scratch branches are per-burst, merged at landing then
+  deleted; testing/deploy/screenshot gates read the dev tip only (Pi truth = dev build). Area names
+  survive as issue/commit scopes. Origin: all five area branches had zero unmerged code after the
+  Nov 2 dev integration; the tails only produced drift (stale branch tips on the Pi, 32 noise commits
+  and committed build artifacts on the retroarch tail).
+
 ### Added — Plex resolution-aware direct play (#14, feature/plex-res-direct-play)
 - Direct-play/transcode decision from stream-metadata resolution class vs the quality ladder: at/below threshold direct, above transcodes; shorter edge for portrait/rotated files; unknown dimensions transcode (safe CRT branch).
 - Quality options relabeled to the new semantics: "Direct Play (always)", "Above 1080p/720p/480p: transcode" (corrected ladder ids 8000/3000/1500; legacy custom ids keep always-transcode).
