@@ -64,27 +64,27 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         // (get_property + top-level integer request_id; request_id is an echo
         // field, and display-width/display-height are the only properties that
         // report the target area — width/height are the source decode size),
-        // and an observer for the loaded video's aspect — re-fires per file on
-        // playlist advance. Replies carry error:"success" on OK (mpv 0.38+).
+        // plus a content-aspect read that BLOCKS until the first file loads
+        // (get_property waits for availability — there is no per-file property-
+        // change event for video-params/aspect; verified on Pi 0.40: the
+        // observer never fired). Replies carry error:"success" on OK (mpv 0.38+).
         if (autoFitEnabled()) {
             // Fit target. The DRM path (vo=drm, the Pi) has NO windowing backend:
             // mpv's display-width/display-height IPC read answers 'property
-            // unavailable' there. The app knows the plane (main.cpp handed its
-            // startup QScreen enumeration to AppCore — the same KMS page vo=drm
-            // draws to), so seed from that; only fall back to the mpv read when
-            // the app has no geometry (desktop VOs do report it).
-            const QSize g = m_appCore ? m_appCore->displayGeometry() : QSize();
-            if (g.width() > 0 && g.height() > 0) {
-                m_windowW = g.width();
-                m_windowH = g.height();
-                m_windowAspect = g.width() / double(g.height());
+            // unavailable' there, so seed from the app's startup display
+            // enumeration (QScreen = the KMS plane vo=drm draws to); the mpv
+            // read is kept only as the desktop-VO fallback.
+            const QSize geo = m_appCore ? m_appCore->displayGeometry() : QSize();
+            if (geo.width() > 0 && geo.height() > 0) {
+                m_windowW = geo.width(); m_windowH = geo.height();
+                m_windowAspect = m_windowW / m_windowH;
                 qInfo("[MpvController] auto-fit: display size from app (%dx%d px, aspect %.3f)",
-                      g.width(), g.height(), m_windowAspect);
+                      geo.width(), geo.height(), m_windowAspect);
+                sendCommand({"get_property", "video-params/aspect"}, 9003);
             } else {
                 sendCommand({"get_property", "display-width"}, 9001);
                 sendCommand({"get_property", "display-height"}, 9002);
             }
-            sendCommand({"observe_property", 5, "video-params/aspect"});
         }
     });
     connect(m_ipc, &QLocalSocket::readyRead, this, &MpvController::onIpcReadyRead);
@@ -613,12 +613,6 @@ void MpvController::onIpcReadyRead() {
             // so onProcessFinished can distinguish a natural finish from a quit.
             if (event == "end-file") {
                 m_lastEndFileReason = obj["reason"].toString();
-            } else if (event == "file-loaded") {
-                // The property-change observer never fires for video-params/aspect
-                // (not in mpv's observable set). Read it right after each file
-                // loads instead — one get_property per load, echoed by request_id.
-                if (autoFitEnabled())
-                    sendCommand({"get_property", "video-params/aspect"}, 9003);
             } else if (event == "playback-restart" && m_pendingStartClear) {
                 // --start is a global option that mpv re-applies on *every* file load,
                 // and --loop-playlist reloads its entries on wrap. Left set, a resumed

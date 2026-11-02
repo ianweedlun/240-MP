@@ -85,10 +85,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   The mpv IPC read remains only as the desktop fallback. Journal now logs
   `auto-fit: display size from app (…px)` at mpv connect.
 - Second follow-up (same day): `video-params/aspect` is NOT in mpv's observable
-  property-change set — the observer event never fires. Content aspect now read
-  per-file via `get_property` triggered on the documented `file-loaded` event
-  (fires after load, params ready), echoed on integer request_id 9003. Journal
-  gains `auto-fit verdict: …` per file load.
+  property-change set — the observer never fired (verified by journal silence on
+  Pi 0.40). Content aspect now read via a single blocking `get_property` sent at
+  IPC connect — get_property waits until the property becomes available, so the
+  reply lands at first file load; echoed on integer request_id 9003. (The
+  intermediate `file-loaded`-event attempt was caught pre-deploy: that name is a
+  Lua hook point, not an IPC event.) Journal gains `auto-fit verdict: …` per
+  launch.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
