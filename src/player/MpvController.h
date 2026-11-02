@@ -145,6 +145,7 @@ private:
     QTimer       *m_panTimer       = nullptr;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
+    bool          m_connLogged     = false;  // per-session 'ipc connected' debug line
     QString       m_appRoot;
     QString       m_dataRoot;
     QString       m_socketPath;

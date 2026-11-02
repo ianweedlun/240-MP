@@ -162,6 +162,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     }
     m_watchdogTimer->stop();
     m_ipc->abort();
+    m_connLogged = false;
     QFile::remove(m_socketPath);
     m_position    = 0;
     m_duration    = 0;
@@ -547,8 +548,13 @@ void MpvController::clearOsdPrompt() {
 
 void MpvController::tryConnectIpc() {
     if (m_ipc->state() == QLocalSocket::ConnectedState ||
-        m_ipc->state() == QLocalSocket::ConnectingState)
+        m_ipc->state() == QLocalSocket::ConnectingState) {
+        if (m_ipc->state() == QLocalSocket::ConnectedState && !m_connLogged) {
+            m_connLogged = true;
+            qInfo("[MpvController] ipc socket connected (session)");
+        }
         return;
+    }
     m_ipc->connectToServer(m_socketPath);
 }
 
