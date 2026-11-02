@@ -90,7 +90,14 @@ FocusScope {
             height: cellH
 
             Rectangle {
-                anchors.fill: parent
+                // Explicit geometry, never anchors: on a Repeater delegate,
+                // anchors.fill resolves against the wrong box (the delegate's
+                // size bindings are not anchor-reachable). Size it off the
+                // same cellW/cellH arithmetic that places the delegate.
+                x: 0
+                y: 0
+                width: cellW
+                height: cellH
                 color: index === locationPicker.cell ? root.accentColor : "transparent"
             }
             Text {
