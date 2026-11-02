@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Weather current-conditions AQ/UV rows (#29, #39, feature/weather-osd-signals)
+- `rowTexts()` bakes must-show priority directly: AIR QUALITY and UV INDEX lead the
+  column before the budget fit; the old prefix-derived order cut both rows at Pi
+  display height. Dead `rowOrder`/`rowPriority` indirection removed.
+- #39's dangling-reply suspect disproved (Qt `deleteLater()` is deferred); real gap
+  was the QML order above. Evidence screenshots on branch (`evidence/weather-osd-aq-uv/`).
+
 ### Fixed — Weather location dial (#37, feature/weather-osd-signals)
 - LocationPicker highlight now anchors to the glyph Text inside its delegate
   (ChoiceOverlay pattern); the v1 delegate-arithmetic box misrendered offset
