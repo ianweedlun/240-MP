@@ -20,9 +20,12 @@ class QLocalSocket;
 // property like current.temperature is already "66°" and the view stays dumb.
 //
 // The location comes from $DATA_ROOT/weather_location.txt: a plain file rather
-// than a setting, because the manifest schema has no free-text type and an
-// on-screen keyboard for a value you set once would be worse. A place name is
-// geocoded via Open-Meteo (no API key); an explicit "lat, lon" is taken as-is.
+// than a settings value, because names stay free-form (Open-Meteo geocodes
+// them, no API key) and extra lines are the "Other Locations" extras. The
+// LOCATION setting (#37) is the one UI-editable path into this file: the
+// glyph-grid picker composes an explicit "lat, lon" spec and the backend
+// applies it as a rewrite of the primary line, re-resolving live. An explicit
+// "lat, lon" line is taken as-is; a name is geocoded.
 class WeatherBackend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString     locationName     READ locationName     NOTIFY dataChanged)
@@ -97,6 +100,19 @@ public:
     // allScreens list.
     Q_INVOKABLE void getDisplays();
 
+    // The LOCATION setting (#37): the glyph-grid picker composes an
+    // explicit "lat, lon" spec and saves it as the setting value; the
+    // backend applies it by rewriting weather_location.txt and re-resolving
+    // live, so the forecast follows without a relaunch.
+    Q_INVOKABLE void setLocation(const QString &spec);
+    // For the picker's COMMIT gate: whether a composed spec parses as
+    // explicit coordinates. Name lines geocode on file edit, but the
+    // picker only composes coordinates, so only those are accepted.
+    Q_INVOKABLE bool looksLikeCoordinates(const QString &spec) const;
+    // For the picker header: the current primary location line
+    // (empty when no location file exists).
+    Q_INVOKABLE QString primaryLocationLine() const;
+
 signals:
     void dataChanged();
     void musicStateChanged();
@@ -125,6 +141,10 @@ private:
     QString m_airQuality;
 
     void resolveLocation();
+    // Applies the LOCATION setting: rewrite the primary line of
+    // weather_location.txt with the composed spec, keeping the extra
+    // lines, then re-resolve through the very same path start() uses.
+    void applyLocationSetting(const QString &spec);
     void geocode(const QString &rawLine);
     // '#'-commented, one-entry-per-line config files: the location list and the
     // music playlist share the format, so they share the reader.
