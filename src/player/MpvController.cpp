@@ -60,12 +60,15 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         sendCommand({"observe_property", 2, "duration"});
         sendCommand({"observe_property", 3, "playlist-pos"});
         sendCommand({"observe_property", 4, "pause"});
-        // Auto Fit watch wires: one-shot async reads for the output window size
-        // (fires even though these properties never "change"), and an observer
-        // for the loaded video's aspect — re-fires per file on playlist advance.
+        // Auto Fit watch wires: one-shot reads for the output DISPLAY size
+        // (get_property + top-level integer request_id; request_id is an echo
+        // field, and display-width/display-height are the only properties that
+        // report the target area — width/height are the source decode size),
+        // and an observer for the loaded video's aspect — re-fires per file on
+        // playlist advance. Replies carry error:"success" on OK (mpv 0.38+).
         if (autoFitEnabled()) {
-            sendCommand({"get_async", "fit-w", "width"});
-            sendCommand({"get_async", "fit-h", "height"});
+            sendCommand({"get_property", "display-width"}, 9001);
+            sendCommand({"get_property", "display-height"}, 9002);
             sendCommand({"observe_property", 5, "video-params/aspect"});
         }
     });
@@ -541,22 +544,30 @@ void MpvController::onIpcReadyRead() {
         const QByteArray line = m_ipc->readLine().trimmed();
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         if (obj.isEmpty()) continue;
-        // get_async replies (Auto Fit window-size reads) carry no "event" key —
-        // they complete once each; a null "error" means success. Compute the
-        // window aspect as soon as both halves are in, then flush any content
-        // aspect that arrived out of order.
-        const QString requestId = obj["request_id"].toString();
-        if (!requestId.isEmpty()) {
-            if (requestId == "fit-w" || requestId == "fit-h") {
-                if (obj.contains("error") && !obj["error"].isNull()) continue; // property unavailable
-                const double v = obj["data"].toDouble();
-                if (v > 0.0) {
-                    if (requestId == "fit-w") m_windowW = v; else m_windowH = v;
-                    if (m_windowW > 0.0 && m_windowH > 0.0) {
-                        m_windowAspect = m_windowW / m_windowH;
-                        if (m_pendingContentAspect > 0.0) {
-                            applyAutoFit(m_pendingContentAspect);
-                            m_pendingContentAspect = 0.0;
+        // Window-size replies (Auto Fit display reads) echo our integer
+        // request_id and carry error:"success" on OK — only a real error string
+        // means unavailable. Compute the window aspect once both halves are in,
+        // then flush any content aspect that arrived out of order.
+        const QJsonValue rid = obj["request_id"];
+        if (!rid.isNull()) {
+            const int ridI = rid.toInt();
+            if (ridI == 9001 || ridI == 9002) {
+                const QString err = obj["error"].toString();
+                if (!err.isEmpty() && err != QLatin1String("success")) {
+                    qWarning("[MpvController] auto-fit: display-size read failed: %s — fit stays off",
+                             qPrintable(err));
+                } else {
+                    const double v = obj["data"].toDouble();
+                    if (v > 0.0) {
+                        if (ridI == 9001) m_windowW = v; else m_windowH = v;
+                        if (m_windowW > 0.0 && m_windowH > 0.0 && m_windowAspect <= 0.0) {
+                            m_windowAspect = m_windowW / m_windowH;
+                            qInfo("[MpvController] auto-fit: display size known (%ux%u px, aspect %.3f)",
+                                  uint(m_windowW), uint(m_windowH), m_windowAspect);
+                            if (m_pendingContentAspect > 0.0) {
+                                applyAutoFit(m_pendingContentAspect);
+                                m_pendingContentAspect = 0.0;
+                            }
                         }
                     }
                 }
@@ -680,7 +691,8 @@ void MpvController::onProcessFinished() {
     }
 }
 
-void MpvController::sendCommand(const QJsonArray &args) {
+void MpvController::sendCommand(const QJsonArray &args)
+{
     if (m_ipc->state() != QLocalSocket::ConnectedState) {
         qWarning("[MpvController] IPC not connected, dropping: %s",
                  QJsonDocument(QJsonObject{{"command", args}}).toJson(QJsonDocument::Compact).constData());
@@ -688,6 +700,21 @@ void MpvController::sendCommand(const QJsonArray &args) {
     }
     QJsonObject cmd;
     cmd["command"] = args;
+    m_ipc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
+}
+
+void MpvController::sendCommand(const QJsonArray &args, int requestId)
+{
+    // request_id is a TOP-LEVEL integer echo field (mpv 0.38+); it is not a
+    // command argument. Replies echo it verbatim; strings are deprecated.
+    if (m_ipc->state() != QLocalSocket::ConnectedState) {
+        qWarning("[MpvController] IPC not connected, dropping: %s",
+                 QJsonDocument(QJsonObject{{"command", args}}).toJson(QJsonDocument::Compact).constData());
+        return;
+    }
+    QJsonObject cmd;
+    cmd["command"] = args;
+    cmd["request_id"] = requestId;
     m_ipc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
 }
 
@@ -822,12 +849,17 @@ void MpvController::applyAutoFit(const double contentAspect)
     // is unknown.
     if (!autoFitEnabled() || cropUnavailable() || contentAspect <= 0.0 || m_windowAspect <= 0.0)
         return;
-    sendCommand({"set_property", "panscan", mpvfit::fitPanscanTarget(contentAspect, m_windowAspect)});
+    const double panscan = mpvfit::fitPanscanTarget(contentAspect, m_windowAspect);
+    sendCommand({"set_property", "panscan", panscan});
     // Reset pan so a previous file's sweep position (or a manual pan) cannot
     // leak into this load's geometry decision.
     sendCommand({"set_property", "video-pan-x", "0"});
     m_panValue = 0.0;
     const double amp = mpvfit::panSweepAmplitude(m_windowW, m_windowH, contentAspect);
+    // The verdict is the ground truth for this feature — visible, greppable.
+    qInfo("[MpvController] auto-fit verdict: content aspect %.3f vs display %.3f -> panscan %.2f, pan amp %.3f%s",
+          contentAspect, m_windowAspect, panscan, amp,
+          amp > 0.001 ? " (sweep on)" : "");
     if (amp > 0.001) {
         m_panAmp = amp;
         m_panDir = 1.0;

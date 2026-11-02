@@ -60,6 +60,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (tree unchanged, zero content) — dev/main/upstream had unrelated roots since project setup re-rooted
   dev; the "N commits behind upstream" badge was a topology artifact, now 0-behind. Never rebase dev.
 
+### Fixed — Auto Fit silent no-op on the Pi (dev)
+- Auto Fit never fired on any Pi playback (letterboxes identical with the setting
+  ON or OFF). Three stacked silent failures in one IPC path:
+  (1) fit-target reads used `width`/`height` — mpv reports the *source decode*
+  size there, so computed window aspect always equaled the content aspect and the
+  wider-than-display verdict never triggered; correct properties are
+  `display-width`/`display-height`.
+  (2) the `get_async <id> <prop>` form is not mpv syntax — mpv answered
+  "invalid parameter" and the reply was discarded; `request_id` is a top-level
+  *integer* JSON field.
+  (3) success replies carry `error: "success"`, which the parser read as a
+  failure.
+- All three fixed: `get_property display-width/height` with top-level integer
+  request_id, `error:"success"` accepted, and the fit decision is now visible:
+  journal lines `[MpvController] auto-fit: display size known …` per mpv launch
+  and `auto-fit verdict: … panscan … (sweep on|)` per file load. If the VO can't
+  report display size, a `display-size read failed` warning explains why fit stays
+  off. Pure fit math (mpvfit/AutoFit.h) unchanged, still unit-tested.
+
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
   chokepoint as real input) now accepts `shot`/`f12` lines: invokes the same
