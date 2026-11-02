@@ -70,10 +70,10 @@ FocusScope {
             event.accepted = true
         }
     }
-    Keys.onKeyDown:  locationPicker.cell = (locationPicker.cell + 4) % 16
-    Keys.onKeyUp:    locationPicker.cell = (locationPicker.cell + 12) % 16
-    Keys.onKeyLeft:  locationPicker.cell = Math.max(0, locationPicker.cell - 1)
-    Keys.onKeyRight: locationPicker.cell = Math.min(15, locationPicker.cell + 1)
+    Keys.onDown:  locationPicker.cell = (locationPicker.cell + 4) % 16
+    Keys.onUp:    locationPicker.cell = (locationPicker.cell + 12) % 16
+    Keys.onLeft:  locationPicker.cell = Math.max(0, locationPicker.cell - 1)
+    Keys.onRight: locationPicker.cell = Math.min(15, locationPicker.cell + 1)
 
     AppBar {
         iconSource: "../assets/images/logo.svg"
