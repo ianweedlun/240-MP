@@ -85,37 +85,37 @@ FocusScope {
         if (event.key === Qt.Key_Right) { locationPicker.move(Math.min(15, locationPicker.cell + 1)); event.accepted = true; return }
     }
 
-    // The dial: Row lays out its children sequentially and wraps them at its
-    // width, so a single Repeater inside it yields a uniform grid with no
-    // delegate arithmetic (delegate x/y against a bare Repeater parent renders
-    // misaligned — see #37). The highlight box anchors to the glyph Text, the
-    // pattern proven on-screen by ChoiceOverlay and NfcCardWriter.
-    Row {
+    // The dial: Repeater's delegates carry their own x/y and get inserted into
+    // the parent directly (Repeater has no positioner); arithmetic placement is
+    // the only reliable way to lay the 4x4 grid out in this Qt build. The
+    // highlight box is NOT placed by arithmetic — it anchors to the glyph Text
+    // inside the delegate (the pattern proven on-screen by ChoiceOverlay and
+    // NfcCardWriter); anchoring it to the delegate Item misrenders it offset
+    // and oversized (#37, disproved on the F12 wall 2026-11-01).
+    Repeater {
         id: dial
-        x: root.sw * 0.125
-        y: root.sh * 0.30
-        width: root.sw * 0.75
-        Repeater {
-            model: 16
-            delegate: Item {
-                width: root.sw * 0.75 / 4 - 1
-                height: root.sh * 0.09
+        model: 16
+        delegate: Item {
+            property real cellW: root.sw * 0.75 / 4
+            property real cellH: root.sh * 0.09
+            x: root.sw * 0.125 + (index % 4) * cellW
+            y: root.sh * 0.30 + Math.floor(index / 4) * cellH
+            width: cellW
+            height: cellH
 
-                Rectangle {
-                    anchors.fill: choiceText
-                    color: index === locationPicker.cell ? root.accentColor : "transparent"
-                }
-                Text {
-                    id: choiceText
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: locationPicker.glyphs[index]
-                    color: index === locationPicker.cell ? root.surfaceColor : "#ffffff"
-                    font.family: root.globalFont
-                    font.pixelSize: root.sh * 0.030
-                    leftPadding: root.sw * 0.009375
-                    rightPadding: root.sw * 0.009375
-                }
+            Rectangle {
+                anchors.fill: choiceText
+                color: index === locationPicker.cell ? root.accentColor : "transparent"
+            }
+            Text {
+                id: choiceText
+                anchors.centerIn: parent
+                text: locationPicker.glyphs[index]
+                color: index === locationPicker.cell ? root.surfaceColor : "#ffffff"
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.030
+                leftPadding: root.sw * 0.009375
+                rightPadding: root.sw * 0.009375
             }
         }
     }
