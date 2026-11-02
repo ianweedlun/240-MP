@@ -17,12 +17,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   keys per built-in, and the five new names present. Pure text-in, no QML engine.
 
 ### Changed — Dev-first branch model (dev)
-- Contract (`.hermes.md` + megacave mirror, same commit): area branches retired. Feature work lands
-  on `dev` directly; `feature/<area>-<burst>` scratch branches are per-burst, merged at landing then
-  deleted; testing/deploy/screenshot gates read the dev tip only (Pi truth = dev build). Area names
-  survive as issue/commit scopes. Origin: all five area branches had zero unmerged code after the
-  Nov 2 dev integration; the tails only produced drift (stale branch tips on the Pi, 32 noise commits
-  and committed build artifacts on the retroarch tail).
+- Dev-first branch model adopted as the integration contract. All area branch tips (retroarch,
+  weather, mpv-config, plex-quality, color-schemes) were merged into `dev` (single merge commits,
+  docs resolved to dev, unit tests carried along); Pi repo reset to dev and redeployed via the
+  CI→deploy pipeline with md5 gate `869bf326…` → `b533d4e8…`, service active.
+- Contract text hygiene (same commit set): `.hermes.md` keeps present-tense facts only — removed
+  restatements (main-mirror rule duplicated in DO-NOTS; dev-fork wording twice), retired-machinery
+  references (`docs/plans/*`, `issue-watch.sh`, dev-baseline roster, GitHub/Build/Trust echo
+  sections), and inert history (pre-migration commit identities) relocated to
+  `240-mp-development references/comms-attribution.md` (§ Repo history archaeology) so it stays
+  pullable; `.hermes.megacave.md` re-synthesized in lockstep (drift gate green).
+- History graft (later same day): `d77725c` = commit-tree graft of `upstream/main` into dev
+  (tree unchanged, zero content) — dev/main/upstream had unrelated roots since project setup re-rooted
+  dev; the "N commits behind upstream" badge was a topology artifact, now 0-behind. Never rebase dev.
 
 ### Added — Plex resolution-aware direct play (#14, feature/plex-res-direct-play)
 - Direct-play/transcode decision from stream-metadata resolution class vs the quality ladder: at/below threshold direct, above transcodes; shorter edge for portrait/rotated files; unknown dimensions transcode (safe CRT branch).
