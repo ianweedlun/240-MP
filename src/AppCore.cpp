@@ -678,9 +678,9 @@ void AppCore::note_state(const QString &event, const QString &detail)
 void AppCore::write_debug_json(const QString &name, const QVariant &value)
 {
 #ifdef APP_TELEMETRY
-    QVariantMap doc;
+    QJsonObject doc;
     doc.insert(QStringLiteral("name"), name);
-    doc.insert(QStringLiteral("value"), value);
+    doc.insert(QStringLiteral("value"), QJsonValue::fromVariant(value));
     const QString path = QStringLiteral("/tmp/240mp_wx.json");
     const QString tmp = path + QStringLiteral(".tmp");
     QFile f(tmp);
