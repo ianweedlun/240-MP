@@ -97,10 +97,9 @@ FocusScope {
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125
         columns: 4
-        rows: 4
         model: locationPicker.glyphs.length
         cellWidth: width / columns
-        cellHeight: height / rows
+        cellHeight: height / 4
         delegate: Text {
             anchors.centerIn: parent
             text: locationPicker.glyphs[index]
