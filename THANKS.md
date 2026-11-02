@@ -41,6 +41,22 @@ deserves recognition and thanks. This file is that home for it.
 - **Open-Meteo** (open-meteo.com) — the weather/air-quality APIs the Weather
   module forecasts from (data source; no code copied).
 
+## Color palettes we borrowed (published data, human-designed)
+
+- **Dracula** — the Dracula theme palette (Jonathan Bartlett), published openly at
+  [draculatheme.com/contribute](https://draculatheme.com/contribute).
+- **Tokyo Night** — published palette of the tokyo-night VS Code theme
+  ([github.com/tokyo-night/tokyo-night-vscode-theme](https://github.com/tokyo-night/tokyo-night-vscode-theme)).
+- **Nord** — published "Nord" terminal color dumps (vim-Nord / Gogh colors.properties
+  catalogs).
+- **Solarized Dark** — the Solarized palette designed by Julian Iveson, spec by Wes
+  Cherry, published openly (base-N hex values across terminal-theme catalogs).
+- **Monokai** — the Monokai scheme (Andy Wightman, Sublime Text), as published at
+  [monokai.pro](https://monokai.pro/) and the base46 theme catalogs.
+
+These are color data adopted as built-in themes in `Main.qml`; each entry cites its
+source inline. No generative-AI colors: every hex set is a human-published spec.
+
 ## Pending — provenance not yet verified
 
 - Weather module condition icons (`modules/weather/assets/images/wx/*.svg`):

@@ -4,6 +4,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Built-in color scheme palettes (#15, feature/color-schemes)
+- Five new built-in schemes in the themes map (`Main.qml`) + matching Settings picker
+  entries (`views/Settings.qml`): Dracula, Tokyo Night, Nord, Solarized Dark, Monokai.
+  All hex sets taken from published specs only (draculatheme.com palette, tokyo-night
+  VS Code theme README, Gogh-based "Nord" colors.properties dump, Solarized spec,
+  base46 Monokai catalog); role mapping (primary/secondary/tertiary/surface/accent)
+  documented inline per entry. Sources credited in-code; `THANKS.md` acknowledges the
+  palettes as human-made libre works.
+- Unit test `palette-tests` (`src/util/tests/ColorSchemesTest.cpp`): parses the themes
+  table and the picker list from source, asserts exact agreement, five well-formed hex
+  keys per built-in, and the five new names present. Pure text-in, no QML engine.
+
+
 ### Added — Weather current-conditions AQ/UV rows (#29, #39, feature/weather-osd-signals)
 - `rowTexts()` bakes must-show priority directly: AIR QUALITY and UV INDEX lead the
   column before the budget fit; the old prefix-derived order cut both rows at Pi

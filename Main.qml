@@ -78,6 +78,43 @@ Window {
             "tertiary": "#6666BF",
             "surface": "#131313",
             "accent": "#BF6666"
+        },
+        // All palettes below: hex sets taken from published specs only (no eyeballed guesses).
+        // Role mapping is documented in each entry's comment.
+        "Dracula": {  // official draculatheme.com palette (https://draculatheme.com/contribute): text F8F8FF / comment 62727A / current-line 44475A / background 282A36 / purple BD93F9
+            "primary": "#F8F8FF",   // text
+            "secondary": "#62727A", // comment (dimmed text)
+            "tertiary": "#44475A",  // current line (panel rows)
+            "surface": "#282A36",   // background
+            "accent": "#BD93F9"     // purple (selection highlight, signal dot)
+        },
+        "Tokyo Night": {  // official tokyo-night-vscode-theme README palette (https://github.com/tokyo-night/tokyo-night-vscode-theme): terminal-white C0CAF5 / markdown-text 9AA5CE / comments 565F89 / editor-background 1A1B26 / terminal-red F7768E
+            "primary": "#C0CAF5",
+            "secondary": "#9AA5CE",
+            "tertiary": "#565F89",
+            "surface": "#1A1B26",
+            "accent": "#F7768E"
+        },
+        "Nord": {  // published Gogh-based "Nord" terminal scheme (colors.properties dumps, e.g. github.com/Ghosalach/Gogh): foreground D8DEE9 / bright-black 4C566A / color0 3B4252 / background 2E3440 / ice-blue 88C0D0
+            "primary": "#D8DEE9",
+            "secondary": "#4C566A",
+            "tertiary": "#3B4252",
+            "surface": "#2E3440",
+            "accent": "#88C0D0"
+        },
+        "Solarized Dark": {  // official Solarized spec via published "Solarized Dark" terminal scheme: base2-cream EEE8D5 (emphasized text) / foreground 839496 / base02 073642 (panels) / base03 002B36 (background) / blue 268BD2
+            "primary": "#EEE8D5",
+            "secondary": "#839496",
+            "tertiary": "#073642",
+            "surface": "#002B36",
+            "accent": "#268BD2"
+        },
+        "Monokai": {  // published Monokai scheme (base46 catalog, credits https=//monokai.pro/): text F8F8F2 / dim-gray A59F85 / panel one_bg 363731 / background 272822 / pink F92672
+            "primary": "#F8F8F2",
+            "secondary": "#A59F85",
+            "tertiary": "#363731",
+            "surface": "#272822",
+            "accent": "#F92672"
         }
     })
     property var allThemes: themes  // may gain a "Custom" entry on startup

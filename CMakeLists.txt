@@ -267,6 +267,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
 
+    # Built-in palette consistency tests: themes table (Main.qml) vs the Settings
+    # picker list (views/Settings.qml) — drift guard for adding color schemes.
+    add_executable(palette-tests
+        src/util/tests/ColorSchemesTest.cpp)
+    set_target_properties(palette-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(palette-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(palette-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME palette-consistency COMMAND palette-tests)
+
 endif()
 
 include(CPack)

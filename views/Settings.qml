@@ -41,7 +41,7 @@ FocusScope {
         var items = []
 
         // APPLICATION section
-        var colorOpts = ["Video 1","Late Night","Synthwave","Terminal","T-120","Amber","Kinescope","SMPTE ECR 1-1978"]
+        var colorOpts = ["Video 1","Late Night","Synthwave","Terminal","T-120","Amber","Kinescope","SMPTE ECR 1-1978","Dracula","Tokyo Night","Nord","Solarized Dark","Monokai"] // names must match Main.qml themes keys exactly; picker shows this order
         // Adding a new approach to add multiple custom themes at once
         var cThemes = appCore.getCustomColorSchemes()
         if (Object.keys(cThemes).length > 0) {
