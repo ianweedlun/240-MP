@@ -26,6 +26,7 @@ FocusScope {
     property int cell: 0
     property string buffer: ""
     property string notice: ""
+    property real noticeUntil: 0
 
     function currentLine() { return weatherBackend.primaryLocationLine() }
     function looksLikeCoords(s) { return weatherBackend.looksLikeCoordinates(s) }
@@ -41,11 +42,11 @@ FocusScope {
 
     function commit() {
         if (locationPicker.buffer.length === 0) {
-            locationPicker.notice = "NOTHING ENTERED"
+            locationPicker.notice = "NOTHING ENTERED"; locationPicker.noticeUntil = Date.now() + 2500
             return
         }
         if (!locationPicker.looksLikeCoords(locationPicker.buffer)) {
-            locationPicker.notice = "NOT COORDINATES YET"
+            locationPicker.notice = "NOT COORDINATES YET"; locationPicker.noticeUntil = Date.now() + 2500
             return
         }
         appCore.save_setting(locationPicker.moduleId, locationPicker.settingKey,
@@ -129,7 +130,8 @@ FocusScope {
     Text {
         id: noticeText
         text: locationPicker.notice
-        color: locationPicker.notice === "" ? "transparent" : "#ffffff"
+        visible: Date.now() < locationPicker.noticeUntil
+        color: "#ffffff"
         font.pixelSize: root.sh * 0.034
         anchors.left: parent.left
         anchors.leftMargin: root.sw * 0.125
@@ -137,10 +139,4 @@ FocusScope {
         anchors.bottomMargin: root.sh * 0.02
     }
 
-    Timer {
-        id: noticeTimer
-        running: locationPicker.notice !== ""
-        interval: 2000
-        onTimeout: locationPicker.notice = ""
-    }
 }
