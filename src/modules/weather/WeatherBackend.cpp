@@ -1088,16 +1088,27 @@ void WeatherBackend::fetchAirQuality() {
     QNetworkReply *reply = m_nam->get(QNetworkRequest(url));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) return; // keep last good value
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("[Weather] air-quality fetch failed: %s",
+                     qPrintable(reply->errorString()));
+            return; // keep last good value
+        }
         const QJsonObject cur = QJsonDocument::fromJson(reply->readAll())
                                     .object()["current"].toObject();
-        if (cur.isEmpty()) return;
+        if (cur.isEmpty()) {
+            qWarning("[Weather] air-quality response has no current object");
+            return;
+        }
         const bool us = useUsUnits();
         // A layer the model lacks arrives as null; toDouble() would read that
         // as a deceiving zero, so presence is checked before the value.
         const QString layer = us ? QStringLiteral("us_aqi")
                                  : QStringLiteral("european_aqi");
-        if (!cur.contains(layer) || cur[layer].isNull()) return;
+        if (!cur.contains(layer) || cur[layer].isNull()) {
+            qInfo("[Weather] air-quality layer '%s' not offered for this location",
+                  layer.toUtf8().constData());
+            return;
+        }
         const double v = cur[layer].toDouble();
         m_airQuality = us
             ? QStringLiteral("%1 %2").arg(qRound(v)).arg(aqiCategoryUs(v))
