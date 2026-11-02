@@ -75,21 +75,19 @@ FocusScope {
         if (event.key === Qt.Key_Right) { locationPicker.move(Math.min(15, locationPicker.cell + 1)); event.accepted = true; return }
     }
 
-    // The dial itself: a Repeater grid — same primitive the NfcCardWriter's
-    // card picker uses (GridView is not in this Qt build). Delegates lay out
-    // row-major with wrapping; a quarter-width delegate fixes the grid at 4x4.
+    // The dial: Repeater with NO positioner (Repeater has no anchors; its
+    // delegates are inserted into the parent with the delegate's own x/y — so
+    // we place cells by explicit arithmetic, column = index % 4, row = index / 4.)
     Repeater {
         id: dial
-        anchors.top: parent.top
-        anchors.topMargin: root.sh * 0.30
-        anchors.left: parent.left
-        anchors.leftMargin: root.sw * 0.125
-        anchors.right: parent.right
-        anchors.rightMargin: root.sw * 0.125
         model: 16
         delegate: Item {
-            width: parent.width / 4
-            height: root.sh * 0.09
+            property real cellW: root.sw * 0.75 / 4
+            property real cellH: root.sh * 0.09
+            x: root.sw * 0.125 + (index % 4) * cellW
+            y: root.sh * 0.30 + int(index / 4) * cellH
+            width: cellW
+            height: cellH
 
             Rectangle {
                 anchors.fill: parent
