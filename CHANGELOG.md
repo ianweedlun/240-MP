@@ -26,6 +26,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Evidence screenshots (`evidence/**`, 17 files) untracked from the tree — validation artifacts live
   on the tracking issues; older ones remain recoverable via git history at the commits that validated them.
 
+### Fixed — Skip-marker ownership (dev)
+- Marker verified live at `/home/ghdeploy/.240mp-last-deployed-rev` (PI_SSH_USERNAME=ghdeploy;
+  earlier probes looked in the wrong home — 700 default umask made it invisible to ian).
+  `deploy-pi.sh` now reads the authoritative CI marker first; its own home keeps a private copy.
+  One Pi-side permission: `/home/ghdeploy` o+rx so the local path can traverse.
+
 ### Fixed — Deploy skip-gate keying (dev)
 - The tree-skip fast path broke on its first live run: the workflow's GITHUB_TOKEN is
   Actions/Metadata-scoped, so the `/repos/.../commits` tree lookup 404'd (and a `${GITHUB_TOKEN}`

@@ -100,13 +100,14 @@ TARGET="$PIUSER@$HOST"
 sshrun() { ssh -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
 scpput() { scp -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
 
-# ── Re-skip fast path (mirrors .github/workflows/deploy-pi.yml) ──────────────
-# The Pi carries ~/.240mp-last-deployed-rev (written after each verified deploy).
-# Same commit re-deployed ⇒ byte-identical build output — no upload, no reboot.
+# ── Skip-gate fast path (mirrors .github/workflows/deploy-pi.yml) ────────────
+# The authoritative marker lives in the CI user's home (/home/ghdeploy/.240mp-last-deployed-rev;
+# the workflow's PI_SSH_USERNAME is ghdeploy). Read that first (world-readable), then our own
+# copy (written by this path) — either marker satisfying the gate is a legitimate skip.
 REV_SHA=""
 if [ -n "${COMMIT:-}" ]; then
     REV_SHA="$COMMIT"
-    CUR=$(sshrun "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" 2>/dev/null || true)
+    CUR=$(sshrun "cat /home/ghdeploy/.240mp-last-deployed-rev \$HOME/.240mp-last-deployed-rev 2>/dev/null" 2>/dev/null | head -1)
     if [ "$CUR" = "$REV_SHA" ]; then
         echo "Commit $REV_SHA already deployed and verified on the Pi — skipping transfer+reboot."
         exit 0
