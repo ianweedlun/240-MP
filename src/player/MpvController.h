@@ -143,6 +143,9 @@ private:
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
     QTimer       *m_panTimer       = nullptr;
+    QTimer       *m_aspectRetryTimer = nullptr;
+    int          m_aspectRetries = 0;   // retries after "property unavailable" before the file loads
+    bool         m_aspectKnown = false; // aspect resolved once for this mpv instance
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
     QString       m_appRoot;

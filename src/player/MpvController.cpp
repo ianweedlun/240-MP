@@ -75,12 +75,19 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
             // enumeration (QScreen = the KMS plane vo=drm draws to); the mpv
             // read is kept only as the desktop-VO fallback.
             const QSize geo = m_appCore ? m_appCore->displayGeometry() : QSize();
+            // Aspect read: video-params/aspect is "property unavailable" until the
+            // first file's header parses (verified on Pi 0.40: pre-load reads
+            // answer immediately, they do NOT block). So: send one read now, and let
+            // m_aspectRetryTimer re-send every 2 s until a value arrives.
+            m_aspectKnown = false;
+            m_aspectRetries = 0;
+            sendCommand({"get_property", "video-params/aspect"}, 9003);
+            if (m_aspectRetryTimer) m_aspectRetryTimer->start();
             if (geo.width() > 0 && geo.height() > 0) {
                 m_windowW = geo.width(); m_windowH = geo.height();
                 m_windowAspect = m_windowW / m_windowH;
                 qInfo("[MpvController] auto-fit: display size from app (%dx%d px, aspect %.3f)",
                       geo.width(), geo.height(), m_windowAspect);
-                sendCommand({"get_property", "video-params/aspect"}, 9003);
             } else {
                 sendCommand({"get_property", "display-width"}, 9001);
                 sendCommand({"get_property", "display-height"}, 9002);
@@ -108,6 +115,19 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
             qWarning("[MpvController] WATCHDOG: no IPC time-pos event for %lld s — possible freeze",
                      silenceMs / 1000);
         }
+    });
+    // Aspect retry loop: video-params/aspect is "property unavailable" until the
+    // first file's header is parsed (verified on Pi 0.40: pre-load reads answer
+    // immediately with an error, they do NOT block). One read is sent at connect;
+    // this timer re-sends it every 2 s — up to 8 times — until a response
+    // carries the value. Covers slow opens (ytdl re-resolve, network streams);
+    // gives up quietly otherwise (the fit only stays off).
+    m_aspectRetryTimer = new QTimer(this);
+    m_aspectRetryTimer->setInterval(2000);
+    connect(m_aspectRetryTimer, &QTimer::timeout, this, [this] {
+        if (m_aspectKnown || m_aspectRetries++ > 8) { m_aspectRetryTimer->stop(); return; }
+        if (m_ipc->state() == QLocalSocket::ConnectedState)
+            sendCommand({"get_property", "video-params/aspect"}, 9003);
     });
     // Auto Fit pan & scan sweep: applyAutoFit() starts this timer when the just-
     // loaded content is WIDER than the display (panscan=1 would crop its sides
@@ -587,12 +607,17 @@ void MpvController::onIpcReadyRead() {
                     }
                 }
             } else if (ridI == 9003) {
-                // per-file content aspect (get_property after file-loaded)
+                // content aspect read (sent at connect; the pre-file-load reads answer
+                // "property unavailable" until the header parses — the retry timer
+                // re-sends until this branch reports success)
                 const QString err = obj["error"].toString();
                 if (!err.isEmpty() && err != QLatin1String("success")) {
-                    qWarning("[MpvController] auto-fit: content-aspect read failed: %s — fit stays off for this file",
-                             qPrintable(err));
+                    if (m_aspectRetries <= 1)
+                        qInfo("[MpvController] auto-fit: content aspect not ready yet (%s) — retry loop armed",
+                              qPrintable(err));
                 } else {
+                    m_aspectKnown = true;
+                    if (m_aspectRetryTimer) m_aspectRetryTimer->stop();
                     const double v = obj["data"].toDouble();
                     if (v > 0.0) {
                         if (m_windowAspect > 0.0)
