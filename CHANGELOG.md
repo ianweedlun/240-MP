@@ -96,10 +96,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `auto-fit verdict: …` per launch.
 - Third follow-up (same day, after CRT confirmation): the retry pattern worked
   but leaked a letterbox burst — first frames decoded before the first post-load
-  retry. Read moved to the `playback-restart` IPC event (fires on EVERY file
-  load, after initial seek, before first frame — mpv's per-file option point,
-  already trusted for the `--start` clear). Per-file reads now; retry timer and
-  its members deleted. Verdict now precedes frame one.
+  retry. Raw IPC probe settled the event truth: mpv 0.40 emits ONLY
+  `video-reconfig` then `end-file` across a file playback (start / playback-
+  restart / file-loaded are NOT emitted over IPC; `video-params/aspect` was
+  never observable). Read moved to `video-reconfig` — fires at the output
+  reconfiguration point of each file load, params ready, before frame one.
+  Per-file correct; retry machinery and the wrong-event attempt both dropped.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`

@@ -611,25 +611,26 @@ void MpvController::onIpcReadyRead() {
             // so onProcessFinished can distinguish a natural finish from a quit.
             if (event == "end-file") {
                 m_lastEndFileReason = obj["reason"].toString();
-            } else if (event == "playback-restart") {
-                // Fires on EVERY file load, after the initial seek but before the
-                // first frame is decoded — mpv's own per-file option point (its
-                // resume scripts set options here). So the content-aspect read +
-                // set_property panscan land before frame one: no letterbox burst.
+            } else if (event == "video-reconfig") {
+                // mpv 0.40's IPC event stream for a file load is exactly:
+                // video-reconfig, then end-file (verified with a raw socket probe;
+                // start/playback-restart/file-loaded are NOT emitted over IPC).
+                // video-reconfig fires when the output is (re)configured at file
+                // load — params are ready there and no frame has decoded yet —
+                // so the aspect read + fit apply before frame one, per file.
                 if (autoFitEnabled())
                     sendCommand({"get_property", "video-params/aspect"}, 9003);
-                if (m_pendingStartClear) {
-                    // --start is a global option that mpv re-applies on *every* file load,
-                    // and --loop-playlist reloads its entries on wrap. Left set, a resumed
-                    // file would restart at the resume offset on every loop lap (and every
-                    // later playlist entry would start there too) instead of at the
-                    // beginning. mpv only reads `start` when it loads a file, and
-                    // playback-restart means the initial seek is already done — so clearing
-                    // it here leaves the current playback alone while every subsequent load
-                    // begins at 0. Guarded so it fires once per session, not on every seek.
-                    m_pendingStartClear = false;
-                    sendCommand({"set_property", "start", "none"});
-                }
+            } else if (event == "playback-restart" && m_pendingStartClear) {
+                // --start is a global option that mpv re-applies on *every* file load,
+                // and --loop-playlist reloads its entries on wrap. Left set, a resumed
+                // file would restart at the resume offset on every loop lap (and every
+                // later playlist entry would start there too) instead of at the
+                // beginning. mpv only reads `start` when it loads a file, and
+                // playback-restart means the initial seek is already done — so clearing
+                // it here leaves the current playback alone while every subsequent load
+                // begins at 0. Guarded so it fires once per session, not on every seek.
+                m_pendingStartClear = false;
+                sendCommand({"set_property", "start", "none"});
             } else if (event == "client-message") {
                 const QJsonArray args = obj["args"].toArray();
                 if (args.size() > 0) {
