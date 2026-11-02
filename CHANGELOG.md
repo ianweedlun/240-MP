@@ -60,6 +60,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (tree unchanged, zero content) — dev/main/upstream had unrelated roots since project setup re-rooted
   dev; the "N commits behind upstream" badge was a topology artifact, now 0-behind. Never rebase dev.
 
+### Added — Debug key-channel capture token (dev)
+- The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
+  chokepoint as real input) now accepts `shot`/`f12` lines: invokes the same
+  `AppCore::takeScreenshot` capture as the physical/injected capture keys. Local
+  offscreen runs (arm64 binary under WSL) get scripted screenshots in `/tmp`,
+  view-tagged filenames included; Pi behavior unchanged.
+
 ### Added — Plex resolution-aware direct play (#14, feature/plex-res-direct-play)
 - Direct-play/transcode decision from stream-metadata resolution class vs the quality ladder: at/below threshold direct, above transcodes; shorter edge for portrait/rotated files; unknown dimensions transcode (safe CRT branch).
 - Quality options relabeled to the new semantics: "Direct Play (always)", "Above 1080p/720p/480p: transcode" (corrected ladder ids 8000/3000/1500; legacy custom ids keep always-transcode).

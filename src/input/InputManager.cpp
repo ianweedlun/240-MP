@@ -730,6 +730,12 @@ void InputManager::pollDebugKeyChannel()
         const QString cmd = raw.trimmed().toLower();
         if (cmd.isEmpty())
             continue;
+        if (cmd == QLatin1String("shot") || cmd == QLatin1String("f12")) {
+            // same capture chokepoint as the physical/injected capture keys
+            if (m_appCore)
+                QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
+            continue;
+        }
         Action a = Action::None;
         if (cmd == QLatin1String("up")) a = Action::Up;
         else if (cmd == QLatin1String("down")) a = Action::Down;
