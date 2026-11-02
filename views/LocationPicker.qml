@@ -55,21 +55,6 @@ FocusScope {
         goBack()
     }
 
-    // Escape/Backspace leave; Enter acts on the focused cell. Key codes,
-    // not characters — onKeyPressed misses control keys. Arrows fall to
-    // the handlers below.
-    Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace
-                                       || event.key === Qt.Key_Back) {
-            goBack()
-            event.accepted = true
-            return
-        }
-        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            actOnCell()
-            event.accepted = true
-        }
-    }
     Keys.onPressed: function(event) {
         // Arrows come through the same event as all keys: a key-code test
         // rather than per-handler signal (this Qt build's Keys namespace has
@@ -80,7 +65,7 @@ FocusScope {
             return
         }
         if (event.key === Qt.Key_Return) {
-            locationPicker.commit()
+            locationPicker.actOnCell()
             event.accepted = true
             return
         }
