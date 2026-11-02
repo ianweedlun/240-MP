@@ -7,6 +7,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 
 // Backend for the YouTube module (V1 "feed" approach — no auth).
@@ -49,6 +50,20 @@ public:
     // Maps the playback_resolution setting ("480p"/"720p"/"1080p", unknown → 480p)
     // to a yt-dlp format string. H.264 is preferred first for RPi hardware decode.
     Q_INVOKABLE QString ytdlFormatForResolution(const QString &resolution) const;
+
+    // Direct-playback path (issue #28 plan A): ytdl_hook re-resolves every stream
+    // at each mpv launch, which is seconds on the Pi. resolvePlayback asks yt-dlp
+    // for the signed URL in advance (background, fire-and-forget); cachedPlaybackUrl
+    // hands it to the Player while its signed window is still fresh, and the Player
+    // launches mpv with --ytdl=no around it. Freshness is the URL's own expire=
+    // epoch (parse + margin math live in util/YtUrlFresh.h, unit-tested).
+    Q_INVOKABLE void resolvePlayback(const QString &videoId, const QString &resolution);
+    Q_INVOKABLE QString cachedPlaybackUrl(const QString &videoId, const QString &resolution);
+
+    // Plan A warm-up: one pass over watch history finds the newest video with
+    // an unfinished resume position and fires its background resolve, so the
+    // resume-into-a-warm-stream case costs zero at play time.
+    Q_INVOKABLE void warmResumePlayback(const QString &resolution);
 
     // Watch history (youtube_history.json). A finished video stays in history
     // with pos 0 (so it lists under History but never prompts to resume);
@@ -105,6 +120,13 @@ private:
     QVariantList loadWatchLater() const;
     void         saveWatchLater(const QVariantList &list);
 
+    // Direct-playback URL cache (issue #28 plan A). Persisted as
+    // youtube_url_cache.json: { "videoId|formatSpec": { url, expire } }.
+    QString      urlCacheFilePath() const;
+    void         ensureUrlCacheLoaded();   // lazy one-time load + expiry prune
+    void         storeUrlCacheEntry(const QString &key, const QString &url,
+                                    qint64 expireEpoch); // prune + persist
+
     QStringList  readSubscriptionIds(QString *error = nullptr) const;
     void         ensureFresh(bool forceRefresh);
     void         refreshChannel(const QString &channelId);
@@ -144,10 +166,17 @@ private:
     bool    m_emitPlaylistsWhenDone = false;
     QString m_emitPlaylistVideosWhenDone;     // playlistId, or empty
 
+    // Direct-playback URL cache state (issue #28 plan A)
+    QJsonObject m_urlCache;
+    bool        m_urlCacheLoaded = false;
+
     static constexpr qint64 kCacheTtlMs      = 15 * 60 * 1000;
     static constexpr int    kMaxFeedItems    = 100;
     static constexpr int    kMaxHistoryItems = 100;
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
     static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // yt-dlp is heavy on the Pi
-    static constexpr int    kPlaylistFetchTimeoutMs = 60000;
+    static constexpr int kPlaylistFetchTimeoutMs = 60000;
+    static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
+    static constexpr int    kUrlCacheMaxEntries = 80;
+    static constexpr int    kYtdlResolveTimeoutMs = 30000;
 };

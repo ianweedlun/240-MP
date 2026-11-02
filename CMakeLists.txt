@@ -286,6 +286,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME palette-consistency COMMAND palette-tests)
 
+    # YouTube direct-URL cache: pure helpers (expire-parameter parse, freshness
+    # margin, prune cap). No processes, no network (issue #28 plan A).
+    add_executable(yt-url-cache-tests
+        src/util/tests/YtUrlFreshTest.cpp)
+    set_target_properties(yt-url-cache-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-url-cache-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-url-cache-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-url-cache COMMAND yt-url-cache-tests)
+
 endif()
 
 include(CPack)

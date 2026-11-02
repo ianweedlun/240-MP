@@ -1,5 +1,6 @@
 #include "YouTubeBackend.h"
 #include "../../util/YtDlpLocator.h"
+#include "../../util/YtUrlFresh.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -723,4 +724,140 @@ void YouTubeBackend::removeFromWatchLater(const QString &videoId) {
 
 void YouTubeBackend::delete_watch_later() {
     QFile::remove(watchLaterFilePath());
+}
+
+// ---------------------------------------------------------------------------
+// Direct-playback path (issue #28 plan A). mpv's ytdl_hook re-resolves the
+// signed stream URL on every launch; the app pays that at each play. This
+// resolves with yt-dlp ahead of time (fire-and-forget) and keeps the URL
+// under its own expire= epoch; the Player takes the cached URL plus
+// --ytdl=no while it is fresh, else falls back to the ytdl path unchanged.
+
+QString YouTubeBackend::urlCacheFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_url_cache.json");
+}
+
+void YouTubeBackend::ensureUrlCacheLoaded()
+{
+    if (m_urlCacheLoaded)
+        return;
+    m_urlCacheLoaded = true;
+    QFile f(urlCacheFilePath());
+    if (f.open(QIODevice::ReadOnly)) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
+        if (doc.isObject())
+            m_urlCache = doc.object();
+    }
+    // Dead windows never come back; prune on load so the file stays small.
+    yturl::pruneUrlCache(m_urlCache, QDateTime::currentMSecsSinceEpoch() / 1000,
+                        kUrlCacheMaxEntries);
+}
+
+QString YouTubeBackend::cachedPlaybackUrl(const QString &videoId,
+                                         const QString &resolution)
+{
+    if (videoId.isEmpty())
+        return QString();
+    ensureUrlCacheLoaded();
+    const QString key = yturl::cacheKeyFor(videoId, ytdlFormatForResolution(resolution));
+    const QJsonValue entry = m_urlCache.value(key);
+    if (!entry.isObject())
+        return QString();
+    const QJsonObject obj = entry.toObject();
+    const QString url = obj.value(QStringLiteral("url")).toString();
+    if (url.isEmpty()
+        || !yturl::urlFresh(static_cast<qint64>(obj.value(QStringLiteral("expire")).toDouble()),
+                            QDateTime::currentMSecsSinceEpoch() / 1000,
+                            kUrlSafetyMarginS))
+        return QString();
+    return url;
+}
+
+void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
+                                        qint64 expireEpoch)
+{
+    QJsonObject entry;
+    entry.insert(QStringLiteral("url"), url);
+    entry.insert(QStringLiteral("expire"), static_cast<qint64>(expireEpoch));
+    m_urlCache.insert(key, entry);
+    yturl::pruneUrlCache(m_urlCache, QDateTime::currentMSecsSinceEpoch() / 1000,
+                        kUrlCacheMaxEntries);
+    QFile f(urlCacheFilePath());
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact));
+}
+
+void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &resolution)
+{
+    if (videoId.isEmpty())
+        return;
+    ensureUrlCacheLoaded();
+    const QString fmt = ytdlFormatForResolution(resolution);
+    const QString key = yturl::cacheKeyFor(videoId, fmt);
+    const qint64 nowS = QDateTime::currentMSecsSinceEpoch() / 1000;
+    {
+        const QJsonValue entry = m_urlCache.value(key);
+        if (entry.isObject()
+            && yturl::urlFresh(static_cast<qint64>(entry.toObject().value(QStringLiteral("expire")).toDouble()),
+                               nowS, kUrlSafetyMarginS))
+            return; // fresh window already on file — nothing to redo
+    }
+    const QString bin = ytdlp::locate(m_dataRoot);
+    if (bin.isEmpty())
+        return;
+
+    auto *proc = new QProcess(this);
+    const QStringList args{
+        QStringLiteral("-g"),
+        QStringLiteral("--no-playlist"),
+        QStringLiteral("--no-warnings"),
+        QStringLiteral("-f"), fmt,
+        QStringLiteral("--"),
+        watchUrlFor(videoId),
+    };
+    connect(proc, &QProcess::finished, this, [this, proc, key, nowS]() {
+        // The first output line is the signed URL (-g prints one per format).
+        const QList<QByteArray> lines = proc->readAllStandardOutput().split('\n');
+        QString url;
+        for (const QByteArray &line : lines) {
+            url = line.trimmed();
+            if (!url.isEmpty())
+                break;
+        }
+        if (url.isEmpty())
+            return; // network hiccup, yt-dlp bump, timeout — ytdl stays the fallback
+        const qint64 expire = yturl::expireEpochFromUrl(url);
+        if (expire > nowS)
+            storeUrlCacheEntry(key, url, expire);
+        proc->deleteLater();
+    });
+    connect(proc, &QProcess::errorOccurred, this,
+            [proc](QProcess::ProcessError processError) {
+                if (processError == QProcess::FailedToStart)
+                    proc->deleteLater(); // launch failure: no finished signal, no cache entry
+            });
+    QTimer::singleShot(kYtdlResolveTimeoutMs, proc, [proc]() { proc->kill(); });
+    proc->start(bin, args);
+}
+
+void YouTubeBackend::warmResumePlayback(const QString &resolution)
+{
+    const QVariantMap history = loadHistory();
+    QString bestVideoId;
+    qint64 bestLastPlayed = 0;
+    for (auto it = history.begin(); it != history.end(); ++it) {
+        const QVariantMap entry = it.value().toMap();
+        if (entry.value(QStringLiteral("pos")).toInt() <= 0)
+            continue; // finished videos never resume
+        const qint64 lastPlayed = entry.value(QStringLiteral("lastPlayed")).toLongLong();
+        if (lastPlayed > bestLastPlayed) {
+            bestLastPlayed = lastPlayed;
+            bestVideoId    = it.key();
+        }
+    }
+    if (!bestVideoId.isEmpty())
+        resolvePlayback(bestVideoId, resolution);
 }

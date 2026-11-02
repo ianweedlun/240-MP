@@ -16,6 +16,7 @@ FocusScope {
     property var    playlistItems: navParams.playlistItems || []
     property int    playlistIndex: navParams.playlistIndex === undefined ? -1 : navParams.playlistIndex
 
+    property string directPlayUrl:  ""   // fresh cached googlevideo URL (plan A), else empty
     property bool   overlayVisible:   false
     property bool   playbackStarted:  false
     property int    savedPositionMs:  0
@@ -33,7 +34,28 @@ FocusScope {
     function doPlay(startMs) {
         overlayVisible = false
         lastStartMs = startMs
-        mpvController.loadAndPlay(videoUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, ytdlArgs)
+        // directPlayUrl and ytdlArgs are set together by preparePlayback; when
+        // a fresh signed URL is on hand mpv takes it with --ytdl=no and skips
+        // ytdl_hook's re-resolve entirely.
+        const playUrl = directPlayUrl !== "" ? directPlayUrl : videoUrl
+        mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, ytdlArgs)
+    }
+
+    // Cached-URL lookup + next-window warm-up for the CURRENT item (issue #28
+    // plan A): take a fresh cached stream URL if one exists, ask the backend
+    // to resolve this video regardless (no-op when a fresh window is already
+    // stored), so quitting-and-resuming hits the direct path next time.
+    function preparePlayback() {
+        var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+        const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
+        if (direct !== "") {
+            directPlayUrl = direct
+            ytdlArgs = ["--ytdl=no"]
+        } else {
+            directPlayUrl = ""
+            ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
+        }
+        youtubeBackend.resolvePlayback(videoId, resolution)
     }
 
     // Starting mpv runs synchronously and, on the Pi, immediately switches VT
@@ -61,6 +83,7 @@ FocusScope {
         lastKnownDurationMs = 0
         savedPositionMs = 0
         updateBackListState({ currentIndex: playlistIndex })
+        preparePlayback()
         play(0)
         return true
     }
@@ -160,8 +183,7 @@ FocusScope {
             goBack()
             return
         }
-        var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
-        ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
+        preparePlayback()
 
         var resumeSetting = appCore.get_setting(moduleRoot.moduleId, "resume_playback") || "Ask"
         var saved = youtubeBackend.getSavedPosition(videoId)

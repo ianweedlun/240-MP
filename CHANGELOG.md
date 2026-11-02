@@ -4,6 +4,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — YouTube: background direct-stream URL cache + module-entry warm-up (dev, #28 plan A)
+- `YouTubeBackend.resolvePlayback/cachedPlaybackUrl/warmResumePlayback`: yt-dlp pre-resolves
+  the signed googlevideo URL (fire-and-forget, 30 s timeout), stored under the URL's own
+  `expire=` epoch in `youtube_url_cache.json` (capped 80, expired pruned on load).
+  `Root.qml` module entry warms the newest unfinished resume target; `Player.qml` takes a
+  fresh cached URL with `--ytdl=no` (skipping ytdl_hook's ~4.5 s re-resolve) and otherwise
+  keeps the ytdl path unchanged.
+- Known regression while on the direct path: ytdl-supplied subtitle tracks are absent
+  (accepted tradeoff on issue #28; fallback path restores them when windows expire).
+- `util/YtUrlFresh.h` pure helpers (expire-param parse, freshness margin, prune cap)
+  + `yt-url-cache` unit test — 6 cases, param-boundary decoys, margin edges, cap order.
+
 ### Added — Built-in color scheme palettes (#15, feature/color-schemes)
 - Five new built-in schemes in the themes map (`Main.qml`) + matching Settings picker
   entries (`views/Settings.qml`): Dracula, Tokyo Night, Nord, Solarized Dark, Monokai.

@@ -61,5 +61,14 @@ FocusScope {
         }
     }
 
-    Component.onCompleted: navigateTo("Items.qml", {})
+    Component.onCompleted: {
+        // Issue #28 plan A warm-up: before any view opens, kick the backend
+        // pass that pre-resolves the newest unfinished resume target with
+        // yt-dlp in the background. If the user walks over to resume that
+        // video, the signed stream URL is already cached and mpv skips
+        // ytdl_hook's multi-second re-resolve at play time.
+        var resolution = appCore.get_setting(moduleId, "playback_resolution") || "480p"
+        youtubeBackend.warmResumePlayback(resolution)
+        navigateTo("Items.qml", {})
+    }
 }
