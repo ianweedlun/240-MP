@@ -54,27 +54,25 @@ FocusScope {
         goBack()
     }
 
-    Keys {
-        // Escape/Backspace leave; Enter acts on the focused cell. Key codes,
-        // not characters — onKeyPressed misses control keys. Arrows fall to
-        // the handlers below.
-        onPressed: function(event) {
-            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace
-                                           || event.key === Qt.Key_Back) {
-                goBack()
-                event.accepted = true
-                return
-            }
-            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                actOnCell()
-                event.accepted = true
-            }
+    // Escape/Backspace leave; Enter acts on the focused cell. Key codes,
+    // not characters — onKeyPressed misses control keys. Arrows fall to
+    // the handlers below.
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace
+                                       || event.key === Qt.Key_Back) {
+            goBack()
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            actOnCell()
+            event.accepted = true
         }
     }
-    Keys.onKeyDown:  cell = (cell + 4) % 16
-    Keys.onKeyUp:    cell = (cell + 12) % 16
-    Keys.onKeyLeft:  cell = Math.max(0, cell - 1)
-    Keys.onKeyRight: cell = Math.min(15, cell + 1)
+    Keys.onKeyDown:  locationPicker.cell = (locationPicker.cell + 4) % 16
+    Keys.onKeyUp:    locationPicker.cell = (locationPicker.cell + 12) % 16
+    Keys.onKeyLeft:  locationPicker.cell = Math.max(0, locationPicker.cell - 1)
+    Keys.onKeyRight: locationPicker.cell = Math.min(15, locationPicker.cell + 1)
 
     AppBar {
         iconSource: "../assets/images/logo.svg"
