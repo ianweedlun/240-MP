@@ -26,6 +26,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Evidence screenshots (`evidence/**`, 17 files) untracked from the tree — validation artifacts live
   on the tracking issues; older ones remain recoverable via git history at the commits that validated them.
 
+### Changed — Telemetry portability contract line (dev)
+- Contract gains a Code Conventions section: telemetry primitives (CMake `TELEMETRY` option,
+  `telemetryEnabled` signals, `AppCore::log/startTelemetrySession`) are pinned app-level, outside
+  every module; modules only consume them and new modules inherit via the module pattern. Cashes
+  #38's portability intent into the contract so future bursts never re-derive it.
+
 ### Changed — Dev-first branch model (dev)
 - Dev-first branch model adopted as the integration contract. All area branch tips (retroarch,
   weather, mpv-config, plex-quality, color-schemes) were merged into `dev` (single merge commits,
