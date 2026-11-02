@@ -64,6 +64,7 @@ FocusScope {
         // Arrows come through the same event as all keys: a key-code test
         // rather than per-handler signal (this Qt build's Keys namespace has
         // none of the directional handlers).
+        console.log("[lpk] key:", event.key, "text:", event.text)
         if (event.key === Qt.Key_F12) {
             const out = appCore.takeScreenshot()
             if (out.length) { console.log("[screenshot] wrote:", out) }
