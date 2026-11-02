@@ -80,14 +80,13 @@ FocusScope {
     // row-major with wrapping; a quarter-width delegate fixes the grid at 4x4.
     Repeater {
         id: dial
-        anchorsEnabled: true
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.30
         anchors.left: parent.left
         anchors.leftMargin: root.sw * 0.125
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125
-        model: locationPicker.glyphs.length
+        model: 16
         delegate: Item {
             width: parent.width / 4
             height: root.sh * 0.09
