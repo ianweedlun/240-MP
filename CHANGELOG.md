@@ -102,6 +102,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   never observable). Read moved to `video-reconfig` — fires at the output
   reconfiguration point of each file load, params ready, before frame one.
   Per-file correct; retry machinery and the wrong-event attempt both dropped.
+- Fourth follow-up — THE ROOT CAUSE: none of the event/reply dispatch ever ran.
+  The dispatch gate asked `!obj["request_id"].isNull()` to tell replies from
+  events, but Qt 6 `QJsonObject::operator[]`/`value()` hand back a NON-NULL
+  default for absent keys (empirically: `isNull()` false, `toInt()` 0 for a
+  missing key — verified with a standalone Qt6 probe). So every event line took
+  the reply branch and `continue`d: all event handling (auto-fit reads, end-file
+  reason, pause mirroring, position watchdog) was dead since the first commit.
+  Fixed with `contains()`-based membership probes at both spots (request_id
+  gate, property-change `data` gate); a WSL Qt6 probe over the captured Pi
+  journal lines confirms the three branches now dispatch correctly.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`

@@ -570,9 +570,12 @@ void MpvController::onIpcReadyRead() {
         // request_id and carry error:"success" on OK — only a real error string
         // means unavailable. Compute the window aspect once both halves are in,
         // then flush any content aspect that arrived out of order.
-        const QJsonValue rid = obj["request_id"];
-        if (!rid.isNull()) {
-            const int ridI = rid.toInt();
+        // NOTE: obj[key] / value() on Qt 6 returns a NON-NULL default for absent
+        // keys (empirically: isNull() is false for a missing "request_id"), so
+        // membership MUST be probed with contains() — isNull()-guards let every
+        // event line fall into this branch and swallow all event handling.
+        if (obj.contains(QStringLiteral("request_id"))) {
+            const int ridI = obj.value(QStringLiteral("request_id")).toInt();
             if (ridI == 9001 || ridI == 9002) {
                 const QString err = obj["error"].toString();
                 if (!err.isEmpty() && err != QLatin1String("success")) {
@@ -659,7 +662,9 @@ void MpvController::onIpcReadyRead() {
         m_lastIpcEventMs = QDateTime::currentMSecsSinceEpoch();
 
         const QString     name = obj["name"].toString();
-        const QJsonValue  data = obj["data"];
+        if (!obj.contains(QStringLiteral("data")))
+            continue; // registration line (property announced, no value yet)
+        const QJsonValue  data = obj.value(QStringLiteral("data"));
         if (data.isNull() || data.isUndefined()) continue; // property unavailable during shutdown
         if (name == "pause") {
             m_paused = data.toBool();
