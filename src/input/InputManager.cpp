@@ -1048,14 +1048,14 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
         return true;
     }
 
-    // F12: trigger screenshot (debug). Physical F12 only; plus Tab arriving
-    // through the injected control-server channel: Qt's EGLFS keymap drops
-    // F-series codes from injection while Tab survives, and gating the Tab
-    // arm on synthetic keeps injected captures app-level (no per-view QML
-    // handler needed for future capture gates).
+    // F12/Tab: trigger screenshot (debug). Physical F12 on the daily driver;
+    // Tab for the injected control-server channel — Qt's EGLFS keymap drops
+    // F-series codes from injection while Tab survives, and injected events
+    // are raw (not app-synthetic), so Tab is the only injectable capture key.
+    // Trade-off: a physical Tab press also captures (rare; NFC text uses
+    // TextInput text events, not KeyPress Tab).
     if (type == QEvent::KeyPress && !ke->isAutoRepeat()
-        && ((ke->key() == Qt::Key_F12 && !synthetic)
-            || (ke->key() == Qt::Key_Tab && synthetic))) {
+        && (ke->key() == Qt::Key_F12 || ke->key() == Qt::Key_Tab)) {
         qInfo("[input] capture key pressed — triggering screenshot");
         if (m_appCore) {
             QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
