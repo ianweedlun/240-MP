@@ -91,9 +91,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   read answers `property unavailable` immediately. Final pattern: one read at
   connect + bounded retry timer (2 s x 8) until a value arrives, echoed on
   integer request_id 9003; success arms the fit, first failure just logs
-  "not ready yet". (The intermediate `file-loaded`-event attempt was caught
+  `"not ready yet"`. (The intermediate `file-loaded`-event attempt was caught
   pre-deploy: that name is a Lua hook point, not an IPC event.) Journal gains
   `auto-fit verdict: …` per launch.
+- Third follow-up (same day, after CRT confirmation): the retry pattern worked
+  but leaked a letterbox burst — first frames decoded before the first post-load
+  retry. Read moved to the `playback-restart` IPC event (fires on EVERY file
+  load, after initial seek, before first frame — mpv's per-file option point,
+  already trusted for the `--start` clear). Per-file reads now; retry timer and
+  its members deleted. Verdict now precedes frame one.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
