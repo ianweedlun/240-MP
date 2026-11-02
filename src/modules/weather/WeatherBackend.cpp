@@ -282,6 +282,10 @@ void WeatherBackend::onSettingChanged(const QString &moduleId, const QString &ke
         if (ok)
             setMusicVolumeSilent(volume);
     }
+    // LOCATION setting (#37): the picker saves an explicit "lat, lon" spec
+    // under this key; apply it as a rewrite of weather_location.txt.
+    if (key == QLatin1String("location"))
+        applyLocationSetting(value.toString());
 }
 
 void WeatherBackend::getDisplays() {
@@ -291,6 +295,28 @@ void WeatherBackend::getDisplays() {
         QVariantMap{ { "id", "others"   }, { "label", "OTHER LOCATIONS"    } },
         QVariantMap{ { "id", "almanac"  }, { "label", "ALMANAC"            } },
     });
+}
+
+// The LOCATION setting (#37) through the generic settings dispatch.
+void WeatherBackend::setLocation(const QString &spec)
+{
+    applyLocationSetting(spec);
+}
+
+// COMMIT gate for the picker: parseability only — no network.
+bool WeatherBackend::looksLikeCoordinates(const QString &spec) const
+{
+    double lat = 0.0, lon = 0.0;
+    QString label;
+    return WeatherBackend::parseCoordLine(spec, &lat, &lon, &label);
+}
+
+// The picker header reads the file itself, so conf-only edits (names,
+// reordering) show up too.
+QString WeatherBackend::primaryLocationLine() const
+{
+    const QStringList lines = readLocationLines();
+    return lines.isEmpty() ? QString() : lines.first();
 }
 
 void WeatherBackend::emitError(const QString &reason) {
@@ -604,6 +630,40 @@ void WeatherBackend::resolveLocation() {
         m_refresh->start();
         resolveOthers(others);
     });
+}
+
+// Applies the LOCATION setting (#37): the picker composed an explicit
+// "lat, lon" spec, so write it as the new primary line of weather_location.txt
+// — same text the conf edit would have carried, extras kept — then re-resolve
+// through the very same path start() takes. The refresh timer stops first:
+// the re-resolve restarts it, and double-starting would leak a running timer.
+void WeatherBackend::applyLocationSetting(const QString &spec)
+{
+    const QString trimmed = spec.trimmed();
+    if (trimmed.isEmpty()) return;
+
+    QStringList lines = readLocationLines();
+    if (lines.isEmpty())
+        lines << trimmed;
+    else
+        lines.replace(0, trimmed);
+
+    const QString path = location_file_path();
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning("[Weather] location setting not applied: %s", qPrintable(path));
+        emitError(QStringLiteral("unreadable"));
+        return;
+    }
+    file.write((lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8());
+    file.close();
+    qInfo("[Weather] LOCATION set: primary line -> \"%s\"", qPrintable(trimmed));
+
+    if (m_resolved) {
+        if (m_refresh) m_refresh->stop();
+        m_resolved = false;
+    }
+    resolveLocation();
 }
 
 // Geocodes one "Name, qualifier, ..." line. Reports failure through `done` with
@@ -1028,16 +1088,27 @@ void WeatherBackend::fetchAirQuality() {
     QNetworkReply *reply = m_nam->get(QNetworkRequest(url));
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) return; // keep last good value
+        if (reply->error() != QNetworkReply::NoError) {
+            qWarning("[Weather] air-quality fetch failed: %s",
+                     qPrintable(reply->errorString()));
+            return; // keep last good value
+        }
         const QJsonObject cur = QJsonDocument::fromJson(reply->readAll())
                                     .object()["current"].toObject();
-        if (cur.isEmpty()) return;
+        if (cur.isEmpty()) {
+            qWarning("[Weather] air-quality response has no current object");
+            return;
+        }
         const bool us = useUsUnits();
         // A layer the model lacks arrives as null; toDouble() would read that
         // as a deceiving zero, so presence is checked before the value.
         const QString layer = us ? QStringLiteral("us_aqi")
                                  : QStringLiteral("european_aqi");
-        if (!cur.contains(layer) || cur[layer].isNull()) return;
+        if (!cur.contains(layer) || cur[layer].isNull()) {
+            qInfo("[Weather] air-quality layer '%s' not offered for this location",
+                  layer.toUtf8().constData());
+            return;
+        }
         const double v = cur[layer].toDouble();
         m_airQuality = us
             ? QStringLiteral("%1 %2").arg(qRound(v)).arg(aqiCategoryUs(v))

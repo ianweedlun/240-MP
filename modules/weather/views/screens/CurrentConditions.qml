@@ -23,15 +23,17 @@ Item {
     // view is the single renderer for current-conditions rows.
     function rowTexts() {
         var w = screen.wx
-        var out = [
-            "HUMIDITY: " + (w.humidity || ""),
-            "DEWPOINT: " + (w.dewPoint || ""),
-            "PRESSURE: " + (w.pressure || ""),
-            "WIND: " + (w.wind || ""),
-            "VISIBILITY: " + (w.visibility || "")
-        ]
+        // Must-show rows (air quality/UV) lead the column: the old prefix
+        // order cut them at Pi CRT height (480 px). Nice-to-have rows
+        // (humidity/dew/pressure/wind/visibility) follow in natural order.
+        var out = []
         if (w.airQuality !== undefined) out.push("AIR QUALITY: " + (w.airQuality || ""))
         if (w.uvIndex !== undefined) out.push("UV INDEX: " + (w.uvIndex || ""))
+        out.push("HUMIDITY: " + (w.humidity || ""),
+                 "DEWPOINT: " + (w.dewPoint || ""),
+                 "PRESSURE: " + (w.pressure || ""),
+                 "WIND: " + (w.wind || ""),
+                 "VISIBILITY: " + (w.visibility || ""))
         return out
     }
 
@@ -53,10 +55,11 @@ Item {
         return y
     }
     function rowFit() {
+        // Height budget: prefix of the (priority-ordered) row list that fits.
         var used = 0, fit = 0
-        var n = rowTexts().length
-        for (var i = 0; i < n; ++i) {
-            used += reservedLines(i) * (screen.lineSize + screen.lineGap)
+        var lineH = screen.lineSize + screen.lineGap
+        for (var i = 0; i < rowTexts().length; ++i) {
+            used += reservedLines(i) * lineH
             if (used > rowArea.height) break
             fit++
         }
@@ -135,10 +138,10 @@ Item {
             model: Math.min(screen.rowTexts().length, screen.rowFit())
             Text {
                 x: 0
+                text: screen.rowTexts()[index]
                 y: screen.reservedOffset(index)
                 width: rowArea.width
                 wrapMode: Text.WordWrap
-                text: screen.rowTexts()[index]
                 color: root.primaryColor
                 font.family: root.globalFont
                 font.pixelSize: screen.lineSize

@@ -675,6 +675,23 @@ void AppCore::note_state(const QString &event, const QString &detail)
 #endif
 }
 
+void AppCore::write_debug_json(const QString &name, const QVariant &value)
+{
+#ifdef APP_TELEMETRY
+    QJsonObject doc;
+    doc.insert(QStringLiteral("name"), name);
+    doc.insert(QStringLiteral("value"), QJsonValue::fromVariant(value));
+    const QString path = QStringLiteral("/tmp/240mp_wx.json");
+    const QString tmp = path + QStringLiteral(".tmp");
+    QFile f(tmp);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return; // debug aid — never fail into the app
+    f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
+    f.close();
+    QFile::rename(tmp, path); // atomic swap: readers never see half a doc
+#endif
+}
+
 bool AppCore::telemetryEnabled() const
 {
 #ifdef APP_TELEMETRY

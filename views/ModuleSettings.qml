@@ -83,6 +83,13 @@ FocusScope {
             return saved !== "" ? saved : "Default"
         }
 
+        if (type === "location_picker") {
+            // The file is truth, not the saved value: conf-only edits show
+            // too, and so do picker commits.
+            var line = weatherBackend.primaryLocationLine()
+            return line !== "" ? line : "NOT SET"
+        }
+
         return ""
     }
 
@@ -233,6 +240,11 @@ FocusScope {
                     moduleId: moduleSettingsRoot.moduleId,
                     settingKey: item.key,
                     currentPath: savedPath !== "" ? savedPath : appCore.homePath()
+                }, { currentIndex: settingsList.currentIndex })
+            } else if (item.type === "location_picker") {
+                moduleSettingsRoot.navigateTo("views/LocationPicker.qml", {
+                    moduleId: moduleSettingsRoot.moduleId,
+                    settingKey: item.key
                 }, { currentIndex: settingsList.currentIndex })
             }
         }
