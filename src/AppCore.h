@@ -73,6 +73,10 @@ public:
     // at view loads / nav transitions / screensaver changes so a remote test
     // loop can track app state over SSH without screenshots or vision.
     Q_INVOKABLE void note_state(const QString &event, const QString &detail);
+    // Debug aid: write a JSON object (or any value) into /tmp/240mp_wx.json
+    // atomically (tmp+rename) so an out-of-band reader can inspect live app
+    // state without touching the app's own data path. No-op without telemetry.
+    Q_INVOKABLE void write_debug_json(const QString &name, const QVariant &value);
     // Central telemetry kill-switch for QML core primitives (RowTrackingListView
     // and friends): false in release builds (TELEMETRY=OFF). C++ telemetry bodies
     // are #ifdef-gated regardless; this lets QML-side logic skip work cheaply.

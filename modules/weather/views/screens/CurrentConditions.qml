@@ -21,18 +21,19 @@ Item {
     // (the air-quality/UV APIs don't cover every region). The status-bar
     // ticker no longer carries this set (it duplicated the screen); this
     // view is the single renderer for current-conditions rows.
-    const kSummaryTag = "\u0001"   // internal tag: must-show row (AQ/UV/…)
     function rowTexts() {
         var w = screen.wx
-        var out = [
-            "HUMIDITY: " + (w.humidity || ""),
-            "DEWPOINT: " + (w.dewPoint || ""),
-            "PRESSURE: " + (w.pressure || ""),
-            "WIND: " + (w.wind || ""),
-            "VISIBILITY: " + (w.visibility || "")
-        ]
-        if (w.airQuality !== undefined) out.push(kSummaryTag + "AIR QUALITY: " + (w.airQuality || ""))
-        if (w.uvIndex !== undefined) out.push(kSummaryTag + "UV INDEX: " + (w.uvIndex || ""))
+        // Must-show rows (air quality/UV) lead the column: the old prefix
+        // order cut them at Pi CRT height (480 px). Nice-to-have rows
+        // (humidity/dew/pressure/wind/visibility) follow in natural order.
+        var out = []
+        if (w.airQuality !== undefined) out.push("AIR QUALITY: " + (w.airQuality || ""))
+        if (w.uvIndex !== undefined) out.push("UV INDEX: " + (w.uvIndex || ""))
+        out.push("HUMIDITY: " + (w.humidity || ""),
+                 "DEWPOINT: " + (w.dewPoint || ""),
+                 "PRESSURE: " + (w.pressure || ""),
+                 "WIND: " + (w.wind || ""),
+                 "VISIBILITY: " + (w.visibility || ""))
         return out
     }
 
@@ -53,37 +54,12 @@ Item {
             y += reservedLines(i) * (screen.lineSize + screen.lineGap)
         return y
     }
-    function rowOrder() {
-        // Render order = priority order: must-show rows occupy the top of the
-        // column, nice-to-have rows follow. The old prefix order cut AQ/UV at
-        // 480 px; this order guarantees they land on the Pi CRT.
-        var n = rowTexts().length
-        var prio = rowPriority()
-        var out = []
-        for (var p = 0; p <= 1; ++p) {
-            for (var i = 0; i < n; ++i)
-                if (prio[i] === p) out.push(i)
-        }
-        return out
-    }
-    function rowPriority() {
-        // Keep the current-conditions block and the summary rows (AQ/UV/
-        // dew point/visibility) on screen at Pi height; almanac extras and
-        // station details are nice-to-have and yield when space is tight.
-        var out = []
-        for (var i = 0; i < rowTexts().length; ++i) {
-            out.push(rowTexts()[i].indexOf(kSummaryTag) === 0 ? 0 : 1)
-        }
-        return out
-    }
     function rowFit() {
-        // Height budget over the priority-ordered rows (see rowOrder): must-
-        // show rows claim first, nice-to-have rows spend what remains.
-        var order = rowOrder()
+        // Height budget: prefix of the (priority-ordered) row list that fits.
         var used = 0, fit = 0
         var lineH = screen.lineSize + screen.lineGap
-        for (var k = 0; k < order.length; ++k) {
-            used += reservedLines(order[k]) * lineH
+        for (var i = 0; i < rowTexts().length; ++i) {
+            used += reservedLines(i) * lineH
             if (used > rowArea.height) break
             fit++
         }
@@ -159,16 +135,13 @@ Item {
         anchors.bottom: parent.bottom
 
         Repeater {
-            id: rowRepeater
-            property var renderOrder: screen.rowOrder()
             model: Math.min(screen.rowTexts().length, screen.rowFit())
             Text {
                 x: 0
-                text: { var t = screen.rowTexts()[renderOrder[index]]; return t.indexOf(screen.kSummaryTag) === 0 ? t.substring(1) : t }
-                y: screen.reservedOffset(renderOrder[index])
+                text: screen.rowTexts()[index]
+                y: screen.reservedOffset(index)
                 width: rowArea.width
                 wrapMode: Text.WordWrap
-                onText: appCore.note_state("renderdbg", "i=" + index + " prio=" + String(screen.rowPriority()[renderOrder[index]]) + " row=" + text.substring(0, 24))
                 color: root.primaryColor
                 font.family: root.globalFont
                 font.pixelSize: screen.lineSize
