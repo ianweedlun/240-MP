@@ -70,20 +70,24 @@ FocusScope {
             event.accepted = true
         }
     }
-    Keys.onDown:  locationPicker.cell = (locationPicker.cell + 4) % 16
-    Keys.onUp:    locationPicker.cell = (locationPicker.cell + 12) % 16
-    Keys.onLeft:  locationPicker.cell = Math.max(0, locationPicker.cell - 1)
-    Keys.onRight: locationPicker.cell = Math.min(15, locationPicker.cell + 1)
-
-    AppBar {
-        iconSource: "../assets/images/logo.svg"
-        title: "LOCATION"
-        subtitle: locationPicker.currentLine() === "" ? "NO LOCATION SET"
-                                                      : locationPicker.currentLine()
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.topMargin: root.sh * 0.125
-        anchors.leftMargin: root.sw * 0.125
+    Keys.onPressed: function(event) {
+        // Arrows come through the same event as all keys: a key-code test
+        // rather than per-handler signal (this Qt build's Keys namespace has
+        // none of the directional handlers).
+        if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+            locationPicker.goBack()
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_Return) {
+            locationPicker.commit()
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_Down) { locationPicker.move((locationPicker.cell + 4) % 16); event.accepted = true; return }
+        if (event.key === Qt.Key_Up) { locationPicker.move((locationPicker.cell + 12) % 16); event.accepted = true; return }
+        if (event.key === Qt.Key_Left) { locationPicker.move(Math.max(0, locationPicker.cell - 1)); event.accepted = true; return }
+        if (event.key === Qt.Key_Right) { locationPicker.move(Math.min(15, locationPicker.cell + 1)); event.accepted = true; return }
     }
 
     // The dial itself: a Repeater grid — same primitive the NfcCardWriter's
