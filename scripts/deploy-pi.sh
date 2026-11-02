@@ -100,6 +100,21 @@ TARGET="$PIUSER@$HOST"
 sshrun() { ssh -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
 scpput() { scp -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
 
+# ── Tree-skip fast path (mirrors .github/workflows/deploy-pi.yml) ────────────
+# The Pi carries ~/.240mp-last-deployed-tree (written after each verified deploy).
+# Same pushed tree ⇒ byte-identical build output — no upload, no reboot.
+TREE_SHA=""
+if [ -n "${COMMIT:-}" ]; then
+    TREE_SHA=$(gh api "repos/$REPO/commits/$COMMIT" --jq '.commit.tree.sha' 2>/dev/null || true)
+    if [ -n "${TREE_SHA:-}" ]; then
+        CUR=$(sshrun "cat \$HOME/.240mp-last-deployed-tree 2>/dev/null" 2>/dev/null || true)
+        if [ "$CUR" = "$TREE_SHA" ]; then
+            echo "Tree $TREE_SHA already deployed and verified on the Pi — skipping transfer+reboot."
+            exit 0
+        fi
+    fi
+fi
+
 echo "=== Deploying to $TARGET ==="
 echo "Tarball: $TARBALL"
 
@@ -112,6 +127,8 @@ sleep 30
 for i in $(seq 1 15); do
     OUT=$(sshrun "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || { sleep 10; continue; }
     if echo "$OUT" | grep -q "^active" && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+        # Record the deployed tree so future same-tree pushes skip transfer+reboot.
+        [ -n "${TREE_SHA:-}" ] && sshrun "echo $TREE_SHA > \$HOME/.240mp-last-deployed-tree" || true
         echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($LOCAL_MD5)"
         exit 0
     fi

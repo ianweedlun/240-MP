@@ -17,7 +17,35 @@ jobs:
       actions: read
 
     steps:
+      - name: Stage identity key (key-only auth, no password secrets)
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -q -lf /tmp/pi_id
+
+      - name: Tree-skip fast path (same tree on Pi = no transfer, no reboot)
+        # The Pi carries ~/.240mp-last-deployed-tree (written after each verified
+        # deploy). If the pushed tree hash matches, the build output cannot differ —
+        # uploading + root-side dance would reboot the Pi for a byte-identical tree.
+        # Tree-level gate, NOT binary-md5: the tarball also carries share/240mp
+        # QML assets whose changes must still deploy.
+        run: |
+          HEAD_SHA='${{ github.event.workflow_run.head_sha }}'
+          TREE=$(curl -sS -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/ianweedlun/240-MP/commits/$HEAD_SHA" | jq -r '.commit.tree.sha')
+          if [ -z "$TREE" ] || [ "$TREE" = "null" ]; then echo "tree lookup failed"; exit 1; fi
+          echo "TREE_SHA=$TREE" >> $GITHUB_ENV
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          CUR=$($SSH "cat \$HOME/.240mp-last-deployed-tree 2>/dev/null" || true)
+          if [ "$CUR" = "$TREE" ]; then
+            echo "SKIP_DEPLOY=1" >> $GITHUB_ENV
+            echo "Tree $TREE already deployed and verified on the Pi — no transfer, no reboot."
+          fi
+
       - name: Download arm64 tarball (REST)
+        if: env.SKIP_DEPLOY != '1'
         run: |
           RUN_ID='${{ github.event.workflow_run.id }}'
           echo "Triggering CI run: $RUN_ID"
@@ -34,6 +62,7 @@ jobs:
           ls -la *.tar.gz
 
       - name: Verify tarball
+        if: env.SKIP_DEPLOY != '1'
         run: |
           ls -la *.tar.gz
           file *.tar.gz
@@ -47,6 +76,7 @@ jobs:
           echo "LOCAL_MD5=$LOCAL_MD5" >> $GITHUB_ENV
 
       - name: Get branch and commit from tarball filename
+        if: env.SKIP_DEPLOY != '1'
         run: |
           TARBALL=$(ls *.tar.gz | head -1)
           # Extract branch and commit from filename like:
@@ -56,15 +86,8 @@ jobs:
           echo "BRANCH=$BRANCH" >> $GITHUB_ENV
           echo "COMMIT=$COMMIT" >> $GITHUB_ENV
 
-      - name: Stage identity key (key-only auth, no password secrets)
-        run: |
-          umask 077
-          cat > /tmp/pi_id <<'PIKEY'
-          ${{ secrets.PI_SSH_IDENTITY }}
-          PIKEY
-          ssh-keygen -q -lf /tmp/pi_id
-
       - name: Deploy via ghdeploy + root wrapper, then verify
+        if: env.SKIP_DEPLOY != '1'
         # The Pi's own /usr/local/bin/240mp-ci-deploy (run via sudo, granted by
         # /etc/sudoers.d/240mp-ci) does the whole dance: clear ExecStopPost, VT-stop,
         # extract, restore override, reboot. Connection death from the reboot is expected.
@@ -98,6 +121,10 @@ jobs:
             OUT=$($SSH "$USER@$HOST" "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || continue
             echo "check $i:" "$(echo "$OUT" | tr '\n' ' ')"
             if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+              # Record the deployed tree so future pushes of the same tree can skip
+              # transfer+reboot (the fast path above). Best-effort: a marker miss
+              # only costs a redundant future deploy, never a wrong skip.
+              [ -n "${TREE_SHA:-}" ] && $SSH "$USER@$HOST" "echo $TREE_SHA > \$HOME/.240mp-last-deployed-tree" 2>/dev/null || true
               echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($COMMIT)"
               exit 0
             fi
