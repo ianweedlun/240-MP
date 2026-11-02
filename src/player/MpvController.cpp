@@ -606,6 +606,7 @@ void MpvController::onIpcReadyRead() {
         // property-change is the hot path (fires many times per second), so test
         // it first; only other events pay for the end-file check below.
         if (event != "property-change") {
+            qInfo("[MpvController] ipc event: %s", event.toUtf8().constData());
             // mpv reports why playback ended: "eof" (played to the end),
             // "quit"/"stop" (user exited), "error", etc. Remember the last one
             // so onProcessFinished can distinguish a natural finish from a quit.
