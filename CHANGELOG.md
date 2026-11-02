@@ -4,6 +4,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Weather location dial (#37, feature/weather-osd-signals)
+- LocationPicker highlight now anchors to the glyph Text inside its delegate
+  (ChoiceOverlay pattern); the v1 delegate-arithmetic box misrendered offset
+  across cells, disproved on the screenshot wall. Grid placement stays
+  explicit — bare-Repeater placement misrendered too (v2, also disproved).
+- Screenshot capture trigger accepts `F12 ∪ Tab` in the view: Qt's EGLFS key
+  map drops F-series codes in this build (probed evdev 87–94), while `Tab`
+  delivers as `Qt.Key_Tab` end-to-end; physical F12 unaffected.
+- Verified end-to-end on the Pi: state-driven nav, dial cell move
+  (0→Down+Right→`5`), capture `240mp-LocationPicker_v6_20261102_020145.png`;
+  CI + macOS + Pi-probe green for `edcbdbf8`; deploy md5 `467c7d02…`.
+
 ### Added — Housekeeping & policy (dev, #31/#33)
 - Issue-post attribution now carries the git commit identity as a trailer-style footer
   line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);
