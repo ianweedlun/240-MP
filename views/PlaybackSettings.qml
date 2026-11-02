@@ -1,275 +1,273 @@
 import QtQuick
-import QtQuick.Controls
-import "../shared"
+import Components
 
-// Settings subview — entered from the Application section of Settings.qml
-// ("Playback", top of the list, above Controls). Every mpv-facing knob the
-// app exposes lives here. The rows are not restated: they are filtered out
-// of Settings.qml's own settingsItems by key, so labels/options/values
-// keep a single source of truth and conditional rows (1080p Playback,
-// gated on mpvController.hasSmoothPlaybackTradeoff) follow the parent
-// list automatically. ESC returns through the parent's AppBar contract
-// (see RemapControls.qml for the subview pattern).
+// Settings subview: the mpv-facing knobs. Reached from Settings (the
+// "Playback" row, tab-selected there like the other subviews); Return opens
+// this list, ESC returns through the nav contract.
+//
+// The rows are defined HERE — single source of truth for the playback
+// controls. Values read live from appCore.get_settings(), whose app section
+// reflects the user's ~/.config/mpv/mpv.conf directly (the direct-edit
+// chain: values are the file's real values, mpv built-in defaults when
+// unset, "Custom (raw)" outside the menu). Left/Right persists via
+// appCore.save_setting back into that same file. No override layer.
 FocusScope {
     id: playbackSettingsRoot
-    propertyDefinitions: [
-        // [FOR:BROWSER] property list: settingsList, appSettings, settingsItems
-        property settingsList: Qt.Object
-        property appSettings: Qt.Object
-        property settingsItems: Qt.Array
-        // [/FOR:BROWSER]
-    ]
-    signal navigateTo(string resourceName, object params, object listState)
+
+    signal navigateTo(string path, var params, var listState)
     signal goBack()
-    property object navParams: ({})
-    property int navListState: -1
 
-    // settingsItems is built here by filtering the parent's list down to the
-    // mpv-facing keys. Order = the order in Settings.qml.
-    propertySource: appSettingsLoader.onSettingsItemsLoaded
-    onAppSettingsChanged: {
-        if (!appSettingsLoader.settingsItems) {
-            console.log("Playback settings subview is being given null app settings, resetting")
-            appSettingsLoader.reset()
-            return
+    property var navParams: ({})
+    property var navListState: ({})
+
+    property var appSettings: ({})
+
+    // Flat model: the six mpv-facing controls (no sections in this view)
+    property var settingsItems: []
+
+    function buildModel() {
+        var cfg = appCore.get_settings()
+        appSettings = cfg.app || {}
+
+        var items = []
+
+        // Auto Fit — replaces the old blanket Auto Crop: the fit is decided
+        // per load through MpvController IPC (see applyAutoFit), not at
+        // launch. Content at or below the display's aspect fills the screen
+        // (its overflow is cropped); wider content keeps its aspect (letterbox).
+        // Off by default; the live CROP toggle in the OSC is unchanged.
+        items.push({
+            type: "list_single",
+            key: "auto_fit",
+            label: "Auto Fit",
+            options: ["Off", "On"],
+            value: appSettings["auto_fit"] || "Off",
+            description: "[ON] At/below display aspect: fill and crop. Above: keep aspect (letterbox)\n[OFF] Video starts at its original aspect ratio",
+            moduleId: ""
+        })
+
+        // Video Levels — the RGB range mpv converts YUV into. mpv's default
+        // is full range; a display expecting studio (limited) levels renders
+        // that as crushed blacks and blown whites, and the reverse reads as
+        // washed-out gray. Takes effect on the next video. The key keeps
+        // mpv's own name; the label uses what TVs and GPU drivers call it.
+        items.push({
+            type: "list_single",
+            key: "video_output_levels",
+            label: "Video Levels",
+            options: ["Auto", "Limited", "Full"],
+            value: appSettings["video_output_levels"] || "Auto",
+            description: "Match the color range your display expects\n[LIMITED] If blacks crush  [FULL] If blacks look gray",
+            moduleId: ""
+        })
+
+        // The basic mpv knobs READ AND WRITE the user's mpv.conf directly:
+        // the menu shows the file's real value (mpv's built-in defaults when
+        // unset; "Custom (raw)" for values outside this menu).
+        items.push({
+            type: "list_single",
+            key: "replaygain",
+            label: "Audio Normalize",
+            options: ["Off", "Track", "Album"],
+            value: appSettings["replaygain"] || "Custom (auto)",
+            description: "Level tracks to a common loudness using ReplayGain tags\n[TRACK] Per-track tags (most libraries)  [ALBUM] Keep album flow",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "audio_gain",
+            label: "Sound Boost",
+            options: ["0", "2", "4", "6", "8", "-4"],
+            value: appSettings["audio_gain"] || "0",
+            description: "Raise all audio output by decibels (dB)",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "deinterlace",
+            label: "Deinterlace",
+            options: ["Off", "Auto", "On"],
+            value: appSettings["deinterlace"] || "Off",
+            description: "Un interlaced sources (old TV, 50i DVDs) into progressive lines\n[AUTO] Only when the source is interlaced",
+            moduleId: ""
+        })
+        items.push({
+            type: "list_single",
+            key: "audio_channels",
+            label: "Audio Channels",
+            options: ["Auto", "Stereo", "Mono"],
+            value: appSettings["audio_channels"] || "Custom (auto)",
+            description: "[STEREO] Two channels  [MONO] One channel (shared CRT speaker)",
+            moduleId: ""
+        })
+
+        settingsItems = items
+
+        // Restore the parent's saved focus, or start on the first row
+        if (navListState.currentIndex !== undefined) {
+            settingsList.currentIndex = Math.max(0, Math.min(settingsItems.length - 1,
+                                                            navListState.currentIndex))
+        } else {
+            settingsList.currentIndex = 0
         }
-        var all = appSettingsLoader.settingsItems
-        var wanted = ["smooth_playback", "auto_fit", "video_output_levels",
-            "replaygain", "audio_gain", "deinterlace", "audio_channels"]
-        var list = []
-        for (var i = 0; i < all.length; i++) {
-            var item = all[i]
-            if (item && wanted.indexOf(item.key) >= 0)
-                list.push(item)
-        }
-        settingsItems = list
-        settingsList.currentIndex = 0
     }
 
-    AppBar {
-        anchors.left: root.left
-        anchors.right: root.right
-        anchors.top: root.top
-        anchors.bottom: settingsList.top
-        anchors.bottomMargin: 16
+    Component.onCompleted: buildModel()
 
-        title: "Playback"
-        iconSource: "../../assets/images/settings.svg"
-    }
-
-    ListView {
+    RowTrackingListView {
         id: settingsList
-        property appSettings: playbackSettingsRoot.appSettings
-        focusUpdateWeight: 100
-        activate()
-        focusFunction: FocusedItem.Fallback {
-            distanceFunction: function(dist) {
-                var d = Math.abs(dist)
-                return d <= 1 ? 0 : d
-            }
-            weightFunction: FocusedItem.Default {
-                maximumSpread: 400.0
-                minimumWeight: 0.7
+        model: settingsItems
+
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.topMargin: root.sh * 0.25 //120
+        anchors.leftMargin: root.sw * 0.115625 //74
+        width: root.sw * 0.76875 //492
+        height: root.sh * 0.525 //252
+        clip: true
+        focus: true
+
+        Keys.onUpPressed: {
+            if (currentIndex > 0) currentIndex--
+            else currentIndex = settingsItems.length - 1
+            settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
+        }
+        Keys.onDownPressed: {
+            if (currentIndex < count - 1) currentIndex++
+            else currentIndex = 0
+            settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
+        }
+
+        Keys.onLeftPressed: {
+            var row = settingsItems[currentIndex]
+            if (row && row.type === "list_single") {
+                var opts = row.options
+                var idx = opts.indexOf(row.value)
+                var newIdx = (idx - 1 + opts.length) % opts.length
+                var newVal = opts[newIdx]
+                // Display the label; persist the parallel value when one exists.
+                var savedVal = row.values ? row.values[newIdx] : newVal
+                var updated = settingsItems.slice()
+                updated[currentIndex] = Object.assign({}, row, { value: newVal })
+                var savedIndex = currentIndex
+                settingsItems = updated
+                currentIndex = savedIndex
+                appCore.save_setting(row.moduleId, row.key, savedVal)
             }
         }
-        width: 640
-        anchors.left: root.left
-        anchors.leftMargin: 16
-        anchors.right: root.right
-        anchors.rightMargin: 16
-        anchors.top: playbackSettingsRoot.focusIndicator.bottom
-        anchors.topMargin: 16
-        anchors.bottom: footer.top
-        anchors.bottomMargin: 32
-        focusType: "soft"
-        activateOnNavigate: true
-        spacing: 16
-        Keys.onUpPressed: settingsList.step(-1)
-        Keys.onDownPressed: settingsList.step(1)
-        Keys.onLeftPressed: settingsList.decreaseValue()
-        Keys.onRightPressed: settingsList.increaseValue()
-        Keys.onPressed: {
-            if (event.key === Qt.Escape)
+        Keys.onRightPressed: {
+            var row = settingsItems[currentIndex]
+            if (row && row.type === "list_single") {
+                var opts = row.options
+                var idx = opts.indexOf(row.value)
+                var newIdx = (idx + 1) % opts.length
+                var newVal = opts[newIdx]
+                var savedVal = row.values ? row.values[newIdx] : newVal
+                var updated = settingsItems.slice()
+                updated[currentIndex] = Object.assign({}, row, { value: newVal })
+                var savedIndex = currentIndex
+                settingsItems = updated
+                currentIndex = savedIndex
+                appCore.save_setting(row.moduleId, row.key, savedVal)
+            }
+        }
+
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
                 playbackSettingsRoot.goBack()
-        }
-
-        onCurrentIndexChanged: {
-            // Guard for a list that can become empty: an index with no item
-            // carries no setting to persist.
-            var current = settingsList.model[settingsList.currentIndex]
-            if (!current)
-                return
-            if (current.type === "row") {
-                if (current.key === "module_order")
-                    return
-                appSettingsLoader.updateSetting(current.key, current.value)
+                event.accepted = true
             }
         }
 
-        delegate: Column {
-            id: settingsRow
-            property hasVisiblePressed: false
-            property bool helpExpanded: settingsList.isFocused(settingsRow) && settingsList.isFocused(rowHelp)
-            spacing: 4
-            onAppSettingsLoaderUpdate: {
-                if (modelData.type === "row") {
-                    var options = modelData.options
-                    if (!options)
-                        options = []
-                    var valueIndex = options.indexOf(modelData.value)
-                    if (valueIndex < 0)
-                        valueIndex = modelData.default === undefined ? 0 : modelData.default
-                    var optionCount = options.length
-                    row.options = optionCount > 1 ? options : []
-                    row.valueIndex = (valueIndex >= 0 && valueIndex < optionCount)
-                                      ? valueIndex : 0
-                }
-            }
-            onAppSettingsValueChanged: {
-                if (modelData.type === "row") {
-                    var options = modelData.options
-                    if (!options)
-                        options = []
-                    var optionCount = options.length
-                    if (!options.length)
-                        return
-                    var valueIndex = options.indexOf(modelData.value)
-                    if (valueIndex >= 0 && valueIndex < optionCount)
-                        row.valueIndex = valueIndex
-                }
-            }
+        delegate: Item {
+            width: settingsList.width
+            height: root.sh * 0.0583333 //28
 
-            Text {
-                text: modelData.type === "row" ? modelData.label : ""
-                anchors.left: root.left
-                anchors.right: root.right
-                anchors.rightMargin: 64
-                font.pixelSize: appMetrics.f(22)
-                color: Theme.foreground(settingsRow).primary
-            }
+            // --- SELECTABLE ROW (this view has no sections/submenus) ---
+            Rectangle {
+                anchors.fill: parent
+                color: settingsList.currentIndex === index ? root.accentColor : "transparent"
 
-            ListRow {
-                id: row
-                visible: modelData.type === "row"
-                property object options: []
-                property int valueIndex: 0
-                property int currentValueIndex: valueIndex
-                property bool hasChanged: valueIndex !== currentValueIndex
-                // Value assignment is intentionally not animated; only the
-                // selection slides between options.
-                anchors.left: settingsRow.left
-                anchors.right: settingsRow.right
-                spacing: appMetrics.f(12)
-                property object options: options
-                property int activeIndex: valueIndex
-                property string label: modelData.label
-                property string key: modelData.key
-                LayoutBase{
-                    id: valueLabel
-                    Layout.Text {
-                        text: options.length > 0 ? options[activeIndex] : ""
-                        font: app.font.body
-                        color: Theme.foreground(settingsRow).primary
-                        Layout.topMargin: 0
+                // Label
+                Text {
+                    text: modelData.label || ""
+                    color: settingsList.currentIndex === index ? root.surfaceColor : root.primaryColor
+                    font.family: root.globalFont
+                    font.capitalization: Font.AllUppercase
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: 0
+                    topPadding: root.sh * 0.0041667 //2
+                    leftPadding: root.sw * 0.009375 //6
+                    rightPadding: root.sw * 0.009375 //6
+                    bottomPadding: root.sh * 0.00625 //3
+                    font.pixelSize: root.sh * 0.05 //24
+                }
+
+                // Value / arrow indicator
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.sw * 0.009375 //6
+                    spacing: root.sw * 0.00625 //4
+
+                    Text {
+                        text: "\u25C4"
+                        color: settingsList.currentIndex === index ? root.surfaceColor : root.tertiaryColor
+                        font.family: root.globalFont
+                        anchors.verticalCenter: parent.verticalCenter
+                        topPadding: root.sh * 0.0041667 //2
+                        bottomPadding: root.sh * 0.00625 //3
+                        font.pixelSize: root.sh * 0.0375 //18
                     }
-                    Layout.rightMargin: 4
+                    Text {
+                        text: modelData.value || ""
+                        color: settingsList.currentIndex === index ? root.surfaceColor : root.primaryColor
+                        font.family: root.globalFont
+                        font.capitalization: Font.AllUppercase
+                        anchors.verticalCenter: parent.verticalCenter
+                        topPadding: root.sh * 0.0041667 //2
+                        leftPadding: root.sw * 0.009375 //6
+                        rightPadding: root.sw * 0.009375 //6
+                        bottomPadding: root.sh * 0.00625 //3
+                        font.pixelSize: root.sh * 0.05 //24
+                    }
+                    Text {
+                        text: "\u25BA"
+                        color: settingsList.currentIndex === index ? root.surfaceColor : root.tertiaryColor
+                        font.family: root.globalFont
+                        anchors.verticalCenter: parent.verticalCenter
+                        topPadding: root.sh * 0.0041667 //2
+                        bottomPadding: root.sh * 0.00625 //3
+                        font.pixelSize: root.sh * 0.05 //18
+                    }
                 }
-                TextMetrics {
-                    id: valueMetrics
-                    text: options.length > 0 ? options[activeIndex] : ""
-                    font: app.font.body
-                }
-                property int requiredWidth: Math.ceil(valueMetrics.width)
-                property int requiredHeight: Math.max(valueMetrics.height, appMetrics.f(16))
-                minimumWidth: requiredWidth
-                minimumHeight: requiredHeight
-                Text {
-                    text: options.length > 1 ? "←" : ""
-                    anchors.left: root.left
-                    anchors.leftPadding: 16
-                    font.pixelSize: appMetrics.f(16)
-                    color: Theme.foreground(settingsRow).muted
-                }
-                Text {
-                    text: options.length > 1 ? "→" : ""
-                    anchors.right: root.right
-                    anchors.rightPadding: 16
-                    font.pixelSize: appMetrics.f(16)
-                    color: Theme.foreground(settingsRow).muted
-                }
-                anchors.top: settingsRow.top
-                anchors.topPadding: 20
-            }
-
-            Column {
-                id: rowHelp
-                visible: modelData.type === "row"
-                anchors.left: settingsRow.left
-                anchors.right: settingsRow.right
-                anchors.top: settingsRow.helpIndicator.bottom
-                anchors.topPadding: 4
-                spacing: 8
-                Text {
-                    anchors.horizontalCenter: rowHelp.left
-                    text: "←→ Select | ESC Return"
-                    color: Theme.foreground(settingsRow).muted
-                    font.pixelSize: appMetrics.f(12)
-                }
-                Text {
-                    anchors.left: root.left
-                    text: (modelData.description !== undefined &&
-                            (rowHelp.focusIndex >= 0
-                                || settingsList.isFocused(settingsRow))) ?
-                              modelData.description : ""
-                    color: Theme.foreground(settingsRow).primary
-                    font.pixelSize: appMetrics.f(16)
-                    wrapBehavior: Text.noWrap
-                }
-            }
-
-            Row {
-                id: rowHelpBackground
-                visible: modelData.type === "row" && !settingsList.isFocused(settingsRow)
-                spacing: 16
-                Text {
-                    text: modelData.description !== undefined ?
-                              modelData.description : ""
-                    color: Theme.foreground(settingsRow).muted
-                    font.pixelSize: appMetrics.f(16)
-                    wrapBehavior: Text.noWrap
-                }
-                anchors.left: settingsRow.left
-                anchors.right: settingsRow.right
-                anchors.top: settingsRow.valueIndicator.bottom
-                anchors.topPadding: 8
             }
         }
-        property int previousIndex: Math.max(settingsList.previousIndex, 0)
-        property int modelCount: settingsItems.length
-        model: settingsList.modelCount
-        property FocusedItem.SettingsList focusFunction: (settingsList.focusType === "focused" || settingsList.focusType === "soft")
-                                    ? FocusedItem.SettingsList.Default {
-                                    maximumSpread: 300.0
-                                    minimumWeight: 0.7
-                                } : (settingsList.focusType === "hard"
-                                    ? FocusedItem.SettingsList.Hard {
-                                        maximumSpread: 120.0
-                                        minimumWeight: 0.7
-                                    } : FocusedItem.SettingsList.None { })
-        focusType: "soft"
-        activateOnNavigate: true
-        property bool helpExpanded: settingsList.helpExpanded
-        spacing: helpExpanded ? 16 : 8
     }
 
-    Text {
-        id: footer
-        anchors.left: root.left
-        anchors.right: root.right
-        anchors.bottom: root.bottom
-        color: Theme.foreground(footer).primary
-        text: "Press: ESC to Return"
-        font: app.font.body
-        wrapBehavior: Text.noWrap
+    // --- HELP TEXT --- (shown when a focused row has a description)
+    Rectangle {
+        id: rowHelpBackground
+        property var currentRow: playbackSettingsRoot.settingsItems[settingsList.currentIndex]
+        visible: !!(currentRow && currentRow.description)
+        property color baseColor: root.primaryColor
+        color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, 0.2)
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.bottomMargin: root.sh * 0.1583333 //76
+        anchors.leftMargin: root.sw * 0.125 //80
+        width: root.sw * 0.75 //480
+        height: root.sh * 0.0583333 //28
+        clip: true
+        Text {
+            id: rowHelp
+            text: (rowHelpBackground.currentRow && rowHelpBackground.currentRow.description) || ""
+            color: root.primaryColor
+            font.family: root.globalFont
+            font.pixelSize: root.sh * 0.0291667 //14
+            wrapMode: Text.WordWrap
+            anchors.fill: parent
+            anchors.margins: root.sw * 0.0125 //6
+        }
     }
 }
