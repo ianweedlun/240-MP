@@ -586,6 +586,21 @@ void MpvController::onIpcReadyRead() {
                         }
                     }
                 }
+            } else if (ridI == 9003) {
+                // per-file content aspect (get_property after file-loaded)
+                const QString err = obj["error"].toString();
+                if (!err.isEmpty() && err != QLatin1String("success")) {
+                    qWarning("[MpvController] auto-fit: content-aspect read failed: %s — fit stays off for this file",
+                             qPrintable(err));
+                } else {
+                    const double v = obj["data"].toDouble();
+                    if (v > 0.0) {
+                        if (m_windowAspect > 0.0)
+                            applyAutoFit(v);
+                        else
+                            m_pendingContentAspect = v;
+                    }
+                }
             }
             continue;
         }
@@ -598,6 +613,12 @@ void MpvController::onIpcReadyRead() {
             // so onProcessFinished can distinguish a natural finish from a quit.
             if (event == "end-file") {
                 m_lastEndFileReason = obj["reason"].toString();
+            } else if (event == "file-loaded") {
+                // The property-change observer never fires for video-params/aspect
+                // (not in mpv's observable set). Read it right after each file
+                // loads instead — one get_property per load, echoed by request_id.
+                if (autoFitEnabled())
+                    sendCommand({"get_property", "video-params/aspect"}, 9003);
             } else if (event == "playback-restart" && m_pendingStartClear) {
                 // --start is a global option that mpv re-applies on *every* file load,
                 // and --loop-playlist reloads its entries on wrap. Left set, a resumed

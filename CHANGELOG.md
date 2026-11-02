@@ -84,6 +84,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `AppCore::setDisplayGeometry`; on EGLFS that IS the KMS plane `vo=drm` draws to).
   The mpv IPC read remains only as the desktop fallback. Journal now logs
   `auto-fit: display size from app (…px)` at mpv connect.
+- Second follow-up (same day): `video-params/aspect` is NOT in mpv's observable
+  property-change set — the observer event never fires. Content aspect now read
+  per-file via `get_property` triggered on the documented `file-loaded` event
+  (fires after load, params ready), echoed on integer request_id 9003. Journal
+  gains `auto-fit verdict: …` per file load.
 
 ### Added — Debug key-channel capture token (dev)
 - The telemetry-gated debug key channel (`/tmp/240mp_key.in`, same `deliverPress`
