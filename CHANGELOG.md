@@ -16,6 +16,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   table and the picker list from source, asserts exact agreement, five well-formed hex
   keys per built-in, and the five new names present. Pure text-in, no QML engine.
 
+### Added — Plex resolution-aware direct play (#14, feature/plex-res-direct-play)
+- Direct-play/transcode decision from stream-metadata resolution class vs the quality ladder: at/below threshold direct, above transcodes; shorter edge for portrait/rotated files; unknown dimensions transcode (safe CRT branch).
+- Quality options relabeled to the new semantics: "Direct Play (always)", "Above 1080p/720p/480p: transcode" (corrected ladder ids 8000/3000/1500; legacy custom ids keep always-transcode).
+- Header-only decision logic (`PlaybackDecision.h`) with boundary-case unit tests (ctest-registered); playback decision telemetry line in state log.
 
 ### Added — Weather current-conditions AQ/UV rows (#29, #39, feature/weather-osd-signals)
 - `rowTexts()` bakes must-show priority directly: AIR QUALITY and UV INDEX lead the
