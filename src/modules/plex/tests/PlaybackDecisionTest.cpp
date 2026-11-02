@@ -52,6 +52,15 @@ private slots:
         QCOMPARE(PlexQuality::shouldTranscode("4000", 640, 480), true);
         QCOMPARE(PlexQuality::shouldTranscode("1200", 640, 480), true);
     }
+
+    void originalQualityIdKeepsLegacySemantics() {
+        // The PMS top-ladder id 98000 ("original quality") is deliberately
+        // NOT in our resolution-class table: it keeps the old
+        // always-transcode semantics. If the Pi-runtime path shows PMS
+        // treating it as native direct play, this rule moves to the
+        // always-direct branch — pinned here, flagged on #14.
+        QCOMPARE(PlexQuality::shouldTranscode("98000", 1920, 1080), true);
+    }
 };
 
 QTEST_GUILESS_MAIN(PlaybackDecisionTest)

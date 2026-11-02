@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Plex resolution-aware direct play (#14, feature/plex-res-direct-play)
+- Direct-play/transcode decision from stream-metadata resolution class vs the quality ladder: at/below threshold direct, above transcodes; shorter edge for portrait/rotated files; unknown dimensions transcode (safe CRT branch).
+- Quality options relabeled to the new semantics: "Direct Play (always)", "Above 1080p/720p/480p: transcode" (corrected ladder ids 8000/3000/1500; legacy custom ids keep always-transcode).
+- Header-only decision logic (`PlaybackDecision.h`) with boundary-case unit tests (ctest-registered); playback decision telemetry line in state log.
+
 ### Added — Housekeeping & policy (dev, #31/#33)
 - Issue-post attribution now carries the git commit identity as a trailer-style footer
   line (`Co-authored-by: Hermes Agent <hermes-agent@240mp.local> — automated agent post`);
