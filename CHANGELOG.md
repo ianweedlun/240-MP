@@ -16,6 +16,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   table and the picker list from source, asserts exact agreement, five well-formed hex
   keys per built-in, and the five new names present. Pure text-in, no QML engine.
 
+### Added — Deploy tree-skip + repo-hygiene guardrails (dev, 2026-11-02)
+- `deploy-pi.yml` + `scripts/deploy-pi.sh`: tree-skip fast path. A verified deploy writes the
+  pushed tree hash into `~/.240mp-last-deployed-tree` on the Pi; the next same-tree run skips
+  upload + root-side dance (no Pi reboot for byte-identical trees). Tree-level gate, not binary
+  md5 — tarball also carries QML assets.
+- `.gitignore` guardrail: `build-*/`, `*.local.bak/` (a retroarch tail once committed ~400 build-artifact
+  files; now untrackable).
+- Evidence screenshots (`evidence/**`, 17 files) untracked from the tree — validation artifacts live
+  on the tracking issues; older ones remain recoverable via git history at the commits that validated them.
+
 ### Changed — Dev-first branch model (dev)
 - Dev-first branch model adopted as the integration contract. All area branch tips (retroarch,
   weather, mpv-config, plex-quality, color-schemes) were merged into `dev` (single merge commits,
