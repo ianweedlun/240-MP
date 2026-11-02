@@ -1048,9 +1048,15 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
         return true;
     }
 
-    // F12: trigger screenshot (debug)
-    if (!synthetic && type == QEvent::KeyPress && ke->key() == Qt::Key_F12 && !ke->isAutoRepeat()) {
-        qInfo("[input] F12 pressed — triggering screenshot");
+    // F12: trigger screenshot (debug). Physical F12 only; plus Tab arriving
+    // through the injected control-server channel: Qt's EGLFS keymap drops
+    // F-series codes from injection while Tab survives, and gating the Tab
+    // arm on synthetic keeps injected captures app-level (no per-view QML
+    // handler needed for future capture gates).
+    if (type == QEvent::KeyPress && !ke->isAutoRepeat()
+        && ((ke->key() == Qt::Key_F12 && !synthetic)
+            || (ke->key() == Qt::Key_Tab && synthetic))) {
+        qInfo("[input] capture key pressed — triggering screenshot");
         if (m_appCore) {
             QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
         }
