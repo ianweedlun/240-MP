@@ -85,7 +85,7 @@ FocusScope {
             property real cellW: root.sw * 0.75 / 4
             property real cellH: root.sh * 0.09
             x: root.sw * 0.125 + (index % 4) * cellW
-            y: root.sh * 0.30 + int(index / 4) * cellH
+            y: root.sh * 0.30 + Math.floor(index / 4) * cellH
             width: cellW
             height: cellH
 
