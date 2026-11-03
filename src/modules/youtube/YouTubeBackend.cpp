@@ -11,6 +11,7 @@
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QProcess>
+#include <QSaveFile>
 #include <QUrlQuery>
 #include <QRegularExpression>
 #include <QTimer>
@@ -1021,62 +1022,10 @@ static constexpr int kAuthSlackS = 120;           // refresh before expiry
 static constexpr int kBrowseMaxPages = 5;         // continuation cap
 static constexpr int kBrowseMaxRows = 200;        // hard display cap
 
-namespace {
-
-// Find the account's watch-later playlist on the signed-in my-youtube page:
-// an object whose subtree carries the title text "Watch later" (any case) and
-// that also names a playlist cursor — "playlistId" (PL…, needs the VL prefix
-// to browse) or a direct "browseId" (VL…). Document order decides, so the
-// shelf the account UI shows wins over any later decoys. Null when absent
-// (shape drift across clients → the caller falls back to the file view).
-inline QJsonValue findWatchLaterBrowseId(const QJsonObject &root)
-{
-    QQueue<QJsonValue> queue;
-    queue.enqueue(QJsonValue(root));
-    std::function<bool(const QJsonValue &)> textHasWatchLater =
-        [&](const QJsonValue &v) -> bool {
-        if (v.isObject()) {
-            const QJsonObject o = v.toObject();
-            const QList<QString> keyList = o.keys();
-            for (const QString &k : keyList)
-                if (textHasWatchLater(o.value(k)))
-                    return true;
-        } else if (v.isArray()) {
-            for (const QJsonValue &sub : v.toArray())
-                if (textHasWatchLater(sub))
-                    return true;
-        } else if (v.isString()) {
-            const QString s = v.toString().toLower();
-            return s == QStringLiteral("watch later")
-                   || s == QStringLiteral("watchlater");
-        }
-        return false;
-    };
-    while (!queue.isEmpty()) {
-        const QJsonValue v = queue.dequeue();
-        if (v.isObject()) {
-            const QJsonObject o = v.toObject();
-            const QString pid      = o.value(QStringLiteral("playlistId")).toString();
-            const QString browseId = o.value(QStringLiteral("browseId")).toString();
-            QString cursor;
-            if (browseId.startsWith(QStringLiteral("VL")))
-                cursor = browseId;
-            else if (pid.startsWith(QStringLiteral("PL")) || pid.startsWith(QStringLiteral("WL")))
-                cursor = QStringLiteral("VL") + pid;
-            if (!cursor.isEmpty() && textHasWatchLater(v))
-                return QJsonValue(cursor);
-            const QList<QString> keyList = o.keys();
-            for (const QString &k : keyList)
-                queue.enqueue(o.value(k));
-        } else if (v.isArray()) {
-            for (const QJsonValue &sub : v.toArray())
-                queue.enqueue(sub);
-        }
-    }
-    return QJsonValue(); // null sentinel
-}
-
-} // anonymous namespace
+// The watch-later cursor hunt lives in YtBrowseRows.h (ytui::findWatchLaterCursor)
+// next to the browse-row parser: pure JSON logic, unit-tested, and covering both
+// the desktop playlistId/VL shapes AND the TVHTML5 tab chip whose "cursor" is a
+// raw reloadContinuationData continuation.
 
 QString YouTubeBackend::authFilePath() const
 {
@@ -1100,7 +1049,6 @@ void YouTubeBackend::ensureAuthLoaded()
 void YouTubeBackend::saveAuthFile()
 {
     const QString path = authFilePath();
-    const QString tmp = path + QStringLiteral(".tmp");
     QJsonObject doc;
     if (!m_accessToken.isEmpty())
         doc.insert(QStringLiteral("access"), m_accessToken);
@@ -1108,12 +1056,21 @@ void YouTubeBackend::saveAuthFile()
         doc.insert(QStringLiteral("refresh"), m_refreshToken);
     if (m_accessExpiresEpoch > 0)
         doc.insert(QStringLiteral("expires"), static_cast<double>(m_accessExpiresEpoch));
-    QFile f(tmp);
-    if (!f.open(QIODevice::WriteOnly))
+    // QSaveFile = write to a private temp in the same directory, then commit()
+    // renames it over the target ATOMICALLY. A hand-rolled QFile tmp + QFile::
+    // rename silently failed on the Pi when the target already existed (left a
+    // .tmp next to a stale `{}` doc — the 2026-11-03 signed-but-unpersisted
+    // auth incident; the token was rescued by a manual rename on the device).
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        qWarning("[Youtube] auth file open failed: %s", qPrintable(path));
         return;
+    }
+    // QSaveFile has no text-mode setter in Qt 6; the doc is single-line
+    // compact JSON so line endings never come into play.
     f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
-    f.close();
-    QFile::rename(tmp, path); // atomic swap: readers never see half a doc
+    if (!f.commit())
+        qWarning("[Youtube] auth file commit failed: %s", qPrintable(path));
 }
 
 // Pair-state accessors so a freshly-opened view can re-read a pending
@@ -1390,7 +1347,7 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         // Discovery hop: the account's watch-later playlist id lives on the
         // signed-in my-youtube page next to its title. No stable browseId
         // exists — this is what makes the account list truly account-truth.
-        const QJsonValue wlId = findWatchLaterBrowseId(root);
+        const QJsonValue wlId = ytui::findWatchLaterCursor(root);
         if (wlId.isNull()) {
             qWarning("[Youtube] watch-later discovery miss on the account home (http %d) — falling back",
                      netError ? int(reply->error()) : 0);
@@ -1415,16 +1372,18 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         return;
     }
     // An empty signed-in list is legal; only the network/HTTP surface is an
-    // error — decided by the reply itself, never a heuristic.
-    if (!acc.isEmpty() || page > 1) {
-        if (kind == QStringLiteral("feed"))
-            emit accountFeedLoaded(acc);
-        else if (kind == QStringLiteral("history"))
-            emit accountHistoryLoaded(acc);
-        else
-            emit accountWatchLaterLoaded(acc);
-    } else if (netError || root.value(QStringLiteral("error")).isObject()) {
+    // error — decided by the reply itself, never a heuristic. Empty valid pages
+    // MUST still emit (the view renders its "no videos" state); a page that
+    // parses nothing used to leave the view stuck LOADING forever — one of the
+    // observed "doesn't load" symptoms.
+    if (netError || root.value(QStringLiteral("error")).isObject()) {
         emit errorOccurred(QStringLiteral("AUTH-LIST-FAILED"));
+    } else if (kind == QStringLiteral("feed")) {
+        emit accountFeedLoaded(acc);
+    } else if (kind == QStringLiteral("history")) {
+        emit accountHistoryLoaded(acc);
+    } else {
+        emit accountWatchLaterLoaded(acc);
     }
 }
 

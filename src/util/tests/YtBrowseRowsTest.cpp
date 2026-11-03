@@ -60,6 +60,76 @@ QJsonObject sectionOf(const QJsonArray &items)   // sectionListRenderer nesting
     return root;
 }
 
+QJsonObject wrapTile(const QJsonObject &tile)
+{
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("tileRenderer"), tile);
+    return wrapper;
+}
+
+QJsonObject makeTile(const QString &videoId, const QString &title,
+                     const QString &owner, const QString &lengthOverlay,
+                     const QString &contentType =
+                         QStringLiteral("TILE_CONTENT_TYPE_VIDEO"))
+{
+    QJsonObject t;
+    t.insert(QStringLiteral("contentId"), videoId);
+    if (!contentType.isEmpty())
+        t.insert(QStringLiteral("contentType"), contentType);
+    // header: duration lives as a time-status overlay on the thumbnail
+    if (!lengthOverlay.isEmpty()) {
+        QJsonObject textObj;
+        textObj.insert(QStringLiteral("simpleText"), lengthOverlay);
+        QJsonObject overlayInner;
+        overlayInner.insert(QStringLiteral("text"), textObj);
+        QJsonObject overlay;
+        overlay.insert(QStringLiteral("thumbnailOverlayTimeStatusRenderer"), overlayInner);
+        QJsonArray overlays;
+        overlays.append(overlay);
+        QJsonObject headerInner;
+        headerInner.insert(QStringLiteral("thumbnailOverlays"), overlays);
+        QJsonObject header;
+        header.insert(QStringLiteral("tileHeaderRenderer"), headerInner);
+        t.insert(QStringLiteral("header"), header);
+    }
+    // metadata: simpleText title + lines where the first plain text item is
+    // the channel and badge/view-count items must be skipped
+    QJsonObject titleObj;
+    titleObj.insert(QStringLiteral("simpleText"), title);
+    QJsonObject metaInner;
+    metaInner.insert(QStringLiteral("title"), titleObj);
+    QJsonArray items;
+    QJsonObject ownerItem;
+    ownerItem.insert(QStringLiteral("text"), runsText(owner));
+    QJsonObject ownerWrap;
+    ownerWrap.insert(QStringLiteral("lineItemRenderer"), ownerItem);
+    items.append(ownerWrap);
+    QJsonObject badgeItem;
+    QJsonObject badge;
+    badge.insert(QStringLiteral("label"), QStringLiteral("4K"));
+    badgeItem.insert(QStringLiteral("badge"), badge);
+    QJsonObject badgeWrap;
+    badgeWrap.insert(QStringLiteral("lineItemRenderer"), badgeItem);
+    items.append(badgeWrap);
+    QJsonObject viewsItem;
+    viewsItem.insert(QStringLiteral("text"),
+                     simpleText(QStringLiteral("39K views")));
+    QJsonObject viewsWrap;
+    viewsWrap.insert(QStringLiteral("lineItemRenderer"), viewsItem);
+    items.append(viewsWrap);
+    QJsonObject lineInner;
+    lineInner.insert(QStringLiteral("items"), items);
+    QJsonObject lineWrap;
+    lineWrap.insert(QStringLiteral("lineRenderer"), lineInner);
+    QJsonArray lines;
+    lines.append(lineWrap);
+    metaInner.insert(QStringLiteral("lines"), lines);
+    QJsonObject meta;
+    meta.insert(QStringLiteral("tileMetadataRenderer"), metaInner);
+    t.insert(QStringLiteral("metadata"), meta);
+    return t;
+}
+
 } // anonymous namespace
 
 class YtBrowseRowsTest : public QObject {
@@ -72,6 +142,11 @@ private slots:
     void rowCapsStopEarly();
     void continuationTokenAtAnyDepth();
     void singlePageNoToken();
+    void tileRowsFromTvPages();
+    void tileContentTypeGate();
+    void watchLaterCursorTvChip();
+    void watchLaterCursorDesktopPlaylist();
+    void watchLaterCursorMiss();
 };
 
 void YtBrowseRowsTest::extractRowsInDocumentOrder()
@@ -205,6 +280,118 @@ void YtBrowseRowsTest::singlePageNoToken()
                                             QStringLiteral("C"), true)));
     const QJsonObject root = sectionOf(items);
     QVERIFY(ytui::continuationToken(root).isEmpty());
+}
+
+void YtBrowseRowsTest::tileRowsFromTvPages()
+{
+    // The verified TVHTML5 account-page shape: identity is contentId +
+    // contentType, title is a simpleText under tileMetadataRenderer, the
+    // owner is the first plain line item (badges and view counts skipped),
+    // and the duration is a thumbnail-overlay time status on the header.
+    QJsonArray items;
+    items.append(wrapTile(makeTile(QStringLiteral("1W8PGKl8gUg"),
+                                   QStringLiteral("The Forgotten Operating System"),
+                                   QStringLiteral("NT to Now"),
+                                   QStringLiteral("29:52"))));
+    const QJsonObject root = sectionOf(items);
+
+    const QVariantList rows = ytui::extractBrowseRows(root, 0);
+    QCOMPARE(rows.size(), 1);
+    const QVariantMap row = rows.at(0).toMap();
+    QCOMPARE(row.value(QStringLiteral("videoId")), QStringLiteral("1W8PGKl8gUg"));
+    QCOMPARE(row.value(QStringLiteral("title")),
+             QStringLiteral("The Forgotten Operating System"));
+    QCOMPARE(row.value(QStringLiteral("channelName")), QStringLiteral("NT to Now"));
+    QCOMPARE(row.value(QStringLiteral("lengthText")), QStringLiteral("29:52"));
+    QVERIFY(row.value(QStringLiteral("url"))
+            == QStringLiteral("https://www.youtube.com/watch?v=1W8PGKl8gUg"));
+}
+
+void YtBrowseRowsTest::tileContentTypeGate()
+{
+    // Channel tiles share the tile shape but are NOT video rows; tiles
+    // without the contentType field (older payloads) stay accepted.
+    QJsonArray items;
+    items.append(wrapTile(makeTile(QStringLiteral("CHANNNNNNNN"),
+                                   QStringLiteral("Some Channel"),
+                                   QStringLiteral("Owner"),
+                                   QString(),
+                                   QStringLiteral("TILE_CONTENT_TYPE_CHANNEL"))));
+    items.append(wrapTile(makeTile(QStringLiteral("NOTYPEEEEEE"),
+                                   QStringLiteral("No Type Row"),
+                                   QStringLiteral("Chan"),
+                                   QString(),
+                                   QString())));
+    const QJsonObject root = sectionOf(items);
+
+    const QVariantList rows = ytui::extractBrowseRows(root, 0);
+    QCOMPARE(rows.size(), 1);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("videoId")),
+             QStringLiteral("NOTYPEEEEEE"));
+}
+
+void YtBrowseRowsTest::watchLaterCursorTvChip()
+{
+    // The account home's Watch-later tab chip carries NO playlist id: its
+    // cursor is a raw reloadContinuationData continuation string.
+    QJsonObject rcd;
+    rcd.insert(QStringLiteral("continuation"), QStringLiteral("4qmFsgTOKEN"));
+    QJsonObject cont;
+    cont.insert(QStringLiteral("reloadContinuationData"), rcd);
+    QJsonObject tv;
+    tv.insert(QStringLiteral("continuation"), cont);
+    QJsonObject content;
+    content.insert(QStringLiteral("tvSurfaceContentRenderer"), tv);
+    QJsonObject chip;
+    chip.insert(QStringLiteral("title"), QStringLiteral("Watch later")); // raw string on TV
+    chip.insert(QStringLiteral("content"), content);
+    QJsonObject tabWrap;
+    tabWrap.insert(QStringLiteral("tabRenderer"), chip);
+    QJsonArray contents;
+    contents.append(tabWrap);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), contents);
+
+    const QJsonValue cur = ytui::findWatchLaterCursor(root);
+    QVERIFY(!cur.isNull());
+    QCOMPARE(cur.toString(), QStringLiteral("4qmFsgTOKEN"));
+}
+
+void YtBrowseRowsTest::watchLaterCursorDesktopPlaylist()
+{
+    // Desktop shape: a playlistId whose subtree names the shelf title; the
+    // browse cursor is the VL-prefixed playlist id.
+    const QJsonValue titleObj = runsText(QStringLiteral("Watch Later"));
+    QJsonObject playlistInner;
+    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLmywatchlater"));
+    playlistInner.insert(QStringLiteral("title"), titleObj);
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("playlistRenderer"), playlistInner);
+    QJsonArray contents;
+    contents.append(wrapper);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), contents);
+
+    const QJsonValue cur = ytui::findWatchLaterCursor(root);
+    QVERIFY(!cur.isNull());
+    QCOMPARE(cur.toString(), QStringLiteral("VLPLmywatchlater"));
+}
+
+void YtBrowseRowsTest::watchLaterCursorMiss()
+{
+    // Decoys only: playlists without the shelf title, and an unrelated
+    // continuation token elsewhere — neither may produce a cursor.
+    QJsonArray items;
+    QJsonObject playlistInner;
+    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLrandom"));
+    playlistInner.insert(QStringLiteral("title"), runsText(QStringLiteral("Funny Cats")));
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("playlistRenderer"), playlistInner);
+    items.append(wrapper);
+    QJsonObject root = sectionOf(items);
+
+    const QJsonValue cur = ytui::findWatchLaterCursor(root);
+    QVERIFY(cur.isNull());
 }
 
 QTEST_MAIN(YtBrowseRowsTest)
