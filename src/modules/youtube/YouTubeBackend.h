@@ -95,6 +95,11 @@ signals:
     void playlistsLoaded(const QVariant &playlists);
     void playlistVideosLoaded(const QString &playlistId, const QVariant &videos);
     void errorOccurred(const QString &message);
+    // A background resolvePlayback() for this video just stored a fresh
+    // video+audio URL pair in the cache. The Player listens for this when it
+    // launched on a cold cache: instead of paying ytdl_hook's re-resolve, it
+    // waits (bounded) for this signal and then launches mpv on the direct pair.
+    void playbackUrlReady(const QString &videoId);
 
 private:
     struct ChannelEntry {

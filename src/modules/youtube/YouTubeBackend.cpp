@@ -840,7 +840,7 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
         QStringLiteral("--"),
         watchUrlFor(videoId),
     };
-    connect(proc, &QProcess::finished, this, [this, proc, key, nowS]() {
+    connect(proc, &QProcess::finished, this, [this, proc, key, videoId, nowS]() {
         // yt-dlp -g prints one URL per selected format: the usual
         // bestvideo+bestaudio split prints video on line 1 and audio on line 2;
         // a combined best[...] fallback prints just one. Both lines carry their
@@ -865,8 +865,10 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
             if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
                 expire = audioExpire;
         }
-        if (expire > nowS)
+        if (expire > nowS) {
             storeUrlCacheEntry(key, videoUrl, audioUrl, expire);
+            emit playbackUrlReady(videoId);
+        }
         proc->deleteLater();
     });
     connect(proc, &QProcess::errorOccurred, this,

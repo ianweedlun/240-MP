@@ -52,7 +52,10 @@ FocusScope {
     // backend to resolve this video regardless (no-op when a fresh window is
     // already stored), so quitting-and-resuming hits the direct path next time.
     // A video-only cache hit with no audio half is rejected — a silent picture
-    // is a worse failure than a slow start.
+    // is a worse failure than a slow start. Returns true when a fresh pair is
+    // on hand RIGHT NOW (launch can proceed immediately); false means the
+    // backend's background resolve is the only route and playAt() will wait
+    // for playbackUrlReady rather than pay ytdl_hook's re-resolve.
     function preparePlayback() {
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
         const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
@@ -61,12 +64,14 @@ FocusScope {
             directPlayUrl = direct
             directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
-        } else {
-            directPlayUrl = ""
-            directAudioUrl = ""
-            ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
+            youtubeBackend.resolvePlayback(videoId, resolution)
+            return true
         }
+        directPlayUrl = ""
+        directAudioUrl = ""
+        ytdlArgs = []
         youtubeBackend.resolvePlayback(videoId, resolution)
+        return false
     }
 
     // Starting mpv runs synchronously and, on the Pi, immediately switches VT
@@ -85,6 +90,63 @@ FocusScope {
         startTimer.restart()
     }
 
+    // Entry point for every playback start. When the signed URL pair is already
+    // cached the launch is immediate; when it isn't, we wait (bounded) for the
+    // background resolve fired by preparePlayback instead of handing mpv the
+    // watch URL and paying ytdl_hook's multi-second re-resolve. The wait cap
+    // keeps a dead network or a yt-dlp hang from trapping the view on LOADING —
+    // past it we take the ytdl path as the always-works fallback.
+    property bool   waitingForResolve: false
+    property int    pendingPlayStartMs: 0
+
+    Timer {
+        id: resolveWaitTimer
+        interval: 15000   // yt-dlp warm resolve is ~4-6s on the Pi; 15s is generous
+        repeat: false
+        onTriggered: {
+            if (!playerRoot.waitingForResolve)
+                return
+            playerRoot.waitingForResolve = false
+            // Resolve failed or timed out — fall back to ytdl_hook, which has
+            // its own error surfacing (PLAYBACK FAILED) if the video is bad.
+            var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+            playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
+            playerRoot.play(playerRoot.pendingPlayStartMs)
+        }
+    }
+
+    Connections {
+        target: youtubeBackend
+        function onPlaybackUrlReady(readyVideoId) {
+            if (!playerRoot.waitingForResolve || readyVideoId !== playerRoot.videoId)
+                return
+            playerRoot.waitingForResolve = false
+            resolveWaitTimer.stop()
+            // The cache now holds the fresh pair — re-arm the direct path.
+            var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+            const direct = youtubeBackend.cachedPlaybackUrl(playerRoot.videoId, resolution)
+            const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
+            if (direct !== "" && directAudio !== "") {
+                playerRoot.directPlayUrl = direct
+                playerRoot.directAudioUrl = directAudio
+                playerRoot.ytdlArgs = ["--ytdl=no"]
+                playerRoot.play(playerRoot.pendingPlayStartMs)
+            }
+            // If the pair somehow isn't there, let the wait timer's ytdl
+            // fallback handle it rather than racing a second resolve.
+        }
+    }
+
+    function playAt(startMs) {
+        if (directPlayUrl !== "") {
+            play(startMs)
+            return
+        }
+        waitingForResolve = true
+        pendingPlayStartMs = startMs
+        resolveWaitTimer.restart()
+    }
+
     function playNextPlaylistItem() {
         if (playlistIndex < 0 || playlistIndex + 1 >= playlistItems.length)
             return false
@@ -95,7 +157,7 @@ FocusScope {
         savedPositionMs = 0
         updateBackListState({ currentIndex: playlistIndex })
         preparePlayback()
-        play(0)
+        playAt(0)
         return true
     }
 
@@ -106,7 +168,11 @@ FocusScope {
                 event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 errorMessage = ""
-                play(lastStartMs)
+                // Retry: the cache may have been filled by the resolve that
+                // ran while the error was up — re-prep so we take the direct
+                // path when it's available.
+                preparePlayback()
+                playAt(lastStartMs)
                 event.accepted = true
             }
         } else if (overlayVisible) {
@@ -121,7 +187,10 @@ FocusScope {
                 event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 overlayVisible = false
-                play(choiceIndex === 0 ? savedPositionMs : 0)
+                // Resume prompt sat open while the background resolve ran, so
+                // the pair is very likely cached by now — but if the user hit
+                // select instantly, playAt waits for the resolve to land.
+                playAt(choiceIndex === 0 ? savedPositionMs : 0)
                 event.accepted = true
             }
         } else {
@@ -201,12 +270,12 @@ FocusScope {
         var savedPos = saved.pos || 0
 
         if (resumeSetting === "Always") {
-            play(savedPos)
+            playAt(savedPos)
         } else if (savedPos > 0) {
             savedPositionMs = savedPos
             overlayVisible = true
         } else {
-            play(0)
+            playAt(0)
         }
     }
 
