@@ -16,7 +16,8 @@ FocusScope {
     property var    playlistItems: navParams.playlistItems || []
     property int    playlistIndex: navParams.playlistIndex === undefined ? -1 : navParams.playlistIndex
 
-    property string directPlayUrl:  ""   // fresh cached googlevideo URL (plan A), else empty
+    property string directPlayUrl:  ""   // fresh cached googlevideo video URL (plan A), else empty
+    property string directAudioUrl: ""   // its bestaudio pair, when the format split one
     property bool   overlayVisible:   false
     property bool   playbackStarted:  false
     property int    savedPositionMs:  0
@@ -34,25 +35,35 @@ FocusScope {
     function doPlay(startMs) {
         overlayVisible = false
         lastStartMs = startMs
-        // directPlayUrl and ytdlArgs are set together by preparePlayback; when
-        // a fresh signed URL is on hand mpv takes it with --ytdl=no and skips
-        // ytdl_hook's re-resolve entirely.
+        // directPlayUrl/directAudioUrl and ytdlArgs are set together by
+        // preparePlayback; when a fresh signed pair is on hand mpv takes it
+        // with --ytdl=no and skips ytdl_hook's re-resolve entirely. The audio
+        // half rides --audio-file= (ytdl_hook's own mechanism for split
+        // formats) so first play is exactly as fast as resume.
         const playUrl = directPlayUrl !== "" ? directPlayUrl : videoUrl
-        mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, ytdlArgs)
+        var args = ytdlArgs.slice()
+        if (directPlayUrl !== "" && directAudioUrl !== "")
+            args.push("--audio-file=" + directAudioUrl)
+        mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
     // Cached-URL lookup + next-window warm-up for the CURRENT item (issue #28
-    // plan A): take a fresh cached stream URL if one exists, ask the backend
-    // to resolve this video regardless (no-op when a fresh window is already
-    // stored), so quitting-and-resuming hits the direct path next time.
+    // plan A): take a fresh cached stream URL pair if one exists, ask the
+    // backend to resolve this video regardless (no-op when a fresh window is
+    // already stored), so quitting-and-resuming hits the direct path next time.
+    // A video-only cache hit with no audio half is rejected — a silent picture
+    // is a worse failure than a slow start.
     function preparePlayback() {
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
         const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
-        if (direct !== "") {
+        const directAudio = youtubeBackend.cachedPlaybackAudioUrl(videoId, resolution)
+        if (direct !== "" && directAudio !== "") {
             directPlayUrl = direct
+            directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
         } else {
             directPlayUrl = ""
+            directAudioUrl = ""
             ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
         }
         youtubeBackend.resolvePlayback(videoId, resolution)

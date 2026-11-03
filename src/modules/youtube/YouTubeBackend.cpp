@@ -755,8 +755,9 @@ void YouTubeBackend::ensureUrlCacheLoaded()
                         kUrlCacheMaxEntries);
 }
 
-QString YouTubeBackend::cachedPlaybackUrl(const QString &videoId,
-                                         const QString &resolution)
+QString YouTubeBackend::cachedUrlField(const QString &videoId,
+                                       const QString &resolution,
+                                       const QString &field)
 {
     if (videoId.isEmpty())
         return QString();
@@ -766,7 +767,7 @@ QString YouTubeBackend::cachedPlaybackUrl(const QString &videoId,
     if (!entry.isObject())
         return QString();
     const QJsonObject obj = entry.toObject();
-    const QString url = obj.value(QStringLiteral("url")).toString();
+    const QString url = obj.value(field).toString();
     if (url.isEmpty()
         || !yturl::urlFresh(static_cast<qint64>(obj.value(QStringLiteral("expire")).toDouble()),
                             QDateTime::currentMSecsSinceEpoch() / 1000,
@@ -775,11 +776,25 @@ QString YouTubeBackend::cachedPlaybackUrl(const QString &videoId,
     return url;
 }
 
+QString YouTubeBackend::cachedPlaybackUrl(const QString &videoId,
+                                         const QString &resolution)
+{
+    return cachedUrlField(videoId, resolution, QStringLiteral("url"));
+}
+
+QString YouTubeBackend::cachedPlaybackAudioUrl(const QString &videoId,
+                                              const QString &resolution)
+{
+    return cachedUrlField(videoId, resolution, QStringLiteral("audioUrl"));
+}
+
 void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
-                                        qint64 expireEpoch)
+                                        const QString &audioUrl, qint64 expireEpoch)
 {
     QJsonObject entry;
     entry.insert(QStringLiteral("url"), url);
+    if (!audioUrl.isEmpty())
+        entry.insert(QStringLiteral("audioUrl"), audioUrl);
     entry.insert(QStringLiteral("expire"), static_cast<qint64>(expireEpoch));
     m_urlCache.insert(key, entry);
     yturl::pruneUrlCache(m_urlCache, QDateTime::currentMSecsSinceEpoch() / 1000,
@@ -800,10 +815,17 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
     const qint64 nowS = QDateTime::currentMSecsSinceEpoch() / 1000;
     {
         const QJsonValue entry = m_urlCache.value(key);
-        if (entry.isObject()
-            && yturl::urlFresh(static_cast<qint64>(entry.toObject().value(QStringLiteral("expire")).toDouble()),
-                               nowS, kUrlSafetyMarginS))
-            return; // fresh window already on file — nothing to redo
+        if (entry.isObject()) {
+            const QJsonObject obj = entry.toObject();
+            // Entries written before the audio-URL pairing (issue #28 round 2)
+            // carry no audioUrl — treat them as misses so the re-resolve below
+            // stores the pair instead of letting mpv play video-only silence.
+            const bool hasPair = obj.contains(QStringLiteral("audioUrl"));
+            if (hasPair
+                && yturl::urlFresh(static_cast<qint64>(obj.value(QStringLiteral("expire")).toDouble()),
+                                   nowS, kUrlSafetyMarginS))
+                return; // fresh window already on file — nothing to redo
+        }
     }
     const QString bin = ytdlp::locate(m_dataRoot);
     if (bin.isEmpty())
@@ -819,19 +841,32 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
         watchUrlFor(videoId),
     };
     connect(proc, &QProcess::finished, this, [this, proc, key, nowS]() {
-        // The first output line is the signed URL (-g prints one per format).
+        // yt-dlp -g prints one URL per selected format: the usual
+        // bestvideo+bestaudio split prints video on line 1 and audio on line 2;
+        // a combined best[...] fallback prints just one. Both lines carry their
+        // own expire= epoch; the entry lives under the EARLIER one, since a
+        // dead audio URL kills playback exactly as dead video does.
         const QList<QByteArray> lines = proc->readAllStandardOutput().split('\n');
-        QString url;
+        QStringList urls;
         for (const QByteArray &line : lines) {
-            url = line.trimmed();
-            if (!url.isEmpty())
-                break;
+            const QString u = QString::fromUtf8(line).trimmed();
+            if (!u.isEmpty())
+                urls << u;
         }
-        if (url.isEmpty())
+        if (urls.isEmpty()) {
+            proc->deleteLater();
             return; // network hiccup, yt-dlp bump, timeout — ytdl stays the fallback
-        const qint64 expire = yturl::expireEpochFromUrl(url);
+        }
+        const QString videoUrl = urls.value(0);
+        const QString audioUrl = urls.value(1); // empty for combined formats
+        qint64 expire = yturl::expireEpochFromUrl(videoUrl);
+        if (!audioUrl.isEmpty()) {
+            const qint64 audioExpire = yturl::expireEpochFromUrl(audioUrl);
+            if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
+                expire = audioExpire;
+        }
         if (expire > nowS)
-            storeUrlCacheEntry(key, url, expire);
+            storeUrlCacheEntry(key, videoUrl, audioUrl, expire);
         proc->deleteLater();
     });
     connect(proc, &QProcess::errorOccurred, this,

@@ -57,8 +57,14 @@ public:
     // hands it to the Player while its signed window is still fresh, and the Player
     // launches mpv with --ytdl=no around it. Freshness is the URL's own expire=
     // epoch (parse + margin math live in util/YtUrlFresh.h, unit-tested).
+    //
+    // The format string is usually bestvideo+bestaudio, so yt-dlp -g prints TWO
+    // URLs (video line 1, audio line 2). Playing only line 1 hands mpv a silent
+    // video-only stream; the pair must be cached and passed together
+    // (url + --audio-file=<audio>). cachedPlaybackAudioUrl mirrors the video lookup.
     Q_INVOKABLE void resolvePlayback(const QString &videoId, const QString &resolution);
     Q_INVOKABLE QString cachedPlaybackUrl(const QString &videoId, const QString &resolution);
+    Q_INVOKABLE QString cachedPlaybackAudioUrl(const QString &videoId, const QString &resolution);
 
     // Plan A warm-up: one pass over watch history finds the newest video with
     // an unfinished resume position and fires its background resolve, so the
@@ -124,8 +130,11 @@ private:
     // youtube_url_cache.json: { "videoId|formatSpec": { url, expire } }.
     QString      urlCacheFilePath() const;
     void         ensureUrlCacheLoaded();   // lazy one-time load + expiry prune
+    // Shared lookup for the video/audio pair a resolve stored under one key.
+    QString      cachedUrlField(const QString &videoId, const QString &resolution,
+                                const QString &field);
     void         storeUrlCacheEntry(const QString &key, const QString &url,
-                                    qint64 expireEpoch); // prune + persist
+                                    const QString &audioUrl, qint64 expireEpoch); // prune + persist
 
     QStringList  readSubscriptionIds(QString *error = nullptr) const;
     void         ensureFresh(bool forceRefresh);
