@@ -82,13 +82,34 @@ FocusScope {
         return videos.filter(function(v) { return !v.isShort })
     }
 
+    // Issue #28 plan A round 4: whenever a list is presented, hand its front
+    // rows to the backend's speculative warm-up. One chained yt-dlp resolve at
+    // a time caches signed URL pairs while the user reads/browses the list, so
+    // picking a row plays via the direct-URL path at the mpv-init floor
+    // instead of paying a cold resolve. Already fresh/in-flight rows are skipped
+    // backend-side; calling here is cheap and idempotent.
+    function warmUpItems() {
+        var ids = []
+        for (var i = 0; i < items.length && ids.length < 12; ++i) {
+            var it = items[i]
+            if (it && it.videoId)
+                ids.push(it.videoId)
+        }
+        if (ids.length === 0)
+            return
+        var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+        youtubeBackend.warmListPlayback(ids, resolution)
+    }
+
     Component.onCompleted: {
         if (mode === "watchlater") {
             items = youtubeBackend.getWatchLater()
             restoreListIndex()
+            warmUpItems()
         } else if (mode === "history") {
             items = youtubeBackend.getHistory()
             restoreListIndex()
+            warmUpItems()
         } else {
             isLoading = true
             errorMessage = ""
@@ -110,6 +131,7 @@ FocusScope {
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
         }
 
         function onChannelVideosLoaded(loadedChannelId, videos) {
@@ -118,6 +140,7 @@ FocusScope {
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
         }
 
         function onPlaylistVideosLoaded(loadedPlaylistId, videos) {
@@ -126,6 +149,7 @@ FocusScope {
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
         }
 
         function onErrorOccurred(msg) {

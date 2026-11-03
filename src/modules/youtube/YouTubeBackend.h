@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QSet>
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
@@ -70,6 +71,15 @@ public:
     // an unfinished resume position and fires its background resolve, so the
     // resume-into-a-warm-stream case costs zero at play time.
     Q_INVOKABLE void warmResumePlayback(const QString &resolution);
+
+    // Plan A round 4: speculative warm-up of the CURRENT list. Whenever a view
+    // presents a video list (feed, channel, playlist, watch-later, history),
+    // the front entries are resolved in the background — one chained yt-dlp
+    // process at a time — so picking any of them plays with the direct-URL
+    // path at the mpv-init floor instead of paying a cold resolve. Entries
+    // already fresh or in flight are skipped; queue caps bound the backlog.
+    Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
+                                      const QString &resolution);
 
     // Watch history (youtube_history.json). A finished video stays in history
     // with pos 0 (so it lists under History but never prompts to resume);
@@ -184,6 +194,22 @@ private:
     QJsonObject m_urlCache;
     bool        m_urlCacheLoaded = false;
 
+    // Speculative warm-up state (issue #28 plan A round 4). m_resolveKeys
+    // tracks every cache key with a live yt-dlp process (press-initiated or
+    // warm), so warm passes and a Player never duplicate work on one video.
+    // m_warmChainKey is the warm entry currently owning the single chained
+    // process; its completion pumps the queue to the next entry.
+    QStringList         m_warmQueue;    // "videoId<US>resolution" tokens
+    QSet<QString>       m_resolveKeys;
+    QString             m_warmChainKey;
+    bool                hasFreshUrlPair(const QString &key) const;
+    QString             warmToken(const QString &videoId,
+                                 const QString &resolution) const; // US-separator form
+    void                launchUrlResolve(const QString &videoId, const QString &resolution,
+                                         const QString &fmt, const QString &key);
+    void                finishUrlResolve(const QString &key);
+    void                pumpWarmQueue();
+
     static constexpr qint64 kCacheTtlMs      = 15 * 60 * 1000;
     static constexpr int    kMaxFeedItems    = 100;
     static constexpr int    kMaxHistoryItems = 100;
@@ -193,4 +219,6 @@ private:
     static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
     static constexpr int    kUrlCacheMaxEntries = 80;
     static constexpr int    kYtdlResolveTimeoutMs = 30000;
+    static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
+    static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
 };
