@@ -52,7 +52,7 @@ FocusScope {
             list.push("Subscriptions", "Channels")
         else if (signedIn)
             list.push("Subscriptions") // account feed; channels stay file-based
-        if (plStatus.ok)
+        if (plStatus.ok || signedIn)
             list.push("Playlists")
         if (youtubeBackend.getWatchLater().length > 0 || signedIn)
             list.push("Watch Later")

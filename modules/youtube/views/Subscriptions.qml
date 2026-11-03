@@ -129,8 +129,18 @@ FocusScope {
                 } else {
                     youtubeBackend.load_subscriptions_feed()
                 }
-            } else if (mode === "playlist")
-                youtubeBackend.load_playlist_videos(playlistId)
+            } else if (mode === "playlist") {
+                // Signed in: account browse (fast, session-token truth); the
+                // yt-dlp file path stays for signed-out users and as the
+                // error fallback (see onErrorOccurred below).
+                if (youtubeBackend.check_signin().signedIn === true) {
+                    pendingAccountLoad = true
+                    isLoading = true
+                    youtubeBackend.loadAccountPlaylistVideos(playlistId)
+                } else {
+                    youtubeBackend.load_playlist_videos(playlistId)
+                }
+            }
             else
                 youtubeBackend.load_channel_videos(channelId)
         }
@@ -160,6 +170,7 @@ FocusScope {
         function onPlaylistVideosLoaded(loadedPlaylistId, videos) {
             if (itemsRoot.mode !== "playlist" || loadedPlaylistId !== itemsRoot.playlistId)
                 return
+            itemsRoot.pendingAccountLoad = false // shared signal: account path or file path
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
@@ -209,6 +220,8 @@ FocusScope {
                     itemsRoot.items = youtubeBackend.getWatchLater()
                 } else if (itemsRoot.mode === "feed") {
                     youtubeBackend.load_subscriptions_feed()
+                } else if (itemsRoot.mode === "playlist") {
+                    youtubeBackend.load_playlist_videos(itemsRoot.playlistId)
                 }
                 return
             }

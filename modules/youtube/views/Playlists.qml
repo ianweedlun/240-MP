@@ -15,15 +15,35 @@ FocusScope {
     property var items: []
     property bool isLoading: false
     property string errorMessage: ""
+    // Plan D pattern, extended to the playlists tab: a signed-in account
+    // request is tried first and any error falls back to the file path.
+    property bool pendingAccountLoad: false
 
     Component.onCompleted: {
-        isLoading = true
         errorMessage = ""
-        youtubeBackend.load_playlists()
+        if (youtubeBackend.check_signin().signedIn === true) {
+            pendingAccountLoad = true
+            isLoading = true
+            youtubeBackend.loadAccountList("playlists")
+        } else {
+            isLoading = true
+            youtubeBackend.load_playlists()
+        }
     }
 
     Connections {
         target: youtubeBackend
+
+        function onAccountPlaylistsLoaded(playlists) {
+            playlistsRoot.pendingAccountLoad = false
+            playlistsRoot.isLoading = false
+            playlistsRoot.items = playlists || []
+            if (playlistsRoot.items.length > 0) {
+                var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
+                itemList.currentIndex = Math.min(restore, playlistsRoot.items.length - 1)
+                itemList.positionViewAtIndex(itemList.currentIndex, ListView.Contain)
+            }
+        }
 
         function onPlaylistsLoaded(playlists) {
             playlistsRoot.isLoading = false
@@ -36,6 +56,13 @@ FocusScope {
         }
 
         function onErrorOccurred(msg) {
+            if (playlistsRoot.pendingAccountLoad) {
+                // Account tab failed (or auth died mid-flight) — fall back to
+                // the upstream file list instead of failing the whole view.
+                playlistsRoot.pendingAccountLoad = false
+                youtubeBackend.load_playlists()
+                return
+            }
             playlistsRoot.isLoading = false
             playlistsRoot.errorMessage = msg
         }
