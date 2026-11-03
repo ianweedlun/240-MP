@@ -297,6 +297,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-url-cache COMMAND yt-url-cache-tests)
 
+    # InnerTube browse-row parser (issue #28 plan D): pure fixture walk —
+    # renderer extraction, text-shape handling, caps, continuation cursors.
+    add_executable(yt-browse-parse-tests
+        src/util/tests/YtBrowseRowsTest.cpp)
+    set_target_properties(yt-browse-parse-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-browse-parse-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-browse-parse-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-browse-parse COMMAND yt-browse-parse-tests)
+
 endif()
 
 include(CPack)

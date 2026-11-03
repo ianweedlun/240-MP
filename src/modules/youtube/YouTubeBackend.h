@@ -88,6 +88,28 @@ public:
     Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
                                       const QString &resolution);
 
+    // Plan D: device-flow sign-in (TV pairing) + account lists via InnerTube.
+    // The public youtube-tv client pair (id/secret + InnerTube key) is taken
+    // verbatim from the Kodi "youtube-tv" client of the plugin.video.youtube
+    // add-on (github.com/koying/plugin.video.youtube, resources/lib/youtube/
+    // client/login_client.py CONFIGS['youtube-tv']) — the same public pair
+    // every limited-input YouTube client family uses; credited in THANKS.md.
+    // Endpoints (verified live 2026-11-03): start POST www.youtube.com/o/oauth2/
+    // device/code → {device_code,user_code,interval,expires_in}; poll/swap POST
+    // www.youtube.com/o/oauth2/token (grant_type device/1.0) while consent is
+    // pending ("authorization_pending"); refresh with grant_type=refresh_token.
+    // Tokens persist in youtube_auth.json under the app data root (0600-style
+    // private file, values never logged). When signed out / auth dead, the
+    // module falls back to the upstream files (subscriptions.txt / history /
+    // watch-later) — behavior-preserving for users who never sign in.
+    Q_INVOKABLE bool signedIn();                // usable access token present
+    Q_INVOKABLE QVariantMap check_signin();     // { signedIn, hasRefresh } for views
+    Q_INVOKABLE void startDeviceSignIn();       // fires devicePairRequested(userCode,url)
+    Q_INVOKABLE void cancelDeviceSignIn();      // stop a pending poll loop
+    Q_INVOKABLE void deviceSignOut();           // drop auth; file fallbacks resume
+    // kind: "feed" (FEsubscriptions) | "history" (FEhistory) | "watchlater"
+    Q_INVOKABLE void loadAccountList(const QString &kind);
+
     // Watch history (youtube_history.json). A finished video stays in history
     // with pos 0 (so it lists under History but never prompts to resume);
     // entries are pruned to the kMaxHistoryItems most recently played.
@@ -117,6 +139,13 @@ signals:
     // launched on a cold cache: instead of paying ytdl_hook's re-resolve, it
     // waits (bounded) for this signal and then launches mpv on the direct pair.
     void playbackUrlReady(const QString &videoId);
+    // Plan D: pairing card surfaced to the view (user code + where to type it),
+    // the flow's outcome, and signed-in account lists (row model = the module's).
+    void devicePairRequested(const QString &userCode, const QString &verificationUrl);
+    void deviceSignInFinished(bool success, const QString &reason);
+    void accountFeedLoaded(const QVariant &videos);
+    void accountHistoryLoaded(const QVariant &videos);
+    void accountWatchLaterLoaded(const QVariant &videos);
 
 private:
     struct ChannelEntry {
@@ -210,6 +239,7 @@ private:
     QStringList         m_warmQueue;    // "videoId<US>resolution" tokens
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
+    QString              m_pendingListKind; // account list re-entered after a refresh swap
     bool                hasFreshUrlPair(const QString &key) const;
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form
@@ -217,6 +247,27 @@ private:
                                          const QString &fmt, const QString &key);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
+
+    // Plan D auth/device-flow state (tokens NEVER appear in telemetry/logs).
+    QString m_accessToken, m_refreshToken;
+    qint64 m_accessExpiresEpoch = 0;   // epoch seconds; 0 = unknown
+    bool   mAuthLoaded = false;        // lazy one-time youtube_auth.json read
+    bool   m_pairActive = false;       // a device-flow poll loop is running
+    QString m_pairDeviceCode;
+    int    m_pollIntervalS = 5;
+    int    m_pollsLeft = 0;
+    void   ensureAuthLoaded();         // lazy load + expiry note (no request)
+    QString authFilePath() const;
+    void   saveAuthFile();             // write the auth doc (atomic swap)
+    void   requestDeviceCode();
+    void   schedulePairPoll();         // QTimer self-chain until consent/expiry
+    void   finishPairResponse(const QJsonObject &json);
+    void   requestRefresh();           // grant_type=refresh_token swap
+    QString bearerQuery() const;       // "?key=" tv key (public, embedded)
+    void   browsePage(const QString &browseKind, const QString &cursor,
+                     int page, const QVariantList &acc);
+    void   finishBrowsePage(const QString &kind, QNetworkReply *reply,
+                           QVariantList acc, int page);
 
     static constexpr qint64 kCacheTtlMs      = 15 * 60 * 1000;
     static constexpr int    kMaxFeedItems    = 100;

@@ -101,21 +101,35 @@ FocusScope {
         youtubeBackend.warmListPlayback(ids, resolution)
     }
 
+    // Issue #28 plan D: a pending signed-in account-list request falls back to
+    // the file/RSS path on error (upstream compatibility when auth dies).
+    property bool pendingAccountLoad: false
+
     Component.onCompleted: {
-        if (mode === "watchlater") {
-            items = youtubeBackend.getWatchLater()
-            restoreListIndex()
-            warmUpItems()
-        } else if (mode === "history") {
-            items = youtubeBackend.getHistory()
-            restoreListIndex()
-            warmUpItems()
+        if (mode === "watchlater" || mode === "history") {
+            // Signed in (plan D): the account list from the device flow. Not
+            // signed in: the local files, upstream semantics unchanged.
+            if (youtubeBackend.check_signin().signedIn === true) {
+                pendingAccountLoad = true
+                isLoading = true
+                youtubeBackend.loadAccountList(mode)
+            } else {
+                items = mode === "watchlater" ? youtubeBackend.getWatchLater()
+                                              : youtubeBackend.getHistory()
+                restoreListIndex()
+                warmUpItems()
+            }
         } else {
             isLoading = true
             errorMessage = ""
-            if (mode === "feed")
-                youtubeBackend.load_subscriptions_feed()
-            else if (mode === "playlist")
+            if (mode === "feed") {
+                if (youtubeBackend.check_signin().signedIn === true) {
+                    pendingAccountLoad = true
+                    youtubeBackend.loadAccountList("feed")
+                } else {
+                    youtubeBackend.load_subscriptions_feed()
+                }
+            } else if (mode === "playlist")
                 youtubeBackend.load_playlist_videos(playlistId)
             else
                 youtubeBackend.load_channel_videos(channelId)
@@ -152,7 +166,52 @@ FocusScope {
             itemsRoot.warmUpItems()
         }
 
+        function onAccountFeedLoaded(videos) {
+            if (itemsRoot.mode !== "feed")
+                return
+            itemsRoot.pendingAccountLoad = false
+            itemsRoot.isLoading = false
+            itemsRoot.items = itemsRoot.filterShorts(videos)
+            itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
+        }
+
+        function onAccountHistoryLoaded(videos) {
+            if (itemsRoot.mode !== "history")
+                return
+            itemsRoot.pendingAccountLoad = false
+            itemsRoot.isLoading = false
+            itemsRoot.items = videos || []
+            itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
+        }
+
+        function onAccountWatchLaterLoaded(videos) {
+            if (itemsRoot.mode !== "watchlater")
+                return
+            itemsRoot.pendingAccountLoad = false
+            itemsRoot.isLoading = false
+            itemsRoot.items = videos || []
+            itemsRoot.restoreListIndex()
+            itemsRoot.warmUpItems()
+        }
+
         function onErrorOccurred(msg) {
+            if (itemsRoot.pendingAccountLoad) {
+                // Auth list failed — fall back to the upstream source instead
+                // of failing the whole view (device flow is an upgrade path).
+                itemsRoot.pendingAccountLoad = false
+                if (itemsRoot.mode === "history") {
+                    itemsRoot.isLoading = false
+                    itemsRoot.items = youtubeBackend.getHistory()
+                } else if (itemsRoot.mode === "watchlater") {
+                    itemsRoot.isLoading = false
+                    itemsRoot.items = youtubeBackend.getWatchLater()
+                } else if (itemsRoot.mode === "feed") {
+                    youtubeBackend.load_subscriptions_feed()
+                }
+                return
+            }
             if (itemsRoot.mode !== "feed" && itemsRoot.mode !== "channel" && itemsRoot.mode !== "playlist")
                 return
             itemsRoot.isLoading = false

@@ -1,6 +1,7 @@
 #include "YouTubeBackend.h"
 #include "../../util/YtDlpLocator.h"
 #include "../../util/YtUrlFresh.h"
+#include "../../util/YtBrowseRows.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -10,12 +11,14 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QUrlQuery>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QUrl>
 #include <QXmlStreamReader>
 
 #include <algorithm>
+#include <functional>
 
 static const char *kSubscriptionsFileName = "youtube_subscriptions.txt";
 static const char *kPlaylistsFileName     = "youtube_playlists.txt";
@@ -996,3 +999,386 @@ void YouTubeBackend::warmResumePlayback(const QString &resolution)
     if (!bestVideoId.isEmpty())
         resolvePlayback(bestVideoId, resolution);
 }
+
+// ---------- Plan D: device-flow sign-in + account lists (issue #28) ----------
+// Client pair verbatim from the Kodi plugin.video.youtube add-on's
+// CONFIGS['youtube-tv'] (public, same family every limited-input client uses);
+// credited in THANKS.md. Endpoints verified live 2026-11-03. Token values are
+// never logged; only state words cross signal boundaries.
+
+static const QString kTvClientId =
+    QStringLiteral("861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com");
+static const QString kTvClientSecret =
+    QStringLiteral("SboVhoG9s0rNafixCSGGKXAT");
+static const QString kInnerTubeTvKey =
+    QStringLiteral("AIzaSyAd-YEOqZz9nXVzGtn3KWzYLbLaajhqIDA");
+static const QString kDeviceCodeEndpoint =
+    QStringLiteral("https://www.youtube.com/o/oauth2/device/code");
+static const QString kTokenEndpoint =
+    QStringLiteral("https://www.youtube.com/o/oauth2/token");
+static constexpr int kPairPollMax = 120;          // 10 min at 5 s polls
+static constexpr int kAuthSlackS = 120;           // refresh before expiry
+static constexpr int kBrowseMaxPages = 5;         // continuation cap
+static constexpr int kBrowseMaxRows = 200;        // hard display cap
+
+namespace {
+
+// Find the account's watch-later playlist on the signed-in my-youtube page:
+// an object whose subtree carries the title text "Watch later" (any case) and
+// that also names a playlist cursor — "playlistId" (PL…, needs the VL prefix
+// to browse) or a direct "browseId" (VL…). Document order decides, so the
+// shelf the account UI shows wins over any later decoys. Null when absent
+// (shape drift across clients → the caller falls back to the file view).
+inline QJsonValue findWatchLaterBrowseId(const QJsonObject &root)
+{
+    QQueue<QJsonValue> queue;
+    queue.enqueue(QJsonValue(root));
+    std::function<bool(const QJsonValue &)> textHasWatchLater =
+        [&](const QJsonValue &v) -> bool {
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            const QList<QString> keyList = o.keys();
+            for (const QString &k : keyList)
+                if (textHasWatchLater(o.value(k)))
+                    return true;
+        } else if (v.isArray()) {
+            for (const QJsonValue &sub : v.toArray())
+                if (textHasWatchLater(sub))
+                    return true;
+        } else if (v.isString()) {
+            const QString s = v.toString().toLower();
+            return s == QStringLiteral("watch later")
+                   || s == QStringLiteral("watchlater");
+        }
+        return false;
+    };
+    while (!queue.isEmpty()) {
+        const QJsonValue v = queue.dequeue();
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            const QString pid      = o.value(QStringLiteral("playlistId")).toString();
+            const QString browseId = o.value(QStringLiteral("browseId")).toString();
+            QString cursor;
+            if (browseId.startsWith(QStringLiteral("VL")))
+                cursor = browseId;
+            else if (pid.startsWith(QStringLiteral("PL")) || pid.startsWith(QStringLiteral("WL")))
+                cursor = QStringLiteral("VL") + pid;
+            if (!cursor.isEmpty() && textHasWatchLater(v))
+                return QJsonValue(cursor);
+            const QList<QString> keyList = o.keys();
+            for (const QString &k : keyList)
+                queue.enqueue(o.value(k));
+        } else if (v.isArray()) {
+            for (const QJsonValue &sub : v.toArray())
+                queue.enqueue(sub);
+        }
+    }
+    return QJsonValue(); // null sentinel
+}
+
+} // anonymous namespace
+
+QString YouTubeBackend::authFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_auth.json");
+}
+
+void YouTubeBackend::ensureAuthLoaded()
+{
+    if (mAuthLoaded)
+        return;
+    mAuthLoaded = true;
+    QFile f(authFilePath());
+    if (!f.open(QIODevice::ReadOnly))
+        return; // no auth yet — signed-out is the default state
+    const QJsonObject doc = QJsonDocument::fromJson(f.readAll()).object();
+    m_accessToken         = doc.value(QStringLiteral("access")).toString();
+    m_refreshToken        = doc.value(QStringLiteral("refresh")).toString();
+    m_accessExpiresEpoch  = static_cast<qint64>(doc.value(QStringLiteral("expires")).toDouble());
+}
+
+void YouTubeBackend::saveAuthFile()
+{
+    const QString path = authFilePath();
+    const QString tmp = path + QStringLiteral(".tmp");
+    QJsonObject doc;
+    if (!m_accessToken.isEmpty())
+        doc.insert(QStringLiteral("access"), m_accessToken);
+    if (!m_refreshToken.isEmpty())
+        doc.insert(QStringLiteral("refresh"), m_refreshToken);
+    if (m_accessExpiresEpoch > 0)
+        doc.insert(QStringLiteral("expires"), static_cast<double>(m_accessExpiresEpoch));
+    QFile f(tmp);
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
+    f.close();
+    QFile::rename(tmp, path); // atomic swap: readers never see half a doc
+}
+
+bool YouTubeBackend::signedIn()
+{
+    ensureAuthLoaded();
+    if (m_accessToken.isEmpty())
+        return false;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch() / 1000;
+    return m_accessExpiresEpoch <= 0 || now + kAuthSlackS < m_accessExpiresEpoch;
+}
+
+QVariantMap YouTubeBackend::check_signin()
+{
+    ensureAuthLoaded();
+    QVariantMap m;
+    m[QStringLiteral("signedIn")]      = !m_accessToken.isEmpty()
+            && (m_accessExpiresEpoch <= 0
+                || QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS < m_accessExpiresEpoch);
+    m[QStringLiteral("hasRefresh")]    = !m_refreshToken.isEmpty();
+    m[QStringLiteral("pairingActive")] = m_pairActive;
+    return m;
+}
+
+void YouTubeBackend::deviceSignOut()
+{
+    if (!m_refreshToken.isEmpty()) {
+        // Best-effort revoke; the local clear is what the app honors.
+        QNetworkRequest req{QUrl(QStringLiteral("https://www.youtube.com/o/oauth2/revoke"))};
+        req.setHeader(QNetworkRequest::ContentTypeHeader,
+                      QStringLiteral("application/x-www-form-urlencoded"));
+        QUrlQuery revokeQuery{
+            {QStringLiteral("token"), m_refreshToken},
+            {QStringLiteral("key"), kInnerTubeTvKey}};
+        QNetworkReply *reply = m_nam.post(req, revokeQuery.toString().toUtf8());
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            reply->deleteLater();
+        });
+    }
+    m_accessToken.clear();
+    m_refreshToken.clear();
+    m_accessExpiresEpoch = 0;
+    saveAuthFile();
+    emit deviceSignInFinished(false, QStringLiteral("signed-out"));
+}
+
+void YouTubeBackend::startDeviceSignIn()
+{
+    if (m_pairActive || signedIn())
+        return; // one flow at a time; already signed in does nothing
+    m_pairActive = true;
+    requestDeviceCode();
+}
+
+void YouTubeBackend::requestDeviceCode()
+{
+    QNetworkRequest req{QUrl(kDeviceCodeEndpoint)};
+    req.setHeader(QNetworkRequest::ContentTypeHeader,
+                  QStringLiteral("application/x-www-form-urlencoded"));
+    QUrlQuery deviceQuery{
+        {QStringLiteral("client_id"), kTvClientId},
+        {QStringLiteral("scope"), QStringLiteral("https://www.googleapis.com/auth/youtube")}};
+    QNetworkReply *reply = m_nam.post(req, deviceQuery.toString().toUtf8());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
+        reply->deleteLater();
+        const QString userCode     = doc.value(QStringLiteral("user_code")).toString();
+        m_pairDeviceCode           = doc.value(QStringLiteral("device_code")).toString();
+        const QString url          = doc.value(QStringLiteral("verification_url")).toString();
+        const int interval         = doc.value(QStringLiteral("interval")).toInt();
+        const int expiresIn        = doc.value(QStringLiteral("expires_in")).toInt();
+        if (userCode.isEmpty() || m_pairDeviceCode.isEmpty()) {
+            m_pairActive = false;
+            emit deviceSignInFinished(false, QStringLiteral("PAIRING-REQUEST-FAILED"));
+            return;
+        }
+        m_pollIntervalS = interval > 0 ? interval : 5;
+        m_pollsLeft     = qMin(kPairPollMax, expiresIn > 0 ? expiresIn / m_pollIntervalS : kPairPollMax);
+        emit devicePairRequested(userCode, url.isEmpty()
+                                 ? QStringLiteral("https://www.google.com/device") : url);
+        schedulePairPoll();
+    });
+}
+
+void YouTubeBackend::schedulePairPoll()
+{
+    if (!m_pairActive)
+        return;
+    QTimer::singleShot(qint64(m_pollIntervalS) * 1000, this, [this]() {
+        if (!m_pairActive)
+            return;
+        QNetworkRequest req{QUrl(kTokenEndpoint)};
+        req.setHeader(QNetworkRequest::ContentTypeHeader,
+                      QStringLiteral("application/x-www-form-urlencoded"));
+        QUrlQuery pairQuery{
+            {QStringLiteral("client_id"), kTvClientId},
+            {QStringLiteral("client_secret"), kTvClientSecret},
+            {QStringLiteral("code"), m_pairDeviceCode},
+            {QStringLiteral("grant_type"), QStringLiteral("http://oauth.net/grant_type/device/1.0")}};
+        QNetworkReply *reply = m_nam.post(req, pairQuery.toString().toUtf8());
+        connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+            const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
+            reply->deleteLater();
+            finishPairResponse(doc);
+        });
+    });
+}
+
+void YouTubeBackend::finishPairResponse(const QJsonObject &doc)
+{
+    const QString token = doc.value(QStringLiteral("access_token")).toString();
+    if (!token.isEmpty()) {
+        m_accessToken         = token;
+        m_refreshToken        = doc.value(QStringLiteral("refresh_token")).toString();
+        const int expiresIn   = doc.value(QStringLiteral("expires_in")).toInt();
+        m_accessExpiresEpoch  = expiresIn > 0
+                ? QDateTime::currentMSecsSinceEpoch() / 1000 + expiresIn : 0;
+        m_pairActive = false;
+        saveAuthFile();
+        emit deviceSignInFinished(true, QString());
+        return;
+    }
+    const QString err = doc.value(QStringLiteral("error")).toString();
+    if (err == QStringLiteral("authorization_pending")
+        || err == QStringLiteral("access_denied_temporary")) {
+        if (m_pairActive && --m_pollsLeft > 0)
+            schedulePairPoll();
+        else
+            m_pairActive = false; // code expired client-side; user_code dies anyway
+        return;
+    }
+    m_pairActive = false;
+    emit deviceSignInFinished(false, err.isEmpty() ? QStringLiteral("PAIRING-FAILED")
+                                                  : err.toUpper().replace(QLatin1Char(' '), QLatin1Char('-')));
+}
+
+void YouTubeBackend::cancelDeviceSignIn()
+{
+    m_pairActive = false; // an in-flight poll checks the flag on completion
+}
+
+void YouTubeBackend::requestRefresh()
+{
+    if (m_refreshToken.isEmpty())
+        return;
+    QNetworkRequest req{QUrl(kTokenEndpoint)};
+    req.setHeader(QNetworkRequest::ContentTypeHeader,
+                  QStringLiteral("application/x-www-form-urlencoded"));
+    QUrlQuery refreshQuery{
+        {QStringLiteral("client_id"), kTvClientId},
+        {QStringLiteral("client_secret"), kTvClientSecret},
+        {QStringLiteral("refresh_token"), m_refreshToken},
+        {QStringLiteral("grant_type"), QStringLiteral("refresh_token")}};
+    QNetworkReply *reply = m_nam.post(req, refreshQuery.toString().toUtf8());
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
+        reply->deleteLater();
+        const QString token = doc.value(QStringLiteral("access_token")).toString();
+        if (!token.isEmpty()) {
+            m_accessToken         = token;
+            const int expiresIn   = doc.value(QStringLiteral("expires_in")).toInt();
+            m_accessExpiresEpoch  = expiresIn > 0
+                    ? QDateTime::currentMSecsSinceEpoch() / 1000 + expiresIn : 0;
+            // a rotated refresh_token replaces the old one when returned
+            const QString rotated = doc.value(QStringLiteral("refresh_token")).toString();
+            if (!rotated.isEmpty())
+                m_refreshToken = rotated;
+            saveAuthFile();
+            if (!m_pendingListKind.isEmpty()) {
+                const QString kind = m_pendingListKind;
+                m_pendingListKind.clear();
+                loadAccountList(kind); // retry now that the token is live
+            }
+        } else {
+            m_accessToken = QString(); // dead auth — views fall back to files
+            saveAuthFile();
+        }
+    });
+}
+
+QString YouTubeBackend::bearerQuery() const
+{
+    return QStringLiteral("?key=") + kInnerTubeTvKey;
+}
+
+void YouTubeBackend::loadAccountList(const QString &kind)
+{
+    ensureAuthLoaded();
+    if (m_accessToken.isEmpty()) {
+        emit errorOccurred(QStringLiteral("NOT SIGNED IN"));
+        return;
+    }
+    m_pendingListKind = kind;
+    if (m_accessExpiresEpoch > 0
+        && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch) {
+        requestRefresh(); // the list re-enters from requestRefresh's success leg
+        return;
+    }
+    // feed/history have stable browseIds; watch-later starts at the account
+    // home, where the discovery hop finds the account's playlist cursor.
+    const QString startId = kind == QStringLiteral("history") ? QStringLiteral("FEhistory")
+                            : kind == QStringLiteral("feed") ? QStringLiteral("FEsubscriptions")
+                                                             : QStringLiteral("FEmy_youtube");
+    browsePage(kind, startId, 1, QVariantList());
+}
+
+void YouTubeBackend::browsePage(const QString &browseKind, const QString &cursor,
+                                int page, const QVariantList &acc)
+{
+    if (m_accessToken.isEmpty())
+        return;
+    QJsonObject body;
+    body.insert(QStringLiteral("context"), QJsonObject{{QStringLiteral("client"), QJsonObject{
+        {QStringLiteral("clientName"), QStringLiteral("TVHTML5")},
+        {QStringLiteral("clientVersion"), QStringLiteral("7.20210818.00.00-ks")},
+        {QStringLiteral("hl"), QStringLiteral("en")},
+        {QStringLiteral("gl"), QStringLiteral("US")}}}});
+    if (cursor.startsWith(QStringLiteral("VL")) || cursor.startsWith(QStringLiteral("FE")))
+        body.insert(QStringLiteral("browseId"), cursor);
+    else
+        body.insert(QStringLiteral("continuation"), cursor);
+    QNetworkRequest req{QUrl(QStringLiteral("https://www.youtube.com/youtubei/v1/browse")
+                             + bearerQuery())};
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    QNetworkReply *reply = m_nam.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, browseKind, page, acc]() {
+        finishBrowsePage(browseKind, reply, acc, page);
+    });
+}
+
+void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
+                                     QVariantList acc, int page)
+{
+    const bool netError = (reply->error() != QNetworkReply::NoError);
+    const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+    reply->deleteLater();
+    const QJsonObject root = doc.object();
+    if (kind == QStringLiteral("watchlater") && acc.isEmpty() && page == 1) {
+        // Discovery hop: the account's watch-later playlist id lives on the
+        // signed-in my-youtube page next to its title. No stable browseId
+        // exists — this is what makes the account list truly account-truth.
+        const QJsonValue wlId = findWatchLaterBrowseId(root);
+        if (wlId.isNull()) {
+            emit errorOccurred(QStringLiteral("WATCH-LATER-NOT-FOUND"));
+            return; // the QML view keeps the upstream file display
+        }
+        browsePage(kind, wlId.toString(), 2, acc);
+        return;
+    }
+    acc += ytui::extractBrowseRows(root, kBrowseMaxRows - acc.size());
+    const QString next = ytui::continuationToken(root);
+    if (acc.size() < kBrowseMaxRows && !next.isEmpty() && page < kBrowseMaxPages) {
+        browsePage(kind, next, page + 1, acc);
+        return;
+    }
+    // An empty signed-in list is legal; only the network/HTTP surface is an
+    // error — decided by the reply itself, never a heuristic.
+    if (!acc.isEmpty() || page > 1) {
+        if (kind == QStringLiteral("feed"))
+            emit accountFeedLoaded(acc);
+        else if (kind == QStringLiteral("history"))
+            emit accountHistoryLoaded(acc);
+        else
+            emit accountWatchLaterLoaded(acc);
+    } else if (netError || root.value(QStringLiteral("error")).isObject()) {
+        emit errorOccurred(QStringLiteral("AUTH-LIST-FAILED"));
+    }
+}
+

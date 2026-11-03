@@ -61,6 +61,64 @@ FocusScope {
         }
     }
 
+    // Plan D: device-flow pairing card — visible only while a pairing is
+    // pending (or right after it lands/declines, one glance to confirm).
+    property string pairCode: ""
+    property string pairUrl: ""
+    property string pairNote: ""
+    property bool pairActive: false
+
+    Connections {
+        target: youtubeBackend
+        function onDevicePairRequested(userCode, url) {
+            moduleRoot.pairCode = userCode
+            moduleRoot.pairUrl = url
+            moduleRoot.pairActive = true
+            moduleRoot.pairNote = ""
+        }
+        function onDeviceSignInFinished(ok, reason) {
+            moduleRoot.pairActive = false
+            moduleRoot.pairNote = ok ? "SIGNED IN" : reason
+            // Let the confirmation be readable for a moment, then clear so no
+            // stale card ever persists on the module screen.
+            Qt.setTimeout("pair-note-clear", ok ? 6000 : 10000,
+                          function() { moduleRoot.pairNote = "" })
+        }
+    }
+
+    Rectangle {
+        id: pairCard
+        visible: moduleRoot.pairActive || moduleRoot.pairNote !== ""
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: root.sh * 0.05
+        width: root.sw * 0.55; height: root.sh * 0.22
+        color: root.surfaceColor
+        radius: root.sh * 0.01
+        Column {
+            spacing: root.sh * 0.018
+            Text {
+                text: "PAIR YOUTUBE"
+                color: root.accentColor
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.035
+            }
+            Text {
+                text: moduleRoot.pairUrl
+                color: root.secondaryColor
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.03
+            }
+            Text {
+                text: moduleRoot.pairCode !== "" ? "TYPE CODE: " + moduleRoot.pairCode
+                                                 : moduleRoot.pairNote
+                color: root.primaryColor
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.05
+            }
+        }
+    }
+
     Component.onCompleted: {
         // Issue #28 plan A warm-up: before any view opens, kick the backend
         // pass that pre-resolves the newest unfinished resume target with

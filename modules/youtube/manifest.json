@@ -40,6 +40,25 @@
       "default": "ON"
     },
     {
+      "key": "device_sign_in",
+      "label": "Sign In on YouTube (TV Pairing)",
+      "type": "action",
+      "action_slot": "startDeviceSignIn",
+      "description": "Sign in with the TV flow: an 8-char code appears on screen; type it at the shown URL on any device. Grants account subscriptions, history and watch-later; signing out restores the file-based lists."
+    },
+    {
+      "key": "device_pair_cancel",
+      "label": "Cancel Pairing",
+      "type": "action",
+      "action_slot": "cancelDeviceSignIn"
+    },
+    {
+      "key": "device_sign_out",
+      "label": "Sign Out of YouTube",
+      "type": "action",
+      "action_slot": "deviceSignOut"
+    },
+    {
       "key": "delete_watch_later",
       "label": "Delete Watch Later",
       "type": "action",
