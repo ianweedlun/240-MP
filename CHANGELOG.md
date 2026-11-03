@@ -4,6 +4,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — YouTube: speculative list warm-up + live/combined streams as single-stream entries (#28 plan A rounds 4–4b)
+- Round 4: `warmListPlayback(videoIds, resolution)` — presenting any video list (Subscriptions feed,
+  channel videos, playlist, Watch Later, History) chains ONE background yt-dlp resolve at a time over
+  the front 12 rows (queue cap 24; in-flight key set so a press never duplicates a warm resolve).
+  Browsing outruns the chain, so picks take the direct-URL path: measured press→mpv spawn 0 s,
+  first picture ~1–2 s on never-watched videos (Pi tip 7ed0b04).
+- Round 4b: one-line `-g` outputs (live HLS masters, combined `best[]`) are ONE muxed stream —
+  stored with a `single=1` marker; the freshness gate accepts (audio pair OR single marker), legacy
+  half-entries stay misses; the Player plays single entries without `--audio-file`. Live picks left
+  the permanently-cold path (was ~21 s: wait-cap + re-resolve). Cold rows outside the warm window now
+  measure a bounded ~10 s single-resolve wait, launch direct (no ytdl_hook double-pay).
+- Measured verdict posted to #28: dominant pick class starts picture in ~1–2 s (≙ resume); worst case
+  bounded; cache entries are complete playable units (38 at tip). 6/6 unit tests, qmllint/qmlformat
+  clean on edited views before the Pi round-trip.
+
 ### Fixed — YouTube: slow start on every pick, not just resume (#28 plan A rounds 2–3)
 - Round 1 cached only the video half of `bestvideo+bestaudio`: yt-dlp `-g` prints two
   URLs (video line 1, audio line 2), so warm plays went out silent (video-only stream)
