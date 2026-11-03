@@ -149,9 +149,8 @@ private slots:
     void watchLaterCursorMiss();
     void playlistRowsDesktopShelf();
     void playlistRowsTvTiles();
-    void playlistsTabCursorTvChip();
-    void playlistsTabCursorDesktopUc();
-    void playlistsTabCursorMiss();
+    void accountPlaylistsFilterKeepsPlAndLl();
+    void thumbnailUrlTilesWithoutContentId();
 };
 
 void YtBrowseRowsTest::extractRowsInDocumentOrder()
@@ -502,74 +501,64 @@ void YtBrowseRowsTest::playlistRowsTvTiles()
              QStringLiteral("RDmix0000001"));
 }
 
-void YtBrowseRowsTest::playlistsTabCursorTvChip()
+void YtBrowseRowsTest::accountPlaylistsFilterKeepsPlAndLl()
 {
-    // Account home TV chip: raw reloadContinuationData cursor keyed beside a
-    // "Playlists" title — same chip shape as the watch-later cursor hunt.
-    QJsonObject rcd;
-    rcd.insert(QStringLiteral("continuation"), QStringLiteral("4qmFsgPLAYLISTTOKEN"));
-    QJsonObject cont;
-    cont.insert(QStringLiteral("reloadContinuationData"), rcd);
-    QJsonObject tv;
-    tv.insert(QStringLiteral("continuation"), cont);
-    QJsonObject content;
-    content.insert(QStringLiteral("tvSurfaceContentRenderer"), tv);
-    QJsonObject chip;
-    chip.insert(QStringLiteral("title"), QStringLiteral("Playlists"));
-    chip.insert(QStringLiteral("content"), content);
-    QJsonObject tabWrap;
-    tabWrap.insert(QStringLiteral("tabRenderer"), chip);
-    QJsonArray contents;
-    contents.append(tabWrap);
-    QJsonObject root;
-    root.insert(QStringLiteral("contents"), contents);
+    // FElibrary mixes user playlists (PL…), the LL "Liked videos" pseudo-
+    // playlist, auto-mix radios (RD…) and watch-later/history chips. Only
+    // PL/LL are the account's own playlists; document order stays untouched.
+    QVariantList in;
+    auto mk = [](const QString &pid, const QString &name) {
+        QVariantMap r;
+        r.insert(QStringLiteral("playlistId"), pid);
+        r.insert(QStringLiteral("title"), name);
+        return r;
+    };
+    in << mk(QStringLiteral("LL"), QStringLiteral("Liked videos"));
+    in << mk(QStringLiteral("RDmix000000001"), QStringLiteral("Mix - Sports Highlights"));
+    in << mk(QStringLiteral("PLfallasleep0001"), QStringLiteral("Fall asleep"));
+    in << mk(QStringLiteral("WL"), QStringLiteral("Watch later"));
+    in << mk(QStringLiteral("PLsports00000001"), QStringLiteral("Sports Highlights"));
 
-    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
-    QVERIFY(!cur.isNull());
-    QCOMPARE(cur.toString(), QStringLiteral("4qmFsgPLAYLISTTOKEN"));
+    const QVariantList kept = ytui::keepAccountPlaylists(in);
+    QCOMPARE(kept.size(), 3);
+    QCOMPARE(kept.at(0).toMap().value(QStringLiteral("playlistId")), QStringLiteral("LL"));
+    QCOMPARE(kept.at(1).toMap().value(QStringLiteral("playlistId")), QStringLiteral("PLfallasleep0001"));
+    QCOMPARE(kept.at(2).toMap().value(QStringLiteral("playlistId")), QStringLiteral("PLsports00000001"));
 }
 
-void YtBrowseRowsTest::playlistsTabCursorDesktopUc()
+void YtBrowseRowsTest::thumbnailUrlTilesWithoutContentId()
 {
-    // Desktop tab chip: browseEndpoint browseId UC<channelId>. A bare
-    // playlistId chip (named playlist, not the tab) must not match.
-    QJsonObject be;
-    be.insert(QStringLiteral("browseId"), QStringLiteral("UCUCchannelid1"));
-    QJsonObject ep;
-    ep.insert(QStringLiteral("browseEndpoint"), be);
-    QJsonObject chip;
-    chip.insert(QStringLiteral("title"), runsText(QStringLiteral("Playlists")));
-    chip.insert(QStringLiteral("endpoint"), ep);
-    QJsonArray contents;
-    QJsonObject decoy;
-    QJsonObject playlistInner;
-    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLnope0000001"));
-    playlistInner.insert(QStringLiteral("title"), runsText(QStringLiteral("Watch later")));
-    decoy.insert(QStringLiteral("playlistRenderer"), playlistInner);
-    contents.append(decoy);
-    contents.append(chip);
-    QJsonObject root;
-    root.insert(QStringLiteral("contents"), contents);
-
-    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
-    QVERIFY(!cur.isNull());
-    QCOMPARE(cur.toString(), QStringLiteral("UCUCchannelid1"));
-}
-
-void YtBrowseRowsTest::playlistsTabCursorMiss()
-{
-    // Decoys only: watch-later chips and video rows, no tab cursor anywhere.
+    // The verified VL… playlist-contents shape (TILE_STYLE_YTLR_VERTICAL_LIST):
+    // tiles carry NEITHER contentId NOR contentType — the only videoId source
+    // is the header thumbnail URL (…/vi/<11>/…).
+    QJsonObject thumb;
+    thumb.insert(QStringLiteral("url"), QStringLiteral("https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg"));
+    QJsonArray thumbs;
+    thumbs.append(thumb);
+    QJsonObject header;
+    header.insert(QStringLiteral("thumbnails"), thumbs);
+    QJsonObject headerWrap;
+    headerWrap.insert(QStringLiteral("tileHeaderRenderer"), header);
+    QJsonObject titleObj;
+    titleObj.insert(QStringLiteral("simpleText"), QStringLiteral("Real playlist video"));
+    QJsonObject metaInner;
+    metaInner.insert(QStringLiteral("title"), titleObj);
+    QJsonObject metaWrap;
+    metaWrap.insert(QStringLiteral("tileMetadataRenderer"), metaInner);
+    QJsonObject tile;
+    tile.insert(QStringLiteral("header"), headerWrap);
+    tile.insert(QStringLiteral("metadata"), metaWrap);
+    QJsonObject tileWrap;
+    tileWrap.insert(QStringLiteral("tileRenderer"), tile);
     QJsonArray items;
-    QJsonObject playlistInner;
-    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLwatchlaterstuff"));
-    playlistInner.insert(QStringLiteral("title"), runsText(QStringLiteral("Watch later")));
-    QJsonObject wrapper;
-    wrapper.insert(QStringLiteral("playlistRenderer"), playlistInner);
-    items.append(wrapper);
-    QJsonObject root = sectionOf(items);
+    items.append(tileWrap);
+    const QJsonObject root = sectionOf(items);
 
-    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
-    QVERIFY(cur.isNull());
+    const QVariantList rows = ytui::extractBrowseRows(root, 0);
+    QCOMPARE(rows.size(), 1);
+    const QVariantMap row = rows.at(0).toMap();
+    QCOMPARE(row.value(QStringLiteral("videoId")), QStringLiteral("dQw4w9WgXcQ"));
+    QCOMPARE(row.value(QStringLiteral("title")), QStringLiteral("Real playlist video"));
 }
 
 QTEST_MAIN(YtBrowseRowsTest)

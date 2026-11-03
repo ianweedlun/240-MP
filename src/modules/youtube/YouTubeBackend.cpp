@@ -1303,11 +1303,14 @@ void YouTubeBackend::loadAccountList(const QString &kind)
         requestRefresh(); // the list re-enters from requestRefresh's success leg
         return;
     }
-    // feed/history have stable browseIds; watch-later starts at the account
-    // home, where the discovery hop finds the account's playlist cursor.
+    // feed/history/watch-later have stable entry points; the playlists
+    // account surface is the LIBRARY (FElibrary) — the account home's Playlists
+    // tab chip is unselectable and cursor-less on the TV client (verified
+    // against the live session on the Pi; a chip hunt there is a dead end).
     const QString startId = kind == QStringLiteral("history") ? QStringLiteral("FEhistory")
                             : kind == QStringLiteral("feed") ? QStringLiteral("FEsubscriptions")
-                                                             : QStringLiteral("FEmy_youtube");
+                                                             : kind == QStringLiteral("playlists") ? QStringLiteral("FElibrary")
+                                                              : QStringLiteral("FEmy_youtube");
     browsePage(kind, startId, 1, QVariantList());
 }
 
@@ -1363,25 +1366,12 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         browsePage(kind, wlId.toString(), 2, acc);
         return;
     }
-    if (kind == QStringLiteral("playlists") && acc.isEmpty() && page == 1) {
-        // Same discovery hop as watch-later: the Playlists tab cursor on the
-        // signed-in account home (raw continuation on TV chips; UC/PU browseId
-        // on desktop shapes). No stable top-level browseId exists for a user's
-        // tab — discovering it makes the list account-truth.
-        const QJsonValue tab = ytui::findPlaylistsTabCursor(root);
-        if (tab.isNull()) {
-            qWarning("[Youtube] playlists-tab discovery miss on the account home (http %d) — falling back",
-                     netError ? int(reply->error()) : 0);
-            emit errorOccurred(QStringLiteral("PLAYLISTS-TAB-NOT-FOUND"));
-            return; // the QML view keeps the upstream file display
-        }
-        browsePage(kind, tab.toString(), 2, acc);
-        return;
-    }
     if (kind == QStringLiteral("playlists")) {
         // The tab lists PLAYLISTS, not videos — different extractor, and the
         // video-row walker must not run here (its tiles are playlist tiles).
-        acc += ytui::extractPlaylistRows(root, kBrowseMaxRows - acc.size());
+        // FElibrary mixes in auto-mixes and chips; only PL…/LL are the user's.
+        acc += ytui::keepAccountPlaylists(
+                   ytui::extractPlaylistRows(root, kBrowseMaxRows - acc.size()));
     } else {
         acc += ytui::extractBrowseRows(root, kBrowseMaxRows - acc.size());
     }
@@ -1436,12 +1426,14 @@ void YouTubeBackend::loadAccountPlaylistVideos(const QString &playlistId)
         requestRefresh();
         return;
     }
-    // Account playlist ids come as PL…/UU…/RD…; contents are browsed with the
-    // VL-prefixed cursor for PL/UU (RD mixes browse directly). The emit echoes
+    // Account playlist ids come as PL…/UU…/LL/RD…; contents are browsed with
+    // the VL-prefixed cursor for PL/UU/LL (LL -> VLLL, the liked-videos
+    // pseudo-playlist; RD mixes browse directly). The emit echoes
     // the CALLER's id so view-side id matching works either way.
     m_accountVideosEmitId = playlistId;
     QString cursor = playlistId;
-    if (cursor.startsWith(QStringLiteral("PL")) || cursor.startsWith(QStringLiteral("UU")))
+    if (cursor.startsWith(QStringLiteral("PL")) || cursor.startsWith(QStringLiteral("UU"))
+        || cursor == QStringLiteral("LL"))
         cursor = QStringLiteral("VL") + cursor;
     browsePage(QStringLiteral("playlistvideos"), cursor, 1, QVariantList());
 }

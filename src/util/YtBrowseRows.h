@@ -20,6 +20,7 @@
 #include <QVariantList>
 #include <QQueue>
 #include <QString>
+#include <QRegularExpression>
 
 namespace ytui {
 
@@ -142,8 +143,27 @@ inline QVariantList extractBrowseRows(const QJsonObject &root, int maxRows)
             }
             if (o.contains(QStringLiteral("tileRenderer"))) {
                 const QJsonObject t = o.value(QStringLiteral("tileRenderer")).toObject();
-                const QString videoId = t.value(QStringLiteral("contentId")).toString();
+                QString videoId = t.value(QStringLiteral("contentId")).toString();
                 const QString ctype   = t.value(QStringLiteral("contentType")).toString();
+                // VL… playlist pages on the TV client render vertical tiles
+                // WITHOUT contentId/contentType (TILE_STYLE_YTLR_VERTICAL_LIST):
+                // the only stable videoId source is the header thumbnail URL
+                // (…/vi/<11>/…). Titles/lengths still sit under the same
+                // metadata/header renderers the contentId tiles use.
+                if (videoId.isEmpty() && ctype.isEmpty()) {
+                    const QJsonObject header = t.value(QStringLiteral("header")).toObject()
+                                                   .value(QStringLiteral("tileHeaderRenderer")).toObject();
+                    const QJsonArray thumbs = header.value(QStringLiteral("thumbnails")).toArray();
+                    for (const QJsonValue &th : thumbs) {
+                        const QString u = th.toObject().value(QStringLiteral("url")).toString();
+                        static const QRegularExpression re(QStringLiteral("/vi/([0-9A-Za-z_-]{11})"));
+                        const QRegularExpressionMatch m = re.match(u);
+                        if (m.isValid()) {
+                            videoId = m.captured(1);
+                            break;
+                        }
+                    }
+                }
                 // Only actual video tiles are rows (channels/playlists share the
                 // tile shape with different contentType). Empty ctype accepted
                 // defensively for older TV payloads observed without the field.
@@ -315,106 +335,29 @@ inline QJsonValue findWatchLaterCursor(const QJsonObject &root)
     return QJsonValue(); // null sentinel
 }
 
-// Playlists-tab cursor for the signed-in account home — same chip hunt as
-// watch-later but bound to the tab title "Playlists". TV keys the tab chip
-// beside content.tvSurfaceContentRenderer.continuation.reloadContinuationData
-// (raw continuation); desktop shapes carry a browseEndpoint browseId
-// (UC…, the channel's created-playlists tab; PU accepted for the private
-// variant). Anything else (a single named playlist chip) is NOT the tab and
-// must not match — the caller only wants the whole account playlists page.
-// Null when absent; the caller falls back to the file view.
-inline bool subtreeHasPlaylistsText(const QJsonValue &v)
-{
-    QQueue<QJsonValue> queue;
-    queue.enqueue(v);
-    while (!queue.isEmpty()) {
-        const QJsonValue cur = queue.dequeue();
-        if (cur.isString()) {
-            const QString s = cur.toString().toLower();
-            if (s == QStringLiteral("playlists")
-                || s == QStringLiteral("playlist"))
-                return true;
-        } else if (cur.isObject()) {
-            const QJsonObject o = cur.toObject();
-            const QList<QString> keys = o.keys();
-            for (const QString &k : keys)
-                queue.enqueue(o.value(k));
-        } else if (cur.isArray()) {
-            const QJsonArray arr = cur.toArray();
-            for (const QJsonValue &item : arr)
-                queue.enqueue(item);
-        }
-    }
-    return false;
-}
+// Account playlists, ground truth (Pi-verified 2026-11-03): the TV account
+// home "Playlists" tab chip is UNSELECTABLE and carries NO cursor at any
+// depth (chip-hunting on FEmy_youtube is a dead end — enumerating the home
+// continuation's p-params yields no playlists page either). The stable
+// account surface is the library: browseId "FElibrary" answers playlist
+// tiles (contentType TILE_CONTENT_TYPE_PLAYLIST; contentId PL…/LL/RD…) in
+// the account's own page order — YouTube's tab order, kept verbatim.
+// keepAccountPlaylists() then narrows the mixed library rows to the user's
+// real playlists (created PL… + Liked videos LL). The superseded cursor
+// hunt (subtreeHasPlaylistsText/findPlaylistsTabCursor) was deleted.
 
-inline QJsonValue findPlaylistsTabCursor(const QJsonObject &root)
+// Account playlist rows only: FElibrary mixes in auto-mixes (RD…), channel
+// and history chips; the user's playlists are PL… plus the LL pseudo-playlist.
+// Document order in, document order out — never re-sorted.
+inline QVariantList keepAccountPlaylists(const QVariantList &rows)
 {
-    auto isPlaylistsTitle = [](const QJsonValue &t) -> bool {
-        if (t.isString())
-            return t.toString().toLower() == QStringLiteral("playlists");
-        if (t.isObject())
-            return textOf(t).toLower() == QStringLiteral("playlists");
-        return false;
-    };
-    QQueue<QJsonValue> queue;
-    queue.enqueue(QJsonValue(root));
-    while (!queue.isEmpty()) {
-        const QJsonValue v = queue.dequeue();
-        if (v.isObject()) {
-            const QJsonObject o = v.toObject();
-            if (isPlaylistsTitle(o.value(QStringLiteral("title")))) {
-                // TV tab chip: raw continuation cursor under content.
-                const QJsonValue content = o.value(QStringLiteral("content"));
-                if (content.isObject()) {
-                    const QJsonValue tv = content.toObject().value(
-                            QStringLiteral("tvSurfaceContentRenderer"));
-                    if (tv.isObject()) {
-                        const QJsonValue cont = tv.toObject().value(
-                                QStringLiteral("continuation"));
-                        if (cont.isObject()) {
-                            const QJsonValue rcd = cont.toObject().value(
-                                    QStringLiteral("reloadContinuationData"));
-                            if (rcd.isObject()) {
-                                const QString tok = rcd.toObject().value(
-                                        QStringLiteral("continuation")).toString();
-                                if (!tok.isEmpty())
-                                    return QJsonValue(tok);
-                            }
-                        }
-                    }
-                }
-                // Desktop: the account's playlists-tab browseId on the chip.
-                const QJsonValue ep = o.value(QStringLiteral("endpoint"));
-                if (ep.isObject()) {
-                    const QJsonValue be = ep.toObject().value(
-                            QStringLiteral("browseEndpoint"));
-                    if (be.isObject()) {
-                        const QString bid = be.toObject().value(
-                                QStringLiteral("browseId")).toString();
-                        if (bid.startsWith(QStringLiteral("UC"))
-                            || bid.startsWith(QStringLiteral("PU")))
-                            return QJsonValue(bid);
-                    }
-                }
-            }
-            // Desktop shelf fallback: a browseEndpoint UC cursor whose
-            // subtree names the shelf "Playlists" (title-gate missed above).
-            const QString browseId = o.value(QStringLiteral("browseId")).toString();
-            if ((browseId.startsWith(QStringLiteral("UC"))
-                 || browseId.startsWith(QStringLiteral("PU")))
-                && subtreeHasPlaylistsText(v))
-                return QJsonValue(browseId);
-            const QList<QString> keys = o.keys();
-            for (const QString &k : keys)
-                queue.enqueue(o.value(k));
-        } else if (v.isArray()) {
-            const QJsonArray arr = v.toArray();
-            for (const QJsonValue &item : arr)
-                queue.enqueue(item);
-        }
+    QVariantList kept;
+    for (const QVariant &row : rows) {
+        const QString pid = row.toMap().value(QStringLiteral("playlistId")).toString();
+        if (pid.startsWith(QStringLiteral("PL")) || pid == QStringLiteral("LL"))
+            kept << row;
     }
-    return QJsonValue(); // null sentinel
+    return kept;
 }
 
 // Playlist rows for the account playlists tab, in document order — YouTube's
