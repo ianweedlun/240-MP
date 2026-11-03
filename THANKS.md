@@ -32,6 +32,9 @@ deserves recognition and thanks. This file is that home for it.
   this fork's entire base application: modules, app shell, and mpv wiring.
 - **mpv** (mpv.io) — the playback engine this frontend drives as a subprocess,
   including the IPC control channel, OSC scripting, and `--panscan` geometry.
+  The SponsorBlock integration speaks mpv's EDL virtual-timeline format
+  (mpv-player/mpv `DOCS/edl-mpv.rst`, GPL-3.0) — grammar followed, no code
+  copied; skip-by-omission and titled boundary cuts are its mechanisms.
 - **Qt 6 / Qt Quick (QML)** — the UI framework and scene graph everything here
   is composed with (including the screenshot pipeline).
 - **RetroArch source** ([libretro/RetroArch](https://github.com/libretro/RetroArch)) —
@@ -40,6 +43,16 @@ deserves recognition and thanks. This file is that home for it.
   LZO/RZI structure).
 - **Open-Meteo** (open-meteo.com) — the weather/air-quality APIs the Weather
   module forecasts from (data source; no code copied).
+- **red** ([keshavbhatt/red](https://github.com/keshavbhatt/red), GPL-3.0-or-later)
+  — its SponsorBlock client design (k-anonymous 4-hex SHA-256 prefix lookup,
+  exact-videoID collision filtering, per-category Off/Mark/Skip) is the basis
+  for our port-adjacent `src/util/YtSponsorEdl.h` + backend fetch layer:
+  semantics ported, code written fresh, names/namespaces ours.
+- **FreeTube** (FreeTubeApp/FreeTube) and **innertube** (tombulled/innertube)
+  — prior-art reference for InnerTube browse/FEchannels list shapes and
+  pagination (design consulted; no code copied).
+- **yt-dlp** (yt-dlp/yt-dlp, GPL-3.0) — consulted for extractor client/`player_skip`
+  knowledge; still invoked as our insurance for pathological streams only.
 
 ## Color palettes we borrowed (published data, human-designed)
 
