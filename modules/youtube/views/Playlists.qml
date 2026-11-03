@@ -37,6 +37,7 @@ FocusScope {
         function onAccountPlaylistsLoaded(playlists) {
             playlistsRoot.pendingAccountLoad = false
             playlistsRoot.isLoading = false
+            playlistsappCore.note_state("yt-rows", "view=playlists path=account rows=" + (playlists || []).length)
             playlistsRoot.items = playlists || []
             if (playlistsRoot.items.length > 0) {
                 var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
@@ -47,6 +48,8 @@ FocusScope {
 
         function onPlaylistsLoaded(playlists) {
             playlistsRoot.isLoading = false
+            playlistsappCore.note_state("yt-rows", "view=playlists path=" + (playlistsRoot.pendingAccountLoad ? "account" : "file")
+                                     + " rows=" + playlists.length)
             playlistsRoot.items = playlists
             if (playlists.length > 0) {
                 var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0

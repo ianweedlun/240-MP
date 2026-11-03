@@ -67,12 +67,14 @@ FocusScope {
             directPlayUrl = direct
             directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
+            appCore.note_state("yt-play", "vid=" + videoId + " path=warm res=" + resolution)
             youtubeBackend.resolvePlayback(videoId, resolution)
             return true
         }
         directPlayUrl = ""
         directAudioUrl = ""
         ytdlArgs = []
+        appCore.note_state("yt-play", "vid=" + videoId + " path=cold res=" + resolution)
         youtubeBackend.resolvePlayback(videoId, resolution)
         return false
     }
@@ -110,8 +112,8 @@ FocusScope {
             if (!playerRoot.waitingForResolve)
                 return
             playerRoot.waitingForResolve = false
-            // Resolve failed or timed out — fall back to ytdl_hook, which has
-            // its own error surfacing (PLAYBACK FAILED) if the video is bad.
+            resolveWaitTimer.stop()
+            appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=15s reason=timeout")
             var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
             playerRoot.play(playerRoot.pendingPlayStartMs)
@@ -131,6 +133,7 @@ FocusScope {
             const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
             const single = youtubeBackend.cachedPlaybackSingle(playerRoot.videoId, resolution)
             if (direct !== "" && (directAudio !== "" || single)) {
+                appCore.note_state("yt-resolve", "vid=" + playerRoot.videoId + " ok pair-ready")
                 playerRoot.directPlayUrl = direct
                 playerRoot.directAudioUrl = directAudio
                 playerRoot.ytdlArgs = ["--ytdl=no"]

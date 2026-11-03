@@ -254,6 +254,7 @@ private:
     QStringList         m_warmQueue;    // "videoId<US>resolution" tokens
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
+    QHash<QString, qint64> m_resolveStartMs; // key -> launch ms, for the journal elapsed figure
     QString              m_pendingListKind; // account list re-entered after a refresh swap
     QString       m_pendingPlaylistVideos;  // playlist-videos id re-entered after refresh
     QString       m_accountVideosEmitId;    // id echoed back in playlistVideosLoaded

@@ -88,6 +88,16 @@ FocusScope {
     // picking a row plays via the direct-URL path at the mpv-init floor
     // instead of paying a cold resolve. Already fresh/in-flight rows are skipped
     // backend-side; calling here is cheap and idempotent.
+    // Journal gate for list surfaces (issue #28): every rendered list states its
+    // source path + row count in /tmp/240mp_state.log so a remote run proves
+    // account-vs-file paths without screenshots.
+    function noteRows(path, count) {
+        if (!appCore.telemetryEnabled())
+            return
+        appCore.note_state("yt-rows", "view=" + mode + " path=" + path + " rows=" + count
+            + " shorts=" + (appCore.get_setting(moduleRoot.moduleId, "display_shorts") === false ? "off" : "on"))
+    }
+
     function warmUpItems() {
         var ids = []
         for (var i = 0; i < items.length && ids.length < 12; ++i) {
@@ -153,6 +163,7 @@ FocusScope {
             if (itemsRoot.mode !== "feed")
                 return
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("file", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -162,6 +173,7 @@ FocusScope {
             if (itemsRoot.mode !== "channel" || loadedChannelId !== itemsRoot.channelId)
                 return
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("file", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -170,6 +182,7 @@ FocusScope {
         function onPlaylistVideosLoaded(loadedPlaylistId, videos) {
             if (itemsRoot.mode !== "playlist" || loadedPlaylistId !== itemsRoot.playlistId)
                 return
+            itemsRoot.noteRows(itemsRoot.pendingAccountLoad ? "account" : "file", videos.length)
             itemsRoot.pendingAccountLoad = false // shared signal: account path or file path
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
@@ -182,6 +195,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -192,6 +206,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", (videos || []).length)
             itemsRoot.items = videos || []
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -202,6 +217,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", (videos || []).length)
             itemsRoot.items = videos || []
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -215,6 +231,7 @@ FocusScope {
                 if (itemsRoot.mode === "history") {
                     itemsRoot.isLoading = false
                     itemsRoot.items = youtubeBackend.getHistory()
+                    itemsRoot.noteRows("file-authfallback", itemsRoot.items.length)
                 } else if (itemsRoot.mode === "watchlater") {
                     itemsRoot.isLoading = false
                     itemsRoot.items = youtubeBackend.getWatchLater()

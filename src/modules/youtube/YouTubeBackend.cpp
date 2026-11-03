@@ -857,6 +857,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 {
     const QString bin = ytdlp::locate(m_dataRoot);
     if (bin.isEmpty()) {
+        qWarning("[Youtube] resolve fail vid=%s err=no-ytdlp", qPrintable(videoId));
         m_resolveKeys.remove(key);
         if (m_warmChainKey == key) {
             m_warmChainKey.clear();
@@ -866,6 +867,8 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
     }
 
     auto *proc = new QProcess(this);
+    m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
+    qDebug("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
     const QStringList args{
         QStringLiteral("-g"),
         QStringLiteral("--no-playlist"),
@@ -887,6 +890,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             if (!u.isEmpty())
                 urls << u;
         }
+        bool stored = false;
         if (!urls.isEmpty()) {
             const QString videoUrl = urls.value(0);
             const QString audioUrl = urls.value(1); // empty for combined formats
@@ -899,8 +903,14 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             if (expire > QDateTime::currentMSecsSinceEpoch() / 1000) {
                 storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
                 emit playbackUrlReady(videoId);
+                stored = true;
             }
         }
+        const qint64 startedMs = m_resolveStartMs.take(key);
+        qDebug("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
+               qPrintable(videoId),
+               static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - startedMs),
+               urls.size(), stored ? 1 : 0);
         finishUrlResolve(key);
         proc->deleteLater();
     });
@@ -908,6 +918,8 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             [this, proc, key](QProcess::ProcessError processError) {
                 if (processError == QProcess::FailedToStart) {
                     // launch failure: no finished signal, so unwind bookkeeping here
+                    qWarning("[Youtube] resolve fail err=failed-to-start");
+                    m_resolveStartMs.remove(key);
                     finishUrlResolve(key);
                     proc->deleteLater();
                 }
@@ -938,6 +950,7 @@ void YouTubeBackend::pumpWarmQueue()
             continue; // someone else warmed it meanwhile — next entry
         m_warmChainKey = key;
         m_resolveKeys.insert(key);
+        qDebug("[Youtube] warm take vid=%s", qPrintable(videoId));
         launchUrlResolve(videoId, resolution, fmt, key);
         return;
     }
@@ -965,6 +978,8 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
         m_warmQueue << token;
         ++queued;
     }
+    if (queued > 0)
+        qDebug("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
     if (m_warmChainKey.isEmpty())
         pumpWarmQueue();
 }
