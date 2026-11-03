@@ -1181,7 +1181,7 @@ void YouTubeBackend::requestDeviceCode()
     QNetworkReply *reply = m_nam.post(req, deviceQuery.toString().toUtf8());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() != QNetworkReply::NoError)
-            qWarning("[Youtube] device-code request failed: %s", qPrintable(reply->errorText()));
+            qWarning("[Youtube] device-code request failed: %s", qPrintable(reply->errorString()));
         const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
         reply->deleteLater();
         const QString userCode     = doc.value(QStringLiteral("user_code")).toString();
