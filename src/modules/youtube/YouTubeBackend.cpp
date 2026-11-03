@@ -1116,6 +1116,24 @@ void YouTubeBackend::saveAuthFile()
     QFile::rename(tmp, path); // atomic swap: readers never see half a doc
 }
 
+// Pair-state accessors so a freshly-opened view can re-read a pending
+// device flow without restarting it (the card must show the code that's already
+// polling, not ask the user to redo a flow that is running).
+bool YouTubeBackend::pairActive() const
+{
+    return m_pairActive;
+}
+
+QString YouTubeBackend::pairUserCode() const
+{
+    return m_userCode;
+}
+
+QString YouTubeBackend::pairVerificationUrl() const
+{
+    return m_verifyUrl;
+}
+
 bool YouTubeBackend::signedIn()
 {
     ensureAuthLoaded();

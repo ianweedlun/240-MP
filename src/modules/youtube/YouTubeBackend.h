@@ -103,6 +103,11 @@ public:
     // module falls back to the upstream files (subscriptions.txt / history /
     // watch-later) — behavior-preserving for users who never sign in.
     Q_INVOKABLE bool signedIn();                // usable access token present
+    // Pair-state accessors so a freshly-opened view can re-read a pending
+    // device flow without restarting it.
+    Q_INVOKABLE bool pairActive();
+    Q_INVOKABLE QString pairUserCode();
+    Q_INVOKABLE QString pairVerificationUrl();
     Q_INVOKABLE QVariantMap check_signin();     // { signedIn, hasRefresh } for views
     Q_INVOKABLE void startDeviceSignIn();       // fires devicePairRequested(userCode,url)
     Q_INVOKABLE void cancelDeviceSignIn();      // stop a pending poll loop

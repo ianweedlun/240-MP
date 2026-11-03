@@ -127,6 +127,16 @@ FocusScope {
         // ytdl_hook's multi-second re-resolve at play time.
         var resolution = appCore.get_setting(moduleId, "playback_resolution") || "480p"
         youtubeBackend.warmResumePlayback(resolution)
+        // Plan D: opening the module is the pair entry point (TV-app convention).
+        // A flow still running from an earlier open is re-read, not restarted;
+        // the Connections block above fills the card when the code lands.
+        if (youtubeBackend.pairActive() === true) {
+            moduleRoot.pairCode = youtubeBackend.pairUserCode()
+            moduleRoot.pairUrl = youtubeBackend.pairVerificationUrl()
+            moduleRoot.pairActive = true
+        } else if (youtubeBackend.signedIn() !== true) {
+            youtubeBackend.startDeviceSignIn()
+        }
         navigateTo("Items.qml", {})
     }
 }
