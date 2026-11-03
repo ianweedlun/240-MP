@@ -1161,9 +1161,12 @@ void YouTubeBackend::deviceSignOut()
 
 void YouTubeBackend::startDeviceSignIn()
 {
-    if (m_pairActive || signedIn())
+    if (m_pairActive || signedIn()) {
+        qWarning("[Youtube] start ignored — pairing already active or signed in");
         return; // one flow at a time; already signed in does nothing
+    }
     m_pairActive = true;
+    qWarning("[Youtube] device pair requested");
     requestDeviceCode();
 }
 
@@ -1177,6 +1180,8 @@ void YouTubeBackend::requestDeviceCode()
         {QStringLiteral("scope"), QStringLiteral("https://www.googleapis.com/auth/youtube")}};
     QNetworkReply *reply = m_nam.post(req, deviceQuery.toString().toUtf8());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError)
+            qWarning("[Youtube] device-code request failed: %s", qPrintable(reply->errorText()));
         const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
         reply->deleteLater();
         const QString userCode     = doc.value(QStringLiteral("user_code")).toString();
@@ -1186,9 +1191,12 @@ void YouTubeBackend::requestDeviceCode()
         const int expiresIn        = doc.value(QStringLiteral("expires_in")).toInt();
         if (userCode.isEmpty() || m_pairDeviceCode.isEmpty()) {
             m_pairActive = false;
+            qWarning("[Youtube] device-code response had no codes — endpoint rejected request");
             emit deviceSignInFinished(false, QStringLiteral("PAIRING-REQUEST-FAILED"));
             return;
         }
+        qWarning("[Youtube] pair card issued: open %s and type the code",
+                 qPrintable(url.isEmpty() ? QStringLiteral("https://www.google.com/device") : url));
         m_pollIntervalS = interval > 0 ? interval : 5;
         m_pollsLeft     = qMin(kPairPollMax, expiresIn > 0 ? expiresIn / m_pollIntervalS : kPairPollMax);
         emit devicePairRequested(userCode, url.isEmpty()
@@ -1232,6 +1240,7 @@ void YouTubeBackend::finishPairResponse(const QJsonObject &doc)
                 ? QDateTime::currentMSecsSinceEpoch() / 1000 + expiresIn : 0;
         m_pairActive = false;
         saveAuthFile();
+        qWarning("[Youtube] device flow paired — account lists now available");
         emit deviceSignInFinished(true, QString());
         return;
     }
@@ -1245,6 +1254,8 @@ void YouTubeBackend::finishPairResponse(const QJsonObject &doc)
         return;
     }
     m_pairActive = false;
+    qWarning("[Youtube] device flow declined: %s",
+             qPrintable(err.isEmpty() ? QStringLiteral("PAIRING-FAILED") : err));
     emit deviceSignInFinished(false, err.isEmpty() ? QStringLiteral("PAIRING-FAILED")
                                                   : err.toUpper().replace(QLatin1Char(' '), QLatin1Char('-')));
 }
