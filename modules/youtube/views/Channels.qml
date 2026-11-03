@@ -58,7 +58,7 @@ FocusScope {
 
         function onChannelsLoaded(channels) {
             channelsRoot.isLoading = false
-            channelsappCore.note_state("yt-rows", "view=channels path=file rows=" + channels.length)
+            appCore.note_state("yt-rows", "view=channels path=file rows=" + channels.length)
             channelsRoot.items = channels
             channelsRoot.letterIndex = channelsRoot.buildLetterIndex(channels)
             if (channels.length > 0) {
