@@ -113,7 +113,14 @@ public:
     Q_INVOKABLE void cancelDeviceSignIn();      // stop a pending poll loop
     Q_INVOKABLE void deviceSignOut();           // drop auth; file fallbacks resume
     // kind: "feed" (FEsubscriptions) | "history" (FEhistory) | "watchlater"
+    // (discovered VL cursor) | "playlists" (discovered tab cursor: raw
+    // continuation or UC/PU browseId on the account home)
     Q_INVOKABLE void loadAccountList(const QString &kind);
+    // Videos of a signed-in account playlist via the account browse — the
+    // signed twin of load_playlist_videos (yt-dlp). Emits the same
+    // playlistVideosLoaded(playlistId, videos) contract with the SAME id the
+    // caller passed, so views reuse one handler for both paths.
+    Q_INVOKABLE void loadAccountPlaylistVideos(const QString &playlistId);
 
     // Watch history (youtube_history.json). A finished video stays in history
     // with pos 0 (so it lists under History but never prompts to resume);
@@ -151,6 +158,9 @@ signals:
     void accountFeedLoaded(const QVariant &videos);
     void accountHistoryLoaded(const QVariant &videos);
     void accountWatchLaterLoaded(const QVariant &videos);
+    // Signed-in account playlists tab: rows = {playlistId, title, videoCountText}
+    // in YouTube tab order (recent activity first, never re-sorted).
+    void accountPlaylistsLoaded(const QVariant &playlists);
 
 private:
     struct ChannelEntry {
@@ -245,6 +255,8 @@ private:
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
     QString              m_pendingListKind; // account list re-entered after a refresh swap
+    QString       m_pendingPlaylistVideos;  // playlist-videos id re-entered after refresh
+    QString       m_accountVideosEmitId;    // id echoed back in playlistVideosLoaded
     bool                hasFreshUrlPair(const QString &key) const;
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form

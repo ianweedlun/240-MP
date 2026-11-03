@@ -1273,6 +1273,10 @@ void YouTubeBackend::requestRefresh()
                 const QString kind = m_pendingListKind;
                 m_pendingListKind.clear();
                 loadAccountList(kind); // retry now that the token is live
+            } else if (!m_pendingPlaylistVideos.isEmpty()) {
+                const QString id = m_pendingPlaylistVideos;
+                m_pendingPlaylistVideos.clear();
+                loadAccountPlaylistVideos(id); // same re-entry, videos path
             }
         } else {
             m_accessToken = QString(); // dead auth — views fall back to files
@@ -1318,7 +1322,9 @@ void YouTubeBackend::browsePage(const QString &browseKind, const QString &cursor
         {QStringLiteral("clientVersion"), QStringLiteral("7.20210818.00.00-ks")},
         {QStringLiteral("hl"), QStringLiteral("en")},
         {QStringLiteral("gl"), QStringLiteral("US")}}}});
-    if (cursor.startsWith(QStringLiteral("VL")) || cursor.startsWith(QStringLiteral("FE")))
+    if (cursor.startsWith(QStringLiteral("VL")) || cursor.startsWith(QStringLiteral("FE"))
+        || cursor.startsWith(QStringLiteral("UC")) || cursor.startsWith(QStringLiteral("PU"))
+        || cursor.startsWith(QStringLiteral("RD")))
         body.insert(QStringLiteral("browseId"), cursor);
     else
         body.insert(QStringLiteral("continuation"), cursor);
@@ -1357,7 +1363,28 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         browsePage(kind, wlId.toString(), 2, acc);
         return;
     }
-    acc += ytui::extractBrowseRows(root, kBrowseMaxRows - acc.size());
+    if (kind == QStringLiteral("playlists") && acc.isEmpty() && page == 1) {
+        // Same discovery hop as watch-later: the Playlists tab cursor on the
+        // signed-in account home (raw continuation on TV chips; UC/PU browseId
+        // on desktop shapes). No stable top-level browseId exists for a user's
+        // tab — discovering it makes the list account-truth.
+        const QJsonValue tab = ytui::findPlaylistsTabCursor(root);
+        if (tab.isNull()) {
+            qWarning("[Youtube] playlists-tab discovery miss on the account home (http %d) — falling back",
+                     netError ? int(reply->error()) : 0);
+            emit errorOccurred(QStringLiteral("PLAYLISTS-TAB-NOT-FOUND"));
+            return; // the QML view keeps the upstream file display
+        }
+        browsePage(kind, tab.toString(), 2, acc);
+        return;
+    }
+    if (kind == QStringLiteral("playlists")) {
+        // The tab lists PLAYLISTS, not videos — different extractor, and the
+        // video-row walker must not run here (its tiles are playlist tiles).
+        acc += ytui::extractPlaylistRows(root, kBrowseMaxRows - acc.size());
+    } else {
+        acc += ytui::extractBrowseRows(root, kBrowseMaxRows - acc.size());
+    }
     const QString next = ytui::continuationToken(root);
     // One line per page, always: the account lists were observed empty on the
     // Pi after pairing, and the ONLY unproven link was the response shape
@@ -1382,8 +1409,40 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         emit accountFeedLoaded(acc);
     } else if (kind == QStringLiteral("history")) {
         emit accountHistoryLoaded(acc);
+    } else if (kind == QStringLiteral("playlists")) {
+        emit accountPlaylistsLoaded(acc);
+    } else if (kind == QStringLiteral("playlistvideos")) {
+        // Account playlist contents reuse the file path's signal so the
+        // module views keep ONE handler for both sources; the id echoed
+        // back is exactly what loadAccountPlaylistVideos() was handed.
+        emit playlistVideosLoaded(m_accountVideosEmitId, acc);
     } else {
         emit accountWatchLaterLoaded(acc);
     }
+}
+
+void YouTubeBackend::loadAccountPlaylistVideos(const QString &playlistId)
+{
+    ensureAuthLoaded();
+    if (m_accessToken.isEmpty()) {
+        emit errorOccurred(QStringLiteral("NOT SIGNED IN"));
+        return;
+    }
+    if (playlistId.isEmpty())
+        return;
+    if (m_accessExpiresEpoch > 0
+        && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch) {
+        m_pendingPlaylistVideos = playlistId; // re-enters from requestRefresh's success leg
+        requestRefresh();
+        return;
+    }
+    // Account playlist ids come as PL…/UU…/RD…; contents are browsed with the
+    // VL-prefixed cursor for PL/UU (RD mixes browse directly). The emit echoes
+    // the CALLER's id so view-side id matching works either way.
+    m_accountVideosEmitId = playlistId;
+    QString cursor = playlistId;
+    if (cursor.startsWith(QStringLiteral("PL")) || cursor.startsWith(QStringLiteral("UU")))
+        cursor = QStringLiteral("VL") + cursor;
+    browsePage(QStringLiteral("playlistvideos"), cursor, 1, QVariantList());
 }
 

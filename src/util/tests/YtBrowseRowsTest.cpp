@@ -147,6 +147,11 @@ private slots:
     void watchLaterCursorTvChip();
     void watchLaterCursorDesktopPlaylist();
     void watchLaterCursorMiss();
+    void playlistRowsDesktopShelf();
+    void playlistRowsTvTiles();
+    void playlistsTabCursorTvChip();
+    void playlistsTabCursorDesktopUc();
+    void playlistsTabCursorMiss();
 };
 
 void YtBrowseRowsTest::extractRowsInDocumentOrder()
@@ -391,6 +396,179 @@ void YtBrowseRowsTest::watchLaterCursorMiss()
     QJsonObject root = sectionOf(items);
 
     const QJsonValue cur = ytui::findWatchLaterCursor(root);
+    QVERIFY(cur.isNull());
+}
+
+void YtBrowseRowsTest::playlistRowsDesktopShelf()
+{
+    // playlistRenderer rows: id + title + videoCountText, kept in document
+    // order (YouTube's tab order — never re-sorted).
+    QJsonArray items;
+    QJsonObject p1;
+    p1.insert(QStringLiteral("playlistId"), QStringLiteral("PLalpha000001"));
+    p1.insert(QStringLiteral("title"), runsText(QStringLiteral("Alpha Mix")));
+    p1.insert(QStringLiteral("videoCountText"), simpleText(QStringLiteral("12 videos")));
+    QJsonObject w1;
+    w1.insert(QStringLiteral("playlistRenderer"), p1);
+    items.append(w1);
+    QJsonObject p2;
+    p2.insert(QStringLiteral("playlistId"), QStringLiteral("PLbeta0000002"));
+    p2.insert(QStringLiteral("title"), runsText(QStringLiteral("Beta List")));
+    QJsonObject w2;
+    w2.insert(QStringLiteral("playlistRenderer"), p2);
+    items.append(w2);
+    // No id -> not a row.
+    QJsonObject p3;
+    p3.insert(QStringLiteral("title"), runsText(QStringLiteral("Idless")));
+    QJsonObject w3;
+    w3.insert(QStringLiteral("playlistRenderer"), p3);
+    items.append(w3);
+
+    QJsonObject section;
+    section.insert(QStringLiteral("contents"), items);
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("sectionListRenderer"), section);
+    QJsonArray outer;
+    outer.append(wrapper);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), outer);
+
+    const QVariantList rows = ytui::extractPlaylistRows(root, -1);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("playlistId")),
+             QStringLiteral("PLalpha000001"));
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("title")),
+             QStringLiteral("Alpha Mix"));
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("videoCountText")),
+             QStringLiteral("12 videos"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("title")),
+             QStringLiteral("Beta List"));
+}
+
+void YtBrowseRowsTest::playlistRowsTvTiles()
+{
+    // TV playlists tab: playlist tiles share the tile shape with video
+    // tiles but carry TILE_CONTENT_TYPE_PLAYLIST; channel tiles must not
+    // sneak in. Empty-ctype tiles fall back to the PL/RD/UU/VL id prefix.
+    QJsonArray items;
+    QJsonObject t1;
+    t1.insert(QStringLiteral("contentId"), QStringLiteral("PLtvlist00001"));
+    t1.insert(QStringLiteral("contentType"), QStringLiteral("TILE_CONTENT_TYPE_PLAYLIST"));
+    QJsonObject title;
+    title.insert(QStringLiteral("simpleText"), QStringLiteral("TV Watchlist"));
+    QJsonObject meta;
+    meta.insert(QStringLiteral("title"), title);
+    QJsonObject tileMeta;
+    tileMeta.insert(QStringLiteral("tileMetadataRenderer"), meta);
+    t1.insert(QStringLiteral("metadata"), tileMeta);
+    QJsonObject w1;
+    w1.insert(QStringLiteral("tileRenderer"), t1);
+    items.append(w1);
+
+    QJsonObject t2;
+    t2.insert(QStringLiteral("contentId"), QStringLiteral("CHANnnnnnnnn"));
+    t2.insert(QStringLiteral("contentType"), QStringLiteral("TILE_CONTENT_TYPE_CHANNEL"));
+    QJsonObject w2;
+    w2.insert(QStringLiteral("tileRenderer"), t2);
+    items.append(w2);
+
+    QJsonObject t3;
+    t3.insert(QStringLiteral("contentId"), QStringLiteral("RDmix0000001")); // empty-ctype
+    QJsonObject title3;
+    title3.insert(QStringLiteral("simpleText"), QStringLiteral("Mixtape"));
+    QJsonObject meta3;
+    meta3.insert(QStringLiteral("title"), title3);
+    QJsonObject tileMeta3;
+    tileMeta3.insert(QStringLiteral("tileMetadataRenderer"), meta3);
+    t3.insert(QStringLiteral("metadata"), tileMeta3);
+    QJsonObject w3;
+    w3.insert(QStringLiteral("tileRenderer"), t3);
+    items.append(w3);
+
+    QJsonObject section;
+    section.insert(QStringLiteral("contents"), items);
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("sectionListRenderer"), section);
+    QJsonArray outer;
+    outer.append(wrapper);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), outer);
+
+    const QVariantList rows = ytui::extractPlaylistRows(root, 0);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("playlistId")),
+             QStringLiteral("PLtvlist00001"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("playlistId")),
+             QStringLiteral("RDmix0000001"));
+}
+
+void YtBrowseRowsTest::playlistsTabCursorTvChip()
+{
+    // Account home TV chip: raw reloadContinuationData cursor keyed beside a
+    // "Playlists" title — same chip shape as the watch-later cursor hunt.
+    QJsonObject rcd;
+    rcd.insert(QStringLiteral("continuation"), QStringLiteral("4qmFsgPLAYLISTTOKEN"));
+    QJsonObject cont;
+    cont.insert(QStringLiteral("reloadContinuationData"), rcd);
+    QJsonObject tv;
+    tv.insert(QStringLiteral("continuation"), cont);
+    QJsonObject content;
+    content.insert(QStringLiteral("tvSurfaceContentRenderer"), tv);
+    QJsonObject chip;
+    chip.insert(QStringLiteral("title"), QStringLiteral("Playlists"));
+    chip.insert(QStringLiteral("content"), content);
+    QJsonObject tabWrap;
+    tabWrap.insert(QStringLiteral("tabRenderer"), chip);
+    QJsonArray contents;
+    contents.append(tabWrap);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), contents);
+
+    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
+    QVERIFY(!cur.isNull());
+    QCOMPARE(cur.toString(), QStringLiteral("4qmFsgPLAYLISTTOKEN"));
+}
+
+void YtBrowseRowsTest::playlistsTabCursorDesktopUc()
+{
+    // Desktop tab chip: browseEndpoint browseId UC<channelId>. A bare
+    // playlistId chip (named playlist, not the tab) must not match.
+    QJsonObject be;
+    be.insert(QStringLiteral("browseId"), QStringLiteral("UCUCchannelid1"));
+    QJsonObject ep;
+    ep.insert(QStringLiteral("browseEndpoint"), be);
+    QJsonObject chip;
+    chip.insert(QStringLiteral("title"), runsText(QStringLiteral("Playlists")));
+    chip.insert(QStringLiteral("endpoint"), ep);
+    QJsonArray contents;
+    QJsonObject decoy;
+    QJsonObject playlistInner;
+    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLnope0000001"));
+    playlistInner.insert(QStringLiteral("title"), runsText(QStringLiteral("Watch later")));
+    decoy.insert(QStringLiteral("playlistRenderer"), playlistInner);
+    contents.append(decoy);
+    contents.append(chip);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), contents);
+
+    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
+    QVERIFY(!cur.isNull());
+    QCOMPARE(cur.toString(), QStringLiteral("UCUCchannelid1"));
+}
+
+void YtBrowseRowsTest::playlistsTabCursorMiss()
+{
+    // Decoys only: watch-later chips and video rows, no tab cursor anywhere.
+    QJsonArray items;
+    QJsonObject playlistInner;
+    playlistInner.insert(QStringLiteral("playlistId"), QStringLiteral("PLwatchlaterstuff"));
+    playlistInner.insert(QStringLiteral("title"), runsText(QStringLiteral("Watch later")));
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("playlistRenderer"), playlistInner);
+    items.append(wrapper);
+    QJsonObject root = sectionOf(items);
+
+    const QJsonValue cur = ytui::findPlaylistsTabCursor(root);
     QVERIFY(cur.isNull());
 }
 

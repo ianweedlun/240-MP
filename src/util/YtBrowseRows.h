@@ -315,4 +315,173 @@ inline QJsonValue findWatchLaterCursor(const QJsonObject &root)
     return QJsonValue(); // null sentinel
 }
 
+// Playlists-tab cursor for the signed-in account home — same chip hunt as
+// watch-later but bound to the tab title "Playlists". TV keys the tab chip
+// beside content.tvSurfaceContentRenderer.continuation.reloadContinuationData
+// (raw continuation); desktop shapes carry a browseEndpoint browseId
+// (UC…, the channel's created-playlists tab; PU accepted for the private
+// variant). Anything else (a single named playlist chip) is NOT the tab and
+// must not match — the caller only wants the whole account playlists page.
+// Null when absent; the caller falls back to the file view.
+inline bool subtreeHasPlaylistsText(const QJsonValue &v)
+{
+    QQueue<QJsonValue> queue;
+    queue.enqueue(v);
+    while (!queue.isEmpty()) {
+        const QJsonValue cur = queue.dequeue();
+        if (cur.isString()) {
+            const QString s = cur.toString().toLower();
+            if (s == QStringLiteral("playlists")
+                || s == QStringLiteral("playlist"))
+                return true;
+        } else if (cur.isObject()) {
+            const QJsonObject o = cur.toObject();
+            const QList<QString> keys = o.keys();
+            for (const QString &k : keys)
+                queue.enqueue(o.value(k));
+        } else if (cur.isArray()) {
+            const QJsonArray arr = cur.toArray();
+            for (const QJsonValue &item : arr)
+                queue.enqueue(item);
+        }
+    }
+    return false;
+}
+
+inline QJsonValue findPlaylistsTabCursor(const QJsonObject &root)
+{
+    auto isPlaylistsTitle = [](const QJsonValue &t) -> bool {
+        if (t.isString())
+            return t.toString().toLower() == QStringLiteral("playlists");
+        if (t.isObject())
+            return textOf(t).toLower() == QStringLiteral("playlists");
+        return false;
+    };
+    QQueue<QJsonValue> queue;
+    queue.enqueue(QJsonValue(root));
+    while (!queue.isEmpty()) {
+        const QJsonValue v = queue.dequeue();
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            if (isPlaylistsTitle(o.value(QStringLiteral("title")))) {
+                // TV tab chip: raw continuation cursor under content.
+                const QJsonValue content = o.value(QStringLiteral("content"));
+                if (content.isObject()) {
+                    const QJsonValue tv = content.toObject().value(
+                            QStringLiteral("tvSurfaceContentRenderer"));
+                    if (tv.isObject()) {
+                        const QJsonValue cont = tv.toObject().value(
+                                QStringLiteral("continuation"));
+                        if (cont.isObject()) {
+                            const QJsonValue rcd = cont.toObject().value(
+                                    QStringLiteral("reloadContinuationData"));
+                            if (rcd.isObject()) {
+                                const QString tok = rcd.toObject().value(
+                                        QStringLiteral("continuation")).toString();
+                                if (!tok.isEmpty())
+                                    return QJsonValue(tok);
+                            }
+                        }
+                    }
+                }
+                // Desktop: the account's playlists-tab browseId on the chip.
+                const QJsonValue ep = o.value(QStringLiteral("endpoint"));
+                if (ep.isObject()) {
+                    const QJsonValue be = ep.toObject().value(
+                            QStringLiteral("browseEndpoint"));
+                    if (be.isObject()) {
+                        const QString bid = be.toObject().value(
+                                QStringLiteral("browseId")).toString();
+                        if (bid.startsWith(QStringLiteral("UC"))
+                            || bid.startsWith(QStringLiteral("PU")))
+                            return QJsonValue(bid);
+                    }
+                }
+            }
+            // Desktop shelf fallback: a browseEndpoint UC cursor whose
+            // subtree names the shelf "Playlists" (title-gate missed above).
+            const QString browseId = o.value(QStringLiteral("browseId")).toString();
+            if ((browseId.startsWith(QStringLiteral("UC"))
+                 || browseId.startsWith(QStringLiteral("PU")))
+                && subtreeHasPlaylistsText(v))
+                return QJsonValue(browseId);
+            const QList<QString> keys = o.keys();
+            for (const QString &k : keys)
+                queue.enqueue(o.value(k));
+        } else if (v.isArray()) {
+            const QJsonArray arr = v.toArray();
+            for (const QJsonValue &item : arr)
+                queue.enqueue(item);
+        }
+    }
+    return QJsonValue(); // null sentinel
+}
+
+// Playlist rows for the account playlists tab, in document order — YouTube's
+// tab order (recent activity first) is kept verbatim; never re-sorted. Two
+// client shapes: desktop playlistRenderer (playlistId + title + videoCountText)
+// and TV tileRenderer with contentType TILE_CONTENT_TYPE_PLAYLIST (contentId
+// is the playlist, title under metadata.tileRendererMetadata title). A row
+// without an id is not a row. Row model matches the module's file-playlist
+// rows: {playlistId (PL…/RD… as found — browsing prepends VL caller-side),
+// title, videoCountText}.
+inline QVariantList extractPlaylistRows(const QJsonObject &root, int maxRows)
+{
+    QVariantList rows;
+    QQueue<QJsonValue> queue;
+    queue.enqueue(QJsonValue(root));
+    while (!queue.isEmpty()) {
+        const QJsonValue v = queue.dequeue();
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            if (o.contains(QStringLiteral("playlistRenderer"))) {
+                const QJsonObject r = o.value(QStringLiteral("playlistRenderer")).toObject();
+                const QString pid = r.value(QStringLiteral("playlistId")).toString();
+                if (!pid.isEmpty()) {
+                    QVariantMap row;
+                    row[QStringLiteral("playlistId")]    = pid;
+                    row[QStringLiteral("title")]         = textOf(r.value(QStringLiteral("title")));
+                    row[QStringLiteral("videoCountText")] = textOf(r.value(QStringLiteral("videoCountText")));
+                    rows << row;
+                    if (maxRows > 0 && rows.size() >= maxRows)
+                        return rows;
+                }
+            }
+            if (o.contains(QStringLiteral("tileRenderer"))) {
+                const QJsonObject t = o.value(QStringLiteral("tileRenderer")).toObject();
+                const QString pid   = t.value(QStringLiteral("contentId")).toString();
+                const QString ctype = t.value(QStringLiteral("contentType")).toString();
+                const bool ctypeIsPlaylist = (ctype == QStringLiteral("TILE_CONTENT_TYPE_PLAYLIST"));
+                // Empty-ctype TV payloads predate the enum: fall back to the
+                // playlist-id prefix so channel/other tiles never sneak in.
+                if (!pid.isEmpty()
+                    && (ctypeIsPlaylist
+                        || (ctype.isEmpty()
+                            && (pid.startsWith(QStringLiteral("PL"))
+                                || pid.startsWith(QStringLiteral("RD"))
+                                || pid.startsWith(QStringLiteral("UU"))
+                                || pid.startsWith(QStringLiteral("VL")))))) {
+                    QVariantMap row;
+                    row[QStringLiteral("playlistId")]     = pid;
+                    const QJsonObject meta = t.value(QStringLiteral("metadata")).toObject()
+                                                 .value(QStringLiteral("tileMetadataRenderer")).toObject();
+                    row[QStringLiteral("title")]          = textOf(meta.value(QStringLiteral("title")));
+                    row[QStringLiteral("videoCountText")] = textOf(meta.value(QStringLiteral("videoCountSpanRenderer")));
+                    rows << row;
+                    if (maxRows > 0 && rows.size() >= maxRows)
+                        return rows;
+                }
+            }
+            const QList<QString> keys = o.keys();
+            for (const QString &key : keys)
+                queue.enqueue(o.value(key));
+        } else if (v.isArray()) {
+            const QJsonArray arr = v.toArray();
+            for (const QJsonValue &item : arr)
+                queue.enqueue(item);
+        }
+    }
+    return rows;
+}
+
 } // namespace ytui
