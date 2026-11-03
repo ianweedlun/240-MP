@@ -63,9 +63,16 @@ public:
     // URLs (video line 1, audio line 2). Playing only line 1 hands mpv a silent
     // video-only stream; the pair must be cached and passed together
     // (url + --audio-file=<audio>). cachedPlaybackAudioUrl mirrors the video lookup.
+    // A ONE-line output (live broadcasts, combined best[] formats) is a fully
+    // muxed single stream: cached with a single=1 marker and played without
+    // --audio-file (cachedPlaybackSingle exposes the marker). Entries missing
+    // BOTH the audio half and the marker predate the pairing and stay misses.
     Q_INVOKABLE void resolvePlayback(const QString &videoId, const QString &resolution);
     Q_INVOKABLE QString cachedPlaybackUrl(const QString &videoId, const QString &resolution);
     Q_INVOKABLE QString cachedPlaybackAudioUrl(const QString &videoId, const QString &resolution);
+
+    Q_INVOKABLE bool cachedPlaybackSingle(const QString &videoId,
+                                          const QString &resolution);
 
     // Plan A warm-up: one pass over watch history finds the newest video with
     // an unfinished resume position and fires its background resolve, so the
@@ -149,7 +156,8 @@ private:
     QString      cachedUrlField(const QString &videoId, const QString &resolution,
                                 const QString &field);
     void         storeUrlCacheEntry(const QString &key, const QString &url,
-                                    const QString &audioUrl, qint64 expireEpoch); // prune + persist
+                                    const QString &audioUrl, bool single,
+                                    qint64 expireEpoch); // prune + persist
 
     QStringList  readSubscriptionIds(QString *error = nullptr) const;
     void         ensureFresh(bool forceRefresh);

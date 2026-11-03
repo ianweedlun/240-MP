@@ -60,7 +60,10 @@ FocusScope {
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
         const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
         const directAudio = youtubeBackend.cachedPlaybackAudioUrl(videoId, resolution)
-        if (direct !== "" && directAudio !== "") {
+        // single-stream cache entries (live broadcasts, combined formats) are
+        // fully muxed: no audio half exists and none is needed.
+        const single = youtubeBackend.cachedPlaybackSingle(videoId, resolution)
+        if (direct !== "" && (directAudio !== "" || single)) {
             directPlayUrl = direct
             directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
@@ -126,7 +129,8 @@ FocusScope {
             var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             const direct = youtubeBackend.cachedPlaybackUrl(playerRoot.videoId, resolution)
             const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
-            if (direct !== "" && directAudio !== "") {
+            const single = youtubeBackend.cachedPlaybackSingle(playerRoot.videoId, resolution)
+            if (direct !== "" && (directAudio !== "" || single)) {
                 playerRoot.directPlayUrl = direct
                 playerRoot.directAudioUrl = directAudio
                 playerRoot.ytdlArgs = ["--ytdl=no"]

@@ -788,13 +788,31 @@ QString YouTubeBackend::cachedPlaybackAudioUrl(const QString &videoId,
     return cachedUrlField(videoId, resolution, QStringLiteral("audioUrl"));
 }
 
+bool YouTubeBackend::cachedPlaybackSingle(const QString &videoId,
+                                         const QString &resolution)
+{
+    if (videoId.isEmpty())
+        return false;
+    ensureUrlCacheLoaded();
+    const QString key = yturl::cacheKeyFor(videoId, ytdlFormatForResolution(resolution));
+    const QJsonValue entry = m_urlCache.value(key);
+    if (!entry.isObject())
+        return false;
+    const QJsonObject obj = entry.toObject();
+    return obj.value(QStringLiteral("single")).toInt() == 1
+        && yturl::urlFresh(static_cast<qint64>(obj.value(QStringLiteral("expire")).toDouble()),
+                           QDateTime::currentMSecsSinceEpoch() / 1000, kUrlSafetyMarginS);
+}
+
 void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
-                                        const QString &audioUrl, qint64 expireEpoch)
+                                       const QString &audioUrl, bool single, qint64 expireEpoch)
 {
     QJsonObject entry;
     entry.insert(QStringLiteral("url"), url);
     if (!audioUrl.isEmpty())
         entry.insert(QStringLiteral("audioUrl"), audioUrl);
+    if (single)
+        entry.insert(QStringLiteral("single"), 1); // one muxed stream: no audio half needed
     entry.insert(QStringLiteral("expire"), static_cast<qint64>(expireEpoch));
     m_urlCache.insert(key, entry);
     yturl::pruneUrlCache(m_urlCache, QDateTime::currentMSecsSinceEpoch() / 1000,
@@ -814,8 +832,12 @@ bool YouTubeBackend::hasFreshUrlPair(const QString &key) const
     // no audioUrl — treat them as misses so the re-resolve below stores the
     // pair instead of letting mpv play video-only silence.
     const QJsonObject obj = entry.toObject();
-    const bool hasPair = obj.contains(QStringLiteral("audioUrl"));
-    return hasPair
+    // Entries without the paired audio half OR the single-stream marker predate
+    // the pairing (issue #28 round 2): treat them as misses so the re-resolve
+    // below stores a complete playable entry instead of a video-only silence.
+    const bool playable = obj.contains(QStringLiteral("audioUrl"))
+                          || obj.value(QStringLiteral("single")).toInt() == 1;
+    return playable
         && yturl::urlFresh(static_cast<qint64>(obj.value(QStringLiteral("expire")).toDouble()),
                            QDateTime::currentMSecsSinceEpoch() / 1000, kUrlSafetyMarginS);
 }
@@ -871,7 +893,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
                     expire = audioExpire;
             }
             if (expire > QDateTime::currentMSecsSinceEpoch() / 1000) {
-                storeUrlCacheEntry(key, videoUrl, audioUrl, expire);
+                storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
                 emit playbackUrlReady(videoId);
             }
         }
