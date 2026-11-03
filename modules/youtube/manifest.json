@@ -20,7 +20,103 @@
       "default": "480p"
     },
     {
-      "key": "resume_playback",
+     "key": "sponsor_sponsor",
+     "label": "SponsorBlock: Sponsor",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Skip",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_selfpromo",
+     "label": "SponsorBlock: Product / self promo",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Skip",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_intro",
+     "label": "SponsorBlock: Intro",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_outro",
+     "label": "SponsorBlock: Outro",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_intermission",
+     "label": "SponsorBlock: Intermission/ad break",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_preview",
+     "label": "SponsorBlock: Preview/next up",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_filler",
+     "label": "SponsorBlock: Filler",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "sponsor_interaction",
+     "label": "SponsorBlock: Interaction (like/subscribe)",
+     "type": "list_single",
+     "options": [
+      "Off",
+      "Mark",
+      "Skip"
+     ],
+     "default": "Off",
+     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
+    },
+    {
+     "key": "resume_playback",
       "label": "Resume Playback",
       "type": "list_single",
       "options": ["Ask", "Always"],

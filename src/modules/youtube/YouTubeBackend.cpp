@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QCryptographicHash>
 #include <QProcess>
 #include <QSaveFile>
 #include <QUrlQuery>
@@ -759,6 +760,147 @@ void YouTubeBackend::ensureUrlCacheLoaded()
                         kUrlCacheMaxEntries);
 }
 
+QString YouTubeBackend::sponsorCacheFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_sponsor.json");
+}
+
+void YouTubeBackend::ensureSponsorCacheLoaded()
+{
+    if (m_sponsorCacheLoaded)
+        return;
+    m_sponsorCacheLoaded = true;
+    QFile f(sponsorCacheFilePath());
+    if (f.open(QIODevice::ReadOnly)) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
+        if (doc.isArray()) {
+            for (const QJsonValue &e : doc.array()) {
+                const QJsonObject o = e.toObject();
+                const QString vid = o.value(QStringLiteral("videoId")).toString();
+                if (vid.isEmpty())
+                    continue;
+                m_sponsorCache.insert(vid, yt::segmentsFromRows(
+                    o.value(QStringLiteral("segments")).toArray()));
+            }
+        }
+    }
+}
+
+void YouTubeBackend::saveSponsorCache()
+{
+    QJsonArray arr;
+    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it) {
+        QJsonArray rows;
+        for (const yt::Segment &s : it.value()) {
+            QJsonObject o;
+            QJsonArray range;
+            range.append(s.start);
+            range.append(s.end);
+            o.insert(QStringLiteral("category"), s.category);
+            o.insert(QStringLiteral("segmentType"), s.action);
+            o.insert(QStringLiteral("segment"), range);
+            rows.append(o);
+        }
+        QJsonObject e;
+        e.insert(QStringLiteral("videoId"), it.key());
+        e.insert(QStringLiteral("segments"), rows);
+        arr.append(e);
+    }
+    QFile f(sponsorCacheFilePath());
+    if (f.open(QIODevice::WriteOnly))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+// k-anonymous window fetch (Red doctrine): only the first 4 hex chars of the
+// SHA-256 of the videoId leave the device; the response is filtered client-side
+// to the exact videoId. 4xx (prefix unknown = no segments) caches an empty
+// entry; network failures do not, so the next play retries.
+void YouTubeBackend::requestSponsorSegments(const QString &videoId)
+{
+    if (videoId.isEmpty())
+        return;
+    ensureSponsorCacheLoaded();
+    if (m_sponsorCache.contains(videoId)) {
+        emit sponsorReady(videoId);
+        return;
+    }
+    if (m_sponsorFetching.contains(videoId))
+        return;
+    m_sponsorFetching.insert(videoId);
+
+    const QByteArray digest =
+        QCryptographicHash::hash(videoId.toUtf8(), QCryptographicHash::Sha256);
+    const QString prefix = QString::fromLatin1(digest.toHex()).left(4);
+    const QString cats = QStringLiteral(
+        "%5B%22sponsor%22%2C%22selfpromo%22%2C%22intro%22%2C%22outro%22%2C%22inter"
+        "mission%22%2C%22preview%22%2C%22filler%22%2C%22interaction%22%5D");
+    const QString types = QStringLiteral("%5B%22skip%22%2C%22mute%22%2C%22full%22%5D");
+    QUrl url(QStringLiteral("https://sponsor.ajay.app/api/skipSegments/") + prefix
+             + QStringLiteral("?categories=") + cats
+             + QStringLiteral("&actionTypes=") + types);
+    m_sponsorStartMs.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+    qDebug("[Youtube] sponsor start vid=%s", qPrintable(videoId));
+
+    QNetworkReply *reply = m_nam.get(makeRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, videoId]() {
+        const QNetworkReply::NetworkError err = reply->error();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool clientErr = (status >= 400 && status < 500); // 4xx = no segments for prefix
+        if (err != QNetworkReply::NoError && !clientErr) {
+            qWarning("[Youtube] sponsor transient err=%d vid=%s", int(err), qPrintable(videoId));
+            m_sponsorFetching.remove(videoId);
+            reply->deleteLater();
+            return;
+        }
+        QJsonParseError pe;
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &pe);
+        const QVector<yt::Segment> segs =
+            doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
+                          : QVector<yt::Segment>{};
+        m_sponsorCache.insert(videoId, segs);
+        saveSponsorCache();
+        m_sponsorFetching.remove(videoId);
+        const qint64 start = m_sponsorStartMs.take(videoId);
+        qDebug("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
+               qPrintable(videoId), segs.size(),
+               static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
+        emit sponsorReady(videoId);
+        reply->deleteLater();
+    });
+}
+
+// Per-category Off/Mark/Skip: "skip" ranges are cut out of the virtual timeline
+// (both halves identically, so audio stays in sync across every jump); "mark"
+// ranges stay playable but surface their boundaries as OSC chapter titles.
+QVariantMap YouTubeBackend::buildPlaybackEdl(const QString &videoId,
+                                             const QString &resolution,
+                                             const QVariantMap &actions)
+{
+    QVariantMap out;
+    const QString url = cachedPlaybackUrl(videoId, resolution);
+    if (url.isEmpty())
+        return out;
+    const QString audio = cachedPlaybackAudioUrl(videoId, resolution);
+    ensureSponsorCacheLoaded();
+    const QVector<yt::Segment> all = m_sponsorCache.value(videoId);
+    QVector<yt::Segment> skipSegs;
+    QVector<yt::Segment> markSegs;
+    for (const yt::Segment &s : all) {
+        const QString act = actions.value(s.category).toString().toLower();
+        if (act == QStringLiteral("skip"))
+            skipSegs.append(s);
+        else if (act == QStringLiteral("mark"))
+            markSegs.append(s);
+    }
+    const QSet<QString> drop{QStringLiteral("skip"), QStringLiteral("mute")};
+    const QVector<QPair<double, double>> merged = yt::mergeRanges(skipSegs, drop);
+    out.insert(QStringLiteral("videoEdl"), yt::buildEdl(url, merged, markSegs));
+    out.insert(QStringLiteral("audioEdl"),
+               audio.isEmpty() ? QString() : yt::buildEdl(audio, merged, {}));
+    return out;
+}
+
 QString YouTubeBackend::cachedUrlField(const QString &videoId,
                                        const QString &resolution,
                                        const QString &field)
@@ -980,6 +1122,10 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
     }
     if (queued > 0)
         qDebug("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
+    // Pre-fetch segment windows for the whole list page so the first pick
+    // already has them when the Player launches (~300 ms single GET each).
+    for (const QString &id : videoIds)
+        requestSponsorSegments(id);
     if (m_warmChainKey.isEmpty())
         pumpWarmQueue();
 }
