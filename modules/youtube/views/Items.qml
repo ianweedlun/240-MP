@@ -31,7 +31,10 @@ FocusScope {
     Component.onCompleted: {
         var subsStatus = youtubeBackend.check_subscriptions()
         var plStatus = youtubeBackend.check_playlists()
-        if (!subsStatus.ok && !plStatus.ok) {
+        // Plan D: a signed-in account needs no upstream files — the tabs are
+        // served by the device-flow account lists instead of being file-gated.
+        var signedIn = youtubeBackend.check_signin().signedIn === true
+        if (!signedIn && !subsStatus.ok && !plStatus.ok) {
             // A file that exists but failed its check has the more actionable
             // error; with no files at all, point at both options.
             if (subsStatus.fileExists)
@@ -47,11 +50,13 @@ FocusScope {
         var list = []
         if (subsStatus.ok)
             list.push("Subscriptions", "Channels")
+        else if (signedIn)
+            list.push("Subscriptions") // account feed; channels stay file-based
         if (plStatus.ok)
             list.push("Playlists")
-        if (youtubeBackend.getWatchLater().length > 0)
+        if (youtubeBackend.getWatchLater().length > 0 || signedIn)
             list.push("Watch Later")
-        if (youtubeBackend.getHistory().length > 0)
+        if (youtubeBackend.getHistory().length > 0 || signedIn)
             list.push("History")
         items = list
         var restore = navListState.currentIndex !== undefined ? navListState.currentIndex : 0

@@ -8,8 +8,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QHttpHeaders>
 #include <QProcess>
 #include <QUrlQuery>
 #include <QRegularExpression>
@@ -1336,7 +1337,13 @@ void YouTubeBackend::browsePage(const QString &browseKind, const QString &cursor
         body.insert(QStringLiteral("continuation"), cursor);
     QNetworkRequest req{QUrl(QStringLiteral("https://www.youtube.com/youtubei/v1/browse")
                              + bearerQuery())};
-    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    QHttpHeaders headers;
+    headers.append(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+    // The session token is what makes FEsubscriptions/FEhistory account-truth;
+    // without it those browseIds 400 server-side (observed live).
+    headers.append(QStringLiteral("Authorization"),
+                   QStringLiteral("Bearer %1").arg(m_accessToken));
+    req.setHeaders(headers);
     QNetworkReply *reply = m_nam.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, reply, browseKind, page, acc]() {
         finishBrowsePage(browseKind, reply, acc, page);
