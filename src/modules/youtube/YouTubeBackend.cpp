@@ -1126,12 +1126,12 @@ bool YouTubeBackend::pairActive()
 
 QString YouTubeBackend::pairUserCode()
 {
-    return m_userCode;
+    return m_pairUserCode;
 }
 
 QString YouTubeBackend::pairVerificationUrl()
 {
-    return m_verifyUrl;
+    return m_pairVerifyUrl;
 }
 
 bool YouTubeBackend::signedIn()
@@ -1213,8 +1213,10 @@ void YouTubeBackend::requestDeviceCode()
             emit deviceSignInFinished(false, QStringLiteral("PAIRING-REQUEST-FAILED"));
             return;
         }
+        m_pairUserCode = userCode;
+        m_pairVerifyUrl = url.isEmpty() ? QStringLiteral("https://www.google.com/device") : url;
         qWarning("[Youtube] pair card issued: open %s and type the code",
-                 qPrintable(url.isEmpty() ? QStringLiteral("https://www.google.com/device") : url));
+                 qPrintable(m_pairVerifyUrl));
         m_pollIntervalS = interval > 0 ? interval : 5;
         m_pollsLeft     = qMin(kPairPollMax, expiresIn > 0 ? expiresIn / m_pollIntervalS : kPairPollMax);
         emit devicePairRequested(userCode, url.isEmpty()

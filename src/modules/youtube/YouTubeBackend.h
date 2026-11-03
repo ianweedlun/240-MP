@@ -259,6 +259,8 @@ private:
     bool   mAuthLoaded = false;        // lazy one-time youtube_auth.json read
     bool   m_pairActive = false;       // a device-flow poll loop is running
     QString m_pairDeviceCode;
+    QString m_pairUserCode;   // dashed code shown on the card for the user to type
+    QString m_pairVerifyUrl;  // verification URL the user opens on his own device
     int    m_pollIntervalS = 5;
     int    m_pollsLeft = 0;
     void   ensureAuthLoaded();         // lazy load + expiry note (no request)
