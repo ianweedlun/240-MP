@@ -61,64 +61,6 @@ FocusScope {
         }
     }
 
-    // Plan D: device-flow pairing card — visible only while a pairing is
-    // pending (or right after it lands/declines, one glance to confirm).
-    property string pairCode: ""
-    property string pairUrl: ""
-    property string pairNote: ""
-    property bool pairActive: false
-
-    Connections {
-        target: youtubeBackend
-        function onDevicePairRequested(userCode, url) {
-            moduleRoot.pairCode = userCode
-            moduleRoot.pairUrl = url
-            moduleRoot.pairActive = true
-            moduleRoot.pairNote = ""
-        }
-        function onDeviceSignInFinished(ok, reason) {
-            moduleRoot.pairActive = false
-            moduleRoot.pairNote = ok ? "SIGNED IN" : reason
-            // Let the confirmation be readable for a moment, then clear so no
-            // stale card ever persists on the module screen.
-            Qt.setTimeout("pair-note-clear", ok ? 6000 : 10000,
-                          function() { moduleRoot.pairNote = "" })
-        }
-    }
-
-    Rectangle {
-        id: pairCard
-        visible: moduleRoot.pairActive || moduleRoot.pairNote !== ""
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: root.sh * 0.05
-        width: root.sw * 0.55; height: root.sh * 0.22
-        color: root.surfaceColor
-        radius: root.sh * 0.01
-        Column {
-            spacing: root.sh * 0.018
-            Text {
-                text: "PAIR YOUTUBE"
-                color: root.accentColor
-                font.family: root.globalFont
-                font.pixelSize: root.sh * 0.035
-            }
-            Text {
-                text: moduleRoot.pairUrl
-                color: root.secondaryColor
-                font.family: root.globalFont
-                font.pixelSize: root.sh * 0.03
-            }
-            Text {
-                text: moduleRoot.pairCode !== "" ? "TYPE CODE: " + moduleRoot.pairCode
-                                                 : moduleRoot.pairNote
-                color: root.primaryColor
-                font.family: root.globalFont
-                font.pixelSize: root.sh * 0.05
-            }
-        }
-    }
-
     Component.onCompleted: {
         // Issue #28 plan A warm-up: before any view opens, kick the backend
         // pass that pre-resolves the newest unfinished resume target with
@@ -127,16 +69,11 @@ FocusScope {
         // ytdl_hook's multi-second re-resolve at play time.
         var resolution = appCore.get_setting(moduleId, "playback_resolution") || "480p"
         youtubeBackend.warmResumePlayback(resolution)
-        // Plan D: opening the module is the pair entry point (TV-app convention).
-        // A flow still running from an earlier open is re-read, not restarted;
-        // the Connections block above fills the card when the code lands.
-        if (youtubeBackend.pairActive() === true) {
-            moduleRoot.pairCode = youtubeBackend.pairUserCode()
-            moduleRoot.pairUrl = youtubeBackend.pairVerificationUrl()
-            moduleRoot.pairActive = true
-        } else if (youtubeBackend.signedIn() !== true) {
-            youtubeBackend.startDeviceSignIn()
-        }
+        // Issue #28 plan D, relocated per Ian: the module open no longer
+        // starts or shows a pairing — opening YouTube while unpaired shows
+        // plain file-based lists with no prompt. Device pairing lives in
+        // the Settings sign-in subview (views/SignIn.qml) and that subview
+        // owns the whole flow, including sign-out.
         navigateTo("Items.qml", {})
     }
 }

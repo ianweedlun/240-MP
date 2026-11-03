@@ -305,7 +305,11 @@ QVariant AppCore::get_module_info(const QString &moduleId) {
             QString iconPath = QStringLiteral("%1/modules/%2/%3")
                                    .arg(m_appRoot, m.folder, m.iconRel);
             QString iconUrl = QUrl::fromLocalFile(iconPath).toString();
-            return QVariantMap{{"name", m.name}, {"icon", iconUrl}};
+            // Module views root as a file URL: core views (ModuleSettings
+            // submenus) resolve module-relative manifest paths against this.
+            QString viewsBase = QUrl::fromLocalFile(m_appRoot + QStringLiteral("/modules/")
+                                                    + m.folder + QStringLiteral("/")).toString();
+            return QVariantMap{{"name", m.name}, {"icon", iconUrl}, {"views_base", viewsBase}};
         }
     }
     return QVariantMap{};

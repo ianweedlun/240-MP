@@ -234,6 +234,18 @@ FocusScope {
                 }, { currentIndex: settingsList.currentIndex })
             } else if (item.type === "action") {
                 appCore.invoke_module_action(moduleSettingsRoot.moduleId, item.action_slot)
+            } else if (item.type === "submenu") {
+                // Generic in-module settings subview (e.g. YouTube's sign-in
+                // screen): the manifest names a module-relative view; resolve
+                // it against the module's views root (appCore knows the folder
+                // — core views never guess module directories).
+                var info = appCore.get_module_info(moduleSettingsRoot.moduleId)
+                if (!info || !info.views_base)
+                    return
+                moduleSettingsRoot.navigateTo(info.views_base + item.submenu_view, {
+                    moduleId: moduleSettingsRoot.moduleId,
+                    settingKey: item.key
+                }, { currentIndex: settingsList.currentIndex })
             } else if (item.type === "directory_browser") {
                 var savedPath = currentValues[item.key] || ""
                 moduleSettingsRoot.navigateTo("views/DirectoryBrowser.qml", {

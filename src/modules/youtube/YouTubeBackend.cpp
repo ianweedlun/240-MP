@@ -1392,6 +1392,8 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
         // exists — this is what makes the account list truly account-truth.
         const QJsonValue wlId = findWatchLaterBrowseId(root);
         if (wlId.isNull()) {
+            qWarning("[Youtube] watch-later discovery miss on the account home (http %d) — falling back",
+                     netError ? int(reply->error()) : 0);
             emit errorOccurred(QStringLiteral("WATCH-LATER-NOT-FOUND"));
             return; // the QML view keeps the upstream file display
         }
@@ -1400,6 +1402,14 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
     }
     acc += ytui::extractBrowseRows(root, kBrowseMaxRows - acc.size());
     const QString next = ytui::continuationToken(root);
+    // One line per page, always: the account lists were observed empty on the
+    // Pi after pairing, and the ONLY unproven link was the response shape
+    // (parse failures are silent by design — a genuinely empty account looks
+    // identical). This log makes the shape visible without instrumenting the
+    // parser: rows count, http status, and any server error object.
+    qWarning("[Youtube] browse kind=%s page=%d rows=%lld http_ok=%d continued=%d",
+             qPrintable(kind), page, static_cast<long long>(acc.size()), netError ? 0 : 1,
+             next.isEmpty() ? 0 : 1);
     if (acc.size() < kBrowseMaxRows && !next.isEmpty() && page < kBrowseMaxPages) {
         browsePage(kind, next, page + 1, acc);
         return;
