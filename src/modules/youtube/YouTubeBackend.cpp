@@ -10,7 +10,6 @@
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QHttpHeaders>
 #include <QProcess>
 #include <QUrlQuery>
 #include <QRegularExpression>
@@ -1162,9 +1161,12 @@ void YouTubeBackend::deviceSignOut()
 
 void YouTubeBackend::startDeviceSignIn()
 {
-    if (m_pairActive || signedIn())
+    if (m_pairActive || signedIn()) {
+        qWarning("[Youtube] start ignored — pairing already active or signed in");
         return; // one flow at a time; already signed in does nothing
+    }
     m_pairActive = true;
+    qWarning("[Youtube] device pair requested");
     requestDeviceCode();
 }
 
@@ -1178,6 +1180,8 @@ void YouTubeBackend::requestDeviceCode()
         {QStringLiteral("scope"), QStringLiteral("https://www.googleapis.com/auth/youtube")}};
     QNetworkReply *reply = m_nam.post(req, deviceQuery.toString().toUtf8());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (reply->error() != QNetworkReply::NoError)
+            qWarning("[Youtube] device-code request failed: %s", qPrintable(reply->errorString()));
         const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
         reply->deleteLater();
         const QString userCode     = doc.value(QStringLiteral("user_code")).toString();
@@ -1187,9 +1191,12 @@ void YouTubeBackend::requestDeviceCode()
         const int expiresIn        = doc.value(QStringLiteral("expires_in")).toInt();
         if (userCode.isEmpty() || m_pairDeviceCode.isEmpty()) {
             m_pairActive = false;
+            qWarning("[Youtube] device-code response had no codes — endpoint rejected request");
             emit deviceSignInFinished(false, QStringLiteral("PAIRING-REQUEST-FAILED"));
             return;
         }
+        qWarning("[Youtube] pair card issued: open %s and type the code",
+                 qPrintable(url.isEmpty() ? QStringLiteral("https://www.google.com/device") : url));
         m_pollIntervalS = interval > 0 ? interval : 5;
         m_pollsLeft     = qMin(kPairPollMax, expiresIn > 0 ? expiresIn / m_pollIntervalS : kPairPollMax);
         emit devicePairRequested(userCode, url.isEmpty()
@@ -1233,6 +1240,7 @@ void YouTubeBackend::finishPairResponse(const QJsonObject &doc)
                 ? QDateTime::currentMSecsSinceEpoch() / 1000 + expiresIn : 0;
         m_pairActive = false;
         saveAuthFile();
+        qWarning("[Youtube] device flow paired — account lists now available");
         emit deviceSignInFinished(true, QString());
         return;
     }
@@ -1246,6 +1254,8 @@ void YouTubeBackend::finishPairResponse(const QJsonObject &doc)
         return;
     }
     m_pairActive = false;
+    qWarning("[Youtube] device flow declined: %s",
+             qPrintable(err.isEmpty() ? QStringLiteral("PAIRING-FAILED") : err));
     emit deviceSignInFinished(false, err.isEmpty() ? QStringLiteral("PAIRING-FAILED")
                                                   : err.toUpper().replace(QLatin1Char(' '), QLatin1Char('-')));
 }
@@ -1337,13 +1347,12 @@ void YouTubeBackend::browsePage(const QString &browseKind, const QString &cursor
         body.insert(QStringLiteral("continuation"), cursor);
     QNetworkRequest req{QUrl(QStringLiteral("https://www.youtube.com/youtubei/v1/browse")
                              + bearerQuery())};
-    QHttpHeaders headers;
-    headers.append(QStringLiteral("Content-Type"), QStringLiteral("application/json"));
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     // The session token is what makes FEsubscriptions/FEhistory account-truth;
-    // without it those browseIds 400 server-side (observed live).
-    headers.append(QStringLiteral("Authorization"),
-                   QStringLiteral("Bearer %1").arg(m_accessToken));
-    req.setHeaders(headers);
+    // without it those browseIds 400 server-side (observed live). setRawHeader
+    // is the repo's cross-Qt-version header pattern (Emby uses it too).
+    req.setRawHeader("Authorization",
+                     QStringLiteral("Bearer %1").arg(m_accessToken).toUtf8());
     QNetworkReply *reply = m_nam.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, reply, browseKind, page, acc]() {
         finishBrowsePage(browseKind, reply, acc, page);
