@@ -1119,17 +1119,17 @@ void YouTubeBackend::saveAuthFile()
 // Pair-state accessors so a freshly-opened view can re-read a pending
 // device flow without restarting it (the card must show the code that's already
 // polling, not ask the user to redo a flow that is running).
-bool YouTubeBackend::pairActive() const
+bool YouTubeBackend::pairActive()
 {
     return m_pairActive;
 }
 
-QString YouTubeBackend::pairUserCode() const
+QString YouTubeBackend::pairUserCode()
 {
     return m_userCode;
 }
 
-QString YouTubeBackend::pairVerificationUrl() const
+QString YouTubeBackend::pairVerificationUrl()
 {
     return m_verifyUrl;
 }
