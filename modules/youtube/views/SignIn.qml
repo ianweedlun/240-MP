@@ -81,8 +81,9 @@ FocusScope {
     // ---
     // Header
     // ---
+    property var _selfInfo: appCore.get_module_info(navParams.moduleId || "com.240mp.youtube")
     AppBar {
-        iconSource: "../assets/images/logo.svg"
+        iconSource: _selfInfo.icon
         title: "YOUTUBE"
         subtitle: "SIGN IN ON YOUTUBE"
         anchors.top: parent.top
