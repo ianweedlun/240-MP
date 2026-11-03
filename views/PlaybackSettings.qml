@@ -42,7 +42,7 @@ FocusScope {
             label: "Auto Fit",
             options: ["Off", "On"],
             value: appSettings["auto_fit"] || "Off",
-            description: "[ON] At/below display aspect: fill and crop. Above: keep aspect (letterbox)\n[OFF] Video starts at its original aspect ratio",
+            description: "[ON] Fit content to current aspect ratio\n [OFF] Do not reshape content",
             moduleId: ""
         })
 
@@ -70,7 +70,7 @@ FocusScope {
             label: "Audio Normalize",
             options: ["Off", "Track", "Album"],
             value: appSettings["replaygain"] || "Custom (auto)",
-            description: "Level tracks to a common loudness using ReplayGain tags\n[TRACK] Per-track tags (most libraries)  [ALBUM] Keep album flow",
+            description: "Normalizes volume with ReplayGain\n[TRACK] Use per-track tags [ALBUM] Use per-album tags",
             moduleId: ""
         })
         items.push({
@@ -88,7 +88,7 @@ FocusScope {
             label: "Deinterlace",
             options: ["Off", "Auto", "On"],
             value: appSettings["deinterlace"] || "Off",
-            description: "Un interlaced sources (old TV, 50i DVDs) into progressive lines\n[AUTO] Only when the source is interlaced",
+            description: "Deinterlaced sources into progressive lines\n[AUTO] Only when the source is interlaced",
             moduleId: ""
         })
         items.push({

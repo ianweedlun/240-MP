@@ -16,21 +16,21 @@
       "label": "Playlist Folder",
       "type": "directory_browser",
       "default": "",
-      "description": "Where RetroArch playlists (.lpl files) live. Default: ~/.config/retroarch/playlists"
+      "description": "Default: ~/.config/retroarch/playlists"
     },
     {
       "key": "rom_directory",
       "label": "ROM Folder",
       "type": "directory_browser",
       "default": "",
-      "description": "Where ROM files live. Used to resolve relative paths in playlists. Default: ~/ROMs"
+      "description": "Default: ~/ROMs"
     },
     {
       "key": "thumbnail_directory",
       "label": "Thumbnail Folder",
       "type": "directory_browser",
       "default": "",
-      "description": "Where RetroArch thumbnails live. Default: ~/.config/retroarch/thumbnails"
+      "description": "Default: ~/.config/retroarch/thumbnails"
     },
     {
       "key": "thumbnail_display",
@@ -38,14 +38,14 @@
       "type": "list_single",
       "default": "RIGHT",
       "options": ["OFF", "LEFT", "RIGHT"],
-      "description": "Show thumbnails to the left or right of the game list, or disable."
+      "description": "Where to show thumbnails"
     },
     {
       "key": "retroarch_path",
       "label": "RetroArch Executable",
       "type": "directory_browser",
       "default": "",
-      "description": "Path to RetroArch binary. Leave empty to use 'retroarch' from PATH."
+      "description": "Default: retroarch in PATH"
     },
     {
       "key": "playlist_sort",
@@ -53,7 +53,7 @@
       "type": "list_single",
       "default": "SYSTEM",
       "options": ["SYSTEM", "COMPANY"],
-      "description": "[SYSTEM] Alpha by short name (GENESIS, NES, SNES)  [COMPANY] Group by manufacturer prefix from filename, alpha within"
+      "description": "[SYSTEM] Alpha by shortname [COMPANY] Sort by company"
     }
   ]
 }
