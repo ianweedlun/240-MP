@@ -4,6 +4,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: slow start on every pick, not just resume (#28 plan A rounds 2–3)
+- Round 1 cached only the video half of `bestvideo+bestaudio`: yt-dlp `-g` prints two
+  URLs (video line 1, audio line 2), so warm plays went out silent (video-only stream)
+  and cold plays still paid ytdl_hook's full re-resolve for audio. Round 2 stores the
+  pair under the earlier expire epoch, treats round-1 video-only entries as misses
+  (one-time migration), and passes the audio URL to mpv via `--audio-file=`
+  (ytdl_hook's own split-format mechanism) — first play costs the same as resume.
+- Round 3 closes the last slow path: every pick (Subscriptions/Channels/Playlists/
+  Watch Later/History, playlist autoplay, error retry, live streams) used to hand mpv
+  the watch URL immediately while the app's own resolve ran in the background — so
+  ytdl_hook re-resolved from scratch (~5–9 s) in parallel. `YouTubeBackend` now emits
+  `playbackUrlReady(videoId)` when a resolve lands; the Player's `playAt()` gate waits
+  on it (15 s cap) and launches straight onto the signed pair, typically ~4–6 s cold,
+  ~3 s warm. Cap expiry falls back to ytdl_hook unchanged (dead-network path).
+
 ### Added — YouTube: background direct-stream URL cache + module-entry warm-up (dev, #28 plan A)
 - `YouTubeBackend.resolvePlayback/cachedPlaybackUrl/warmResumePlayback`: yt-dlp pre-resolves
   the signed googlevideo URL (fire-and-forget, 30 s timeout), stored under the URL's own
