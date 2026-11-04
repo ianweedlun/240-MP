@@ -24,6 +24,9 @@
 
 static const char *kSubscriptionsFileName = "youtube_subscriptions.txt";
 static const char *kPlaylistsFileName     = "youtube_playlists.txt";
+// Device-flow tokens carry ~10 min expiry claims; slack guards clock skew
+// and lets callers refresh instead of using a dead bearer.
+constexpr qint64 kAuthSlackS = 120; // seconds
 
 static QString watchUrlFor(const QString &videoId) {
     return QStringLiteral("https://www.youtube.com/watch?v=") + videoId;
@@ -91,6 +94,24 @@ QVariantMap YouTubeBackend::check_subscriptions() {
 // ---------------------------------------------------------------------------
 
 void YouTubeBackend::load_subscriptions_feed(bool forceRefresh) {
+    ensureAuthLoaded();
+    const bool tokenLive = !m_accessToken.isEmpty()
+        && !(m_accessExpiresEpoch > 0
+             && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch);
+    if (tokenLive) {
+        // The signed-in feed does NOT come from FEsubscriptions: the TV
+        // client's subscription feed is a server-precomputed cache — the
+        // 2026-11-04 live probe showed 28 of 30 sampled channels' latest
+        // uploads entirely absent from its 29-43 unordered tiles while the
+        // official mobile app showed them. Account truth = live union:
+        // one FEchannels roster hop (fresh + real names, probe: 313 tiles)
+        // then wave-capped per-channel RSS (probe: ~110 ms/request from the
+        // Pi; TTL cache below makes repeat opens free).
+        m_feedWantsRoster = true;
+        m_emitFeedWhenDone = true;
+        browsePage(QStringLiteral("subschannels"), QStringLiteral("FEchannels"), 1, QVariantList());
+        return;
+    }
     m_emitFeedWhenDone = true;
     ensureFresh(forceRefresh);
 }
@@ -142,9 +163,41 @@ void YouTubeBackend::ensureFresh(bool forceRefresh) {
         finishAggregate(); // everything fresh — serve from cache
         return;
     }
-    m_pendingChannels = stale.size();
+    queueRefresh(stale);
+}
+
+void YouTubeBackend::stormFeedFromRoster(const QStringList &ids, bool forceRefresh)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList stale;
+    for (const QString &id : ids) {
+        ChannelEntry &entry = m_channels[id];
+        entry.channelId = id;
+        if (forceRefresh || !entry.feedOk || now - entry.fetchedMs > kCacheTtlMs)
+            stale << id;
+    }
+    if (stale.isEmpty()) {
+        finishAggregate(); // roster already fresh within TTL — serve from cache
+        return;
+    }
+    queueRefresh(stale);
+}
+
+// Wave-capped refresh plumbing (see header comment on kMaxConcurrentFeedFetches).
+void YouTubeBackend::queueRefresh(const QStringList &stale)
+{
     for (const QString &id : stale)
-        refreshChannel(id);
+        m_refreshQueue.enqueue(id);
+    m_pendingChannels = m_refreshQueue.size();
+    pumpRefresh();
+}
+
+void YouTubeBackend::pumpRefresh()
+{
+    while (m_activeRefresh < kMaxConcurrentFeedFetches && !m_refreshQueue.isEmpty()) {
+        ++m_activeRefresh;
+        refreshChannel(m_refreshQueue.dequeue());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +291,12 @@ void YouTubeBackend::refreshChannel(const QString &channelId) {
         }
         // On failure: keep any previously cached videos (stale beats empty);
         // fetchedMs stays old so the next load retries this channel.
-        if (--m_pendingChannels <= 0) {
+        if (m_activeRefresh > 0)
+            --m_activeRefresh;
+        if (m_pendingChannels > 0)
+            --m_pendingChannels; // one completion per queued id (queueRefresh sized it)
+        pumpRefresh(); // release the slot and admit the next wave member
+        if (m_pendingChannels <= 0 && m_refreshQueue.isEmpty()) {
             m_pendingChannels = 0;
             finishAggregate();
         }
@@ -1238,7 +1296,7 @@ static const QString kDeviceCodeEndpoint =
 static const QString kTokenEndpoint =
     QStringLiteral("https://www.youtube.com/o/oauth2/token");
 static constexpr int kPairPollMax = 120;          // 10 min at 5 s polls
-static constexpr int kAuthSlackS = 120;           // refresh before expiry
+// (kAuthSlackS hoisted to file scope above — refresh-before-expiry slack)
 static constexpr int kBrowseMaxPages = 5;         // continuation cap
 static constexpr int kBrowseMaxRows = 200;        // hard display cap
 
@@ -1601,6 +1659,17 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
             m_channelOrder = ids;
         else if (m_channelOrder.isEmpty())
             qWarning("[Youtube] channel-sync yielded no ids (parse shape drift?)");
+        if (m_feedWantsRoster) {
+            // Signed-in Subscriptions opened: the roster just landed fresh —
+            // kick the RSS union off it (emit lands via finishAggregate).
+            m_feedWantsRoster = false;
+            const QStringList roster = ids.isEmpty() ? m_channelOrder : ids;
+            if (!roster.isEmpty())
+                stormFeedFromRoster(roster, /*forceRefresh=*/false);
+            else
+                ensureFresh(true); // roster dead-end — legacy file path retries
+            return;
+        }
         if (m_emitChannelsWhenDone) {
             m_emitChannelsWhenDone = false;
             emit channelsLoaded(buildChannelList());

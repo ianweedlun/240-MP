@@ -133,12 +133,11 @@ FocusScope {
             isLoading = true
             errorMessage = ""
             if (mode === "feed") {
-                if (youtubeBackend.check_signin().signedIn === true) {
-                    pendingAccountLoad = true
-                    youtubeBackend.loadAccountList("feed")
-                } else {
-                    youtubeBackend.load_subscriptions_feed()
-                }
+                // Signed in or not, one loader: when signed in, the backend
+                // now builds the feed from a live FEchannels roster + wave-capped
+                // RSS union — FEsubscriptions on the TV client is a server-precomputed
+                // cache (probe: 28/30 newest uploads missing, tiles out of order).
+                youtubeBackend.load_subscriptions_feed()
             } else if (mode === "playlist") {
                 // Signed in: account browse (fast, session-token truth); the
                 // yt-dlp file path stays for signed-out users and as the
@@ -163,7 +162,9 @@ FocusScope {
             if (itemsRoot.mode !== "feed")
                 return
             itemsRoot.isLoading = false
-            itemsRoot.noteRows("file", videos.length)
+            // signed-in loads now ride the roster+RSS union (backend chose it);
+            // signed-out remains the legacy subscription-file path.
+            itemsRoot.noteRows(youtubeBackend.check_signin().signedIn === true ? "union" : "file", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()

@@ -9,6 +9,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QJsonObject>
+#include <QQueue>
 #include <QNetworkAccessManager>
 #include "../../util/YtSponsorEdl.h"
 
@@ -326,4 +327,17 @@ private:
     static constexpr int    kYtdlResolveTimeoutMs = 30000;
     static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
     static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
+
+    // Wave-capped RSS refresh queue: the signed-in feed union touches every
+    // subscribed channel (~311 RSS GETs); issuing them all at once blows up
+    // the Pi's sockets. queueRefresh records the outstanding total, pumpRefresh
+    // keeps active fetches under kMaxConcurrentFeedFetches, and each
+    // completion admits the next in line.
+    QQueue<QString> m_refreshQueue;
+    int             m_activeRefresh = 0;
+    bool            m_feedWantsRoster = false; // FEchannels roster hop feeds the union
+    void            queueRefresh(const QStringList &stale);
+    void            pumpRefresh();
+    void            stormFeedFromRoster(const QStringList &ids, bool forceRefresh);
+    static constexpr int kMaxConcurrentFeedFetches = 32;
 };
