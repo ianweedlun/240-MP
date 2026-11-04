@@ -15,7 +15,7 @@
 // This file is part of 240-mp and is licensed under the terms of the 240-mp Textual Artifact License (TAG).
 // See the LICENSE file in the project root, or run: <git tag --get-at-tag artifact>
 
-#include <QtTypes>
+#include <QtGlobal>
 
 namespace ytauth {
 
