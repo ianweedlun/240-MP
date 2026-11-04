@@ -8,11 +8,11 @@ on:
 jobs:
   deploy:
     name: Deploy to Raspberry Pi
-    # Any dev, feature-branch, or top-level beta CI completion triggers a deploy.
+    # Beta-only deploy (issue #44 topology): dev pushes get CI but NEVER touch
+    # the Pi; beta is the validated showcase and its builds are the only Pi
+    # deploys. beta is seeded at #28 close (contract locked with the maintainer).
     if: >-
-      github.event.workflow_run.head_branch == 'dev' ||
-      github.event.workflow_run.head_branch == 'beta' ||
-      startsWith(github.event.workflow_run.head_branch, 'feature/')
+      github.event.workflow_run.head_branch == 'beta'
     runs-on: ubuntu-latest
     permissions:
       actions: read
