@@ -123,6 +123,11 @@ MpvController::~MpvController() {
         m_handoff->releaseNow(QLatin1String(kHandoffOwner));
 }
 
+void MpvController::setOscRanges(const QString &ranges)
+{
+    m_oscRanges = ranges;
+}
+
 void MpvController::loadAndPlay(const QString &url, float startSeconds,
                                  int audioTrack, int subTrack,
                                  const QStringList &subFiles,
@@ -133,6 +138,10 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
                                  const QStringList &subTitles, float imageDurationSec,
                                  bool imageContent, const QStringList &extraArgs, const QString &jellyfinToken,
                                  const QStringList &extraUrls) {
+    // Consume the SponsorBlock hint here (not deeper in the body) so an early
+    // return can never leak it into the next, non-YouTube launch.
+    const QString sbRanges = m_oscRanges;
+    m_oscRanges.clear();
     if (m_process) {
         m_process->disconnect();
         if (m_process->state() != QProcess::NotRunning) {
@@ -314,6 +323,10 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         if (!ytdlPath.isEmpty() && !ytdlPath.contains(QLatin1Char(',')))
             scriptOpts << QString("ytdl_hook-ytdl_path=%1").arg(ytdlPath);
     }
+    // SponsorBlock segment hints for the OSC (set by the YouTube Player right
+    // before this launch; consumed once so other modules never inherit them).
+    if (!sbRanges.isEmpty() && !sbRanges.contains(QLatin1Char(',')))
+        scriptOpts << QStringLiteral("sb-ranges=%1").arg(sbRanges);
     if (!scriptOpts.isEmpty())
         args << QString("--script-opts=%1").arg(scriptOpts.join(QStringLiteral(",")));
 

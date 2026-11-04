@@ -840,7 +840,7 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
              + QStringLiteral("?categories=") + cats
              + QStringLiteral("&actionTypes=") + types);
     m_sponsorStartMs.insert(videoId, QDateTime::currentMSecsSinceEpoch());
-    qDebug("[Youtube] sponsor start vid=%s", qPrintable(videoId));
+    qWarning("[Youtube] sponsor start vid=%s", qPrintable(videoId));
 
     QNetworkReply *reply = m_nam.get(makeRequest(url));
     connect(reply, &QNetworkReply::finished, this, [this, reply, videoId]() {
@@ -862,7 +862,7 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
         saveSponsorCache();
         m_sponsorFetching.remove(videoId);
         const qint64 start = m_sponsorStartMs.take(videoId);
-        qDebug("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
+        qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
                qPrintable(videoId), segs.size(),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
         emit sponsorReady(videoId);
@@ -893,11 +893,61 @@ QVariantMap YouTubeBackend::buildPlaybackEdl(const QString &videoId,
         else if (act == QStringLiteral("mark"))
             markSegs.append(s);
     }
+    static const QHash<QString, QString> labels{
+        {QStringLiteral("sponsor"), QStringLiteral("Sponsor")},
+        {QStringLiteral("selfpromo"), QStringLiteral("Self promo")},
+        {QStringLiteral("intro"), QStringLiteral("Intro")},
+        {QStringLiteral("outro"), QStringLiteral("Outro")},
+        {QStringLiteral("intermission"), QStringLiteral("Intermission")},
+        {QStringLiteral("preview"), QStringLiteral("Preview")},
+        {QStringLiteral("filler"), QStringLiteral("Filler")},
+        {QStringLiteral("interaction"), QStringLiteral("Interaction")}};
+
+    // OSC paints category-colored segment marks from this side-channel
+    // ("start-end:Label:action;" in RAW source seconds; the OSC converts to
+    // virtual time using the skip cuts). EDL itself only carries the cuts.
+    QStringList ranges;
     const QSet<QString> drop{QStringLiteral("skip"), QStringLiteral("mute")};
-    const QVector<QPair<double, double>> merged = yt::mergeRanges(skipSegs, drop);
-    out.insert(QStringLiteral("videoEdl"), yt::buildEdl(url, merged, markSegs));
+    QVector<QPair<double, double>> cuts;
+    auto collect = [&](const QVector<yt::Segment> &segs, const QString &kind) {
+        QStringList cats;
+        for (const yt::Segment &s : segs)
+            if (!cats.contains(s.category))
+                cats.append(s.category);
+        for (const QString &cat : cats) {
+            QVector<yt::Segment> catSegs;
+            for (const yt::Segment &s : segs)
+                if (s.category == cat)
+                    catSegs.append(s);
+            const auto catMerged = yt::mergeRanges(catSegs, drop);
+            for (const auto &pair : catMerged) {
+                if (kind == QLatin1String("skip"))
+                    cuts.append(pair);
+                ranges << QStringLiteral("%1-%2:%3:%4")
+                              .arg(pair.first, 0, 'f', 1)
+                              .arg(pair.second, 0, 'f', 1)
+                              .arg(labels.value(cat, cat))
+                              .arg(kind);
+            }
+        }
+    };
+    collect(skipSegs, QStringLiteral("skip"));
+    collect(markSegs, QStringLiteral("mark"));
+    std::sort(cuts.begin(), cuts.end(),
+              [](const QPair<double, double> &a, const QPair<double, double> &b) {
+                  return a.first != b.first ? a.first < b.first : a.second < b.second;
+              });
+    QVector<QPair<double, double>> merged;
+    for (const auto &r : cuts) {
+        if (!merged.isEmpty() && r.first <= merged.last().second)
+            merged.last().second = qMax(merged.last().second, r.second);
+        else
+            merged.append(r);
+    }
+    out.insert(QStringLiteral("videoEdl"), yt::buildEdl(url, merged, {}));
     out.insert(QStringLiteral("audioEdl"),
                audio.isEmpty() ? QString() : yt::buildEdl(audio, merged, {}));
+    out.insert(QStringLiteral("ranges"), ranges.join(QLatin1Char(';')));
     return out;
 }
 
@@ -1010,7 +1060,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 
     auto *proc = new QProcess(this);
     m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
-    qDebug("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
+    qWarning("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
     const QStringList args{
         QStringLiteral("-g"),
         QStringLiteral("--no-playlist"),
@@ -1049,7 +1099,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             }
         }
         const qint64 startedMs = m_resolveStartMs.take(key);
-        qDebug("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
+        qWarning("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
                qPrintable(videoId),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - startedMs),
                urls.size(), stored ? 1 : 0);
@@ -1092,7 +1142,7 @@ void YouTubeBackend::pumpWarmQueue()
             continue; // someone else warmed it meanwhile — next entry
         m_warmChainKey = key;
         m_resolveKeys.insert(key);
-        qDebug("[Youtube] warm take vid=%s", qPrintable(videoId));
+        qWarning("[Youtube] warm take vid=%s", qPrintable(videoId));
         launchUrlResolve(videoId, resolution, fmt, key);
         return;
     }
@@ -1121,7 +1171,7 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
         ++queued;
     }
     if (queued > 0)
-        qDebug("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
+        qWarning("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
     // Pre-fetch segment windows for the whole list page so the first pick
     // already has them when the Player launches (~300 ms single GET each).
     for (const QString &id : videoIds)

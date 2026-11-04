@@ -50,16 +50,28 @@ FocusScope {
             const res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             const cats = ["sponsor", "selfpromo", "intro", "outro", "intermission", "preview", "filler", "interaction"]
             var acts = ({})
-            for (var ci = 0; ci < cats.length; ++ci)
-                acts[cats[ci]] = (appCore.get_setting(moduleRoot.moduleId, "sponsor_" + cats[ci]) || "off").toLowerCase()
+            for (var ci = 0; ci < cats.length; ++ci) {
+                // Red-parity defaults while the key is untouched: sponsor and
+                // self-promo skip silently, everything else stays off.
+                var dflt = (cats[ci] === "sponsor" || cats[ci] === "selfpromo") ? "skip" : "off"
+                acts[cats[ci]] = (appCore.get_setting(moduleRoot.moduleId, "sponsor_" + cats[ci]) || dflt).toLowerCase()
+            }
             const edl = youtubeBackend.buildPlaybackEdl(playerRoot.videoId, res, acts)
             if (edl.videoEdl !== undefined && edl.videoEdl !== "")
                 playUrl = edl.videoEdl
             if (directAudioUrl !== "")
                 args.push("--audio-file=" + (edl.audioEdl !== undefined && edl.audioEdl !== "" ? edl.audioEdl : directAudioUrl))
+            // OSC shows this media title instead of the (very long) edl:// URL.
+            var t = (item && item.title) ? item.title : "YouTube"
+            if (t.length > 36)
+                t = t.substring(0, 33) + "..."
+            args.push("--title=" + t)
         } else {
             playUrl = videoUrl
         }
+        // OSC segment marks get their data out-of-band: raw source ranges the
+        // script converts to the cut virtual timeline itself (empty clears).
+        mpvController.set_osc_ranges(edl && edl.ranges ? edl.ranges : "")
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 

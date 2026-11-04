@@ -4,7 +4,6 @@
   "icon": "assets/images/logo.svg",
   "version": "1.0",
   "entry_point_qml": "views/Root.qml",
-
   "settings": [
     {
       "key": "enabled",
@@ -16,110 +15,21 @@
       "key": "playback_resolution",
       "label": "Playback Resolution",
       "type": "list_single",
-      "options": ["480p", "720p", "1080p"],
+      "options": [
+        "480p",
+        "720p",
+        "1080p"
+      ],
       "default": "480p"
     },
     {
-     "key": "sponsor_sponsor",
-     "label": "SponsorBlock: Sponsor",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Skip",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_selfpromo",
-     "label": "SponsorBlock: Product / self promo",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Skip",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_intro",
-     "label": "SponsorBlock: Intro",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_outro",
-     "label": "SponsorBlock: Outro",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_intermission",
-     "label": "SponsorBlock: Intermission/ad break",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_preview",
-     "label": "SponsorBlock: Preview/next up",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_filler",
-     "label": "SponsorBlock: Filler",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "sponsor_interaction",
-     "label": "SponsorBlock: Interaction (like/subscribe)",
-     "type": "list_single",
-     "options": [
-      "Off",
-      "Mark",
-      "Skip"
-     ],
-     "default": "Off",
-     "description": "Off = ignore; Mark = chapter markers at the segment bounds (visible in the OSC); Skip = cut it out of the playback timeline. Applies to direct mpv playback."
-    },
-    {
-     "key": "resume_playback",
+      "key": "resume_playback",
       "label": "Resume Playback",
       "type": "list_single",
-      "options": ["Ask", "Always"],
+      "options": [
+        "Ask",
+        "Always"
+      ],
       "default": "Ask"
     },
     {
@@ -134,6 +44,13 @@
       "label": "Display Shorts",
       "type": "toggle",
       "default": "ON"
+    },
+    {
+      "key": "sponsor_settings",
+      "label": "SponsorBlock",
+      "type": "submenu",
+      "submenu_view": "views/SponsorSettings.qml",
+      "description": "Open per-category segment controls (Off/Mark/Skip). Sponsor and self-promo skip silently by default; Mark shows chapter marks without cutting."
     },
     {
       "key": "device_sign_in",

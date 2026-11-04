@@ -46,6 +46,7 @@ public:
     Q_INVOKABLE void stop();
     Q_INVOKABLE void seekTo(int positionMs);
     Q_INVOKABLE void sendKey(const QString &key);
+    Q_INVOKABLE void setOscRanges(const QString &ranges);
     Q_INVOKABLE void showOsdSkipPrompt();
     Q_INVOKABLE void clearOsdPrompt();
 
@@ -144,6 +145,7 @@ private:
     QString       m_socketPath;
     QString       m_inputConfPath;
     QString       m_logFilePath;
+    QString       m_oscRanges;        // per-launch SponsorBlock hints for the OSC ("s-e:Label:kind;...")
     QString       m_subInfoPath;       // JSON map: external sub URL -> friendly name (for the OSC)
     QString       m_lastEndFileReason;  // mpv end-file "reason" for the current session
     // Set when this session passed --start; cleared once mpv has applied it. See
