@@ -46,6 +46,7 @@ FocusScope {
         // URLs (nothing active for this video).
         var playUrl = directPlayUrl
         var args = ytdlArgs.slice()
+        var oscRanges = ""
         if (playUrl !== "") {
             const res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             const cats = ["sponsor", "selfpromo", "intro", "outro", "intermission", "preview", "filler", "interaction"]
@@ -61,6 +62,8 @@ FocusScope {
                 playUrl = edl.videoEdl
             if (directAudioUrl !== "")
                 args.push("--audio-file=" + (edl.audioEdl !== undefined && edl.audioEdl !== "" ? edl.audioEdl : directAudioUrl))
+            if (edl.ranges !== undefined && edl.ranges !== "")
+                oscRanges = edl.ranges
             // OSC shows this media title instead of the (very long) edl:// URL.
             var t = (item && item.title) ? item.title : "YouTube"
             if (t.length > 36)
@@ -71,7 +74,7 @@ FocusScope {
         }
         // OSC segment marks get their data out-of-band: raw source ranges the
         // script converts to the cut virtual timeline itself (empty clears).
-        mpvController.set_osc_ranges(edl && edl.ranges ? edl.ranges : "")
+        mpvController.set_osc_ranges(oscRanges)
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
