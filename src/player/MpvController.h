@@ -122,7 +122,7 @@ private:
     double m_pendingContentAspect = 0.0;
     // True when the active decode path can't crop (Pi 3 overlay path with smooth
     // playback ON): --panscan blanks the video there. Gates auto-crop and tells
-    // the OSC scripts to hide their CROP button.
+    // the OSC scripts to hide their FILL button.
     bool cropUnavailable() const;
     // App-level "video_output_levels" setting (default "Auto"). Returns the mpv
     // value for --video-output-levels ("limited"/"full"), or empty on Auto/unset.
