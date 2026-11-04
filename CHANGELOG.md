@@ -4,6 +4,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube signed-in layer dying one hour after pairing (Playlists row vanished)
+- YouTube access tokens live ~1 h. `check_signin()` reported only liveness, so an
+  hour after pairing the account layer — the Playlists row, account feed and
+  Channels — hid itself, and the refresh plumbing lived *behind* those gates:
+  the app could never revive and silently fell back to file mode forever
+  (2026-11-04 "where did the playlists view go?").
+- A credential with a refresh token is now *usable*: expiry, slack, and revive
+  semantics live in one predicate (`util/YtAuthGate.h`, unit-tested); the first
+  auth touch refreshes before expiry, one swap at a time, and deferred account
+  fetches (feed lists, playlist videos, FEchannels Channels) replay when the
+  swap lands. A declined refresh falls back to file views with a journal
+  nudge to re-pair on the CRT.
+
 ### Fixed — YouTube player stuck at "Loading…" forever
 - The cold-path playback hold waited on `sponsorReady` with no expiry: when the SponsorBlock fetch fails transiently (journal: `sponsor transient err=5`) the backend gives up quietly and the signal never fires — the view stayed in "Loading…" forever, mpv never spawned, and Back/Escape went into dead IPC. Reproduced deterministically in the local lab (offscreen app + key channel + `/etc/hosts` bind poisoning only `sponsor.ajay.app` → same `err` → 20 s of silence, pre-fix).
 - `Player.qml`: a 6 s `sponsorWaitTimer` restarted at the hold site now expires the hold and launches **without** segment EDL (late segments still apply via the property-filter path), and Back/Escape on a view whose playback never started returns natively via `goBack()` instead of shouting into a disconnected IPC socket.

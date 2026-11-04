@@ -1,6 +1,7 @@
 #include "YouTubeBackend.h"
 #include "../../util/YtDlpLocator.h"
 #include "../../util/YtUrlFresh.h"
+#include "../../util/YtAuthGate.h"
 #include "../../util/YtBrowseRows.h"
 
 #include <QDateTime>
@@ -26,7 +27,7 @@ static const char *kSubscriptionsFileName = "youtube_subscriptions.txt";
 static const char *kPlaylistsFileName     = "youtube_playlists.txt";
 // Device-flow tokens carry ~10 min expiry claims; slack guards clock skew
 // and lets callers refresh instead of using a dead bearer.
-constexpr qint64 kAuthSlackS = 120; // seconds
+constexpr qint64 kAuthSlackS = ytauth::kAuthSlackS; // seconds (single source: util/YtAuthGate.h)
 
 static QString watchUrlFor(const QString &videoId) {
     return QStringLiteral("https://www.youtube.com/watch?v=") + videoId;
@@ -96,8 +97,7 @@ QVariantMap YouTubeBackend::check_subscriptions() {
 void YouTubeBackend::load_subscriptions_feed(bool forceRefresh) {
     ensureAuthLoaded();
     const bool tokenLive = !m_accessToken.isEmpty()
-        && !(m_accessExpiresEpoch > 0
-             && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch);
+        && !ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000);
     if (tokenLive) {
         // The signed-in feed does NOT come from FEsubscriptions: the TV
         // client's subscription feed is a server-precomputed cache — the
@@ -119,6 +119,11 @@ void YouTubeBackend::load_subscriptions_feed(bool forceRefresh) {
 void YouTubeBackend::load_channels(bool forceRefresh) {
     m_emitChannelsWhenDone = true;
     if (!m_accessToken.isEmpty()) {
+        if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
+            m_pendingFeChannels = true;
+            requestRefresh(); // success leg replays load_channels with a fresh bearer
+            return;
+        }
         // Signed-in truth (user rule: InnerTube primary; text files are
         // legacy fallback): FEchannels returns the whole subscribed-channel
         // list in ONE page — 313 channelRenderer-free but TV-tiled tiles
@@ -1322,6 +1327,12 @@ void YouTubeBackend::ensureAuthLoaded()
     m_accessToken         = doc.value(QStringLiteral("access")).toString();
     m_refreshToken        = doc.value(QStringLiteral("refresh")).toString();
     m_accessExpiresEpoch  = static_cast<qint64>(doc.value(QStringLiteral("expires")).toDouble());
+    // Expired-but-refreshable is ordinary life (access tokens last ~1h): revive
+    // at FIRST auth touch, not behind a signed-in UI gate — the gate is what
+    // hid the very entry point whose only path back to refresh lived below it.
+    if (!m_refreshToken.isEmpty()
+        && ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000))
+        requestRefresh();
 }
 
 void YouTubeBackend::saveAuthFile()
@@ -1375,16 +1386,22 @@ bool YouTubeBackend::signedIn()
     if (m_accessToken.isEmpty())
         return false;
     const qint64 now = QDateTime::currentMSecsSinceEpoch() / 1000;
-    return m_accessExpiresEpoch <= 0 || now + kAuthSlackS < m_accessExpiresEpoch;
+    // A credential with a refresh token is USABLE even past its access-token
+    // expiry: loaders revive on demand. Gating this on liveness alone is the
+    // deadman bug that hid the PLAYLISTS row one hour after pairing.
+    return !ytauth::accessExpired(m_accessExpiresEpoch, now)
+            || !m_refreshToken.isEmpty();
 }
 
 QVariantMap YouTubeBackend::check_signin()
 {
     ensureAuthLoaded();
     QVariantMap m;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch() / 1000;
+    // refreshable counts as signed-in (see signedIn() above)
     m[QStringLiteral("signedIn")]      = !m_accessToken.isEmpty()
-            && (m_accessExpiresEpoch <= 0
-                || QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS < m_accessExpiresEpoch);
+            && (!ytauth::accessExpired(m_accessExpiresEpoch, now)
+                || !m_refreshToken.isEmpty());
     m[QStringLiteral("hasRefresh")]    = !m_refreshToken.isEmpty();
     m[QStringLiteral("pairingActive")] = m_pairActive;
     return m;
@@ -1524,6 +1541,9 @@ void YouTubeBackend::requestRefresh()
 {
     if (m_refreshToken.isEmpty())
         return;
+    if (m_refreshInFlight)
+        return; // one swap at a time; queued pending requests replay on its success leg
+    m_refreshInFlight = true;
     QNetworkRequest req{QUrl(kTokenEndpoint)};
     req.setHeader(QNetworkRequest::ContentTypeHeader,
                   QStringLiteral("application/x-www-form-urlencoded"));
@@ -1534,6 +1554,7 @@ void YouTubeBackend::requestRefresh()
         {QStringLiteral("grant_type"), QStringLiteral("refresh_token")}};
     QNetworkReply *reply = m_nam.post(req, refreshQuery.toString().toUtf8());
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        m_refreshInFlight = false; // the swap completed (or errored)
         const QJsonObject doc = QJsonDocument::fromJson(reply->readAll()).object();
         reply->deleteLater();
         const QString token = doc.value(QStringLiteral("access_token")).toString();
@@ -1547,6 +1568,11 @@ void YouTubeBackend::requestRefresh()
             if (!rotated.isEmpty())
                 m_refreshToken = rotated;
             saveAuthFile();
+            qWarning("[Youtube] access token refreshed — account paths live again");
+            if (m_pendingFeChannels) {
+                m_pendingFeChannels = false;
+                load_channels(false); // FEchannels retry now that the bearer is fresh
+            }
             if (!m_pendingListKind.isEmpty()) {
                 const QString kind = m_pendingListKind;
                 m_pendingListKind.clear();
@@ -1559,6 +1585,10 @@ void YouTubeBackend::requestRefresh()
         } else {
             m_accessToken = QString(); // dead auth — views fall back to files
             saveAuthFile();
+            qWarning("[Youtube] token refresh declined — signed out, re-pair on the CRT");
+            m_pendingListKind.clear();
+            m_pendingPlaylistVideos.clear();
+            m_pendingFeChannels = false;
         }
     });
 }
@@ -1576,8 +1606,7 @@ void YouTubeBackend::loadAccountList(const QString &kind)
         return;
     }
     m_pendingListKind = kind;
-    if (m_accessExpiresEpoch > 0
-        && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch) {
+    if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
         requestRefresh(); // the list re-enters from requestRefresh's success leg
         return;
     }
@@ -1744,8 +1773,7 @@ void YouTubeBackend::loadAccountPlaylistVideos(const QString &playlistId)
     }
     if (playlistId.isEmpty())
         return;
-    if (m_accessExpiresEpoch > 0
-        && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch) {
+    if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
         m_pendingPlaylistVideos = playlistId; // re-enters from requestRefresh's success leg
         requestRefresh();
         return;

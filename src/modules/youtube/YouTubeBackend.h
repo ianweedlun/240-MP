@@ -296,6 +296,8 @@ private:
     // Plan D auth/device-flow state (tokens NEVER appear in telemetry/logs).
     QString m_accessToken, m_refreshToken;
     qint64 m_accessExpiresEpoch = 0;   // epoch seconds; 0 = unknown
+    bool   m_refreshInFlight = false;  // one token swap at a time (replay flags ride it)
+    bool   m_pendingFeChannels = false; // FEchannels deferred behind an in-flight refresh
     bool   mAuthLoaded = false;        // lazy one-time youtube_auth.json read
     bool   m_pairActive = false;       // a device-flow poll loop is running
     QString m_pairDeviceCode;

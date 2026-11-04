@@ -297,6 +297,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-url-cache COMMAND yt-url-cache-tests)
 
+    # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
+    # before-expiry semantics. No processes, no network.
+    add_executable(yt-auth-gate-tests
+        src/util/tests/YtAuthGateTest.cpp)
+    set_target_properties(yt-auth-gate-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-auth-gate-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-auth-gate-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-auth-gate COMMAND yt-auth-gate-tests)
+
     # InnerTube browse-row parser (issue #28 plan D): pure fixture walk —
     # renderer extraction, text-shape handling, caps, continuation cursors.
     add_executable(yt-browse-parse-tests
