@@ -106,13 +106,17 @@ jobs:
             exit 0
           fi
 
-          echo "Uploading $TARBALL to /tmp/240mp-deploy.tar.gz ..."
+          # Per-run unique path: concurrent deploy runs (force-push chains, dev+feature
+          # in flight together) used to share one /tmp name and clobber each other's
+          # upload mid-stream — corrupted hybrid binaries on the Pi.
+          PI_PATH="/tmp/240mp-deploy-${REV_SHA}.tar.gz"
+          echo "Uploading $TARBALL to $PI_PATH ..."
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
-            "$TARBALL" "$USER@$HOST:/tmp/240mp-deploy.tar.gz"
+            "$TARBALL" "$USER@$HOST:$PI_PATH"
 
           echo "Root-side dance via /usr/local/bin/240mp-ci-deploy (its systemctl reboot kills this ssh) ..."
           rc=0
-          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy /tmp/240mp-deploy.tar.gz" || rc=$?
+          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
           echo "wrapper call returned rc=$rc (connection death = rebooting, as expected)"
 

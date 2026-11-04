@@ -279,7 +279,7 @@ local function draw_menu()
     -- ("start-end:Label:kind;..."); the EDL's skip cuts shrink the virtual
     -- timeline, so positions must subtract every cut that ends at/before them.
     -- Skip -> solid tick at the jump landing; Mark -> dim band over the range.
-    local sb = mp_get_opt("sb-ranges")
+    local sb = mp.get_opt("sb-ranges")
     if sb and total > 0 then
         local items, cuts = {}, {}
         for item in sb:gmatch("[^;]+") do
