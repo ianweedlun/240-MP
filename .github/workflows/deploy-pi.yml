@@ -114,9 +114,16 @@ jobs:
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
             "$TARBALL" "$USER@$HOST:$PI_PATH"
 
+          # Ship the wrapper itself from the repo tree: the Pi's /usr/local/bin
+          # copy was hand-installed (stale). Refresh it right before calling it,
+          # so the fast-path logic deployed with a branch takes effect on that
+          # same deploy.
+          scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            scripts/240mp-ci-deploy.sh "$USER@$HOST:/tmp/wrapper-${REV_SHA}.sh"
+
           echo "Root-side dance via /usr/local/bin/240mp-ci-deploy (its systemctl reboot kills this ssh) ..."
           rc=0
-          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          $SSH "$USER@$HOST" "sudo install -m 755 /tmp/wrapper-${REV_SHA}.sh /usr/local/bin/240mp-ci-deploy && sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
           echo "wrapper call returned rc=$rc (connection death = rebooting, as expected)"
 
