@@ -36,13 +36,15 @@ jobs:
             libdrm-dev \
             libssl-dev \
             libsdl2-dev \
-            libpcsclite-dev
+            libpcsclite-dev \
+            ccache
 
       - name: Configure (with tests)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DAPP_VERSION="${{ github.sha }}"
 
       - name: Build
@@ -115,7 +117,8 @@ jobs:
             libpcsclite-dev \
             libgl1-mesa-dev \
             libxkbcommon-dev \
-            libxcb-cursor0
+            libxcb-cursor0 \
+            ccache
 
       - name: Configure (with tests)
         run: |
@@ -123,6 +126,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
             -DBUILD_TESTS=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DAPP_VERSION="${{ github.sha }}"
 
       - name: Build
