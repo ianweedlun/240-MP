@@ -204,7 +204,13 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     args << QString("--input-ipc-server=%1").arg(m_socketPath)
          << QString("--log-file=%1").arg(m_logFilePath)
          << (hasOscScript ? "--osc=no" : "--osc=yes")
-         << "--osd-level=0";
+         << "--osd-level=0"
+         // mpv 0.40 renamed --stats to --load-stats-overlay and flipped its
+         // default from no to yes: without this the playback-stats overlay
+         // (frame timings, A-V drift, cache state) paints on the CRT and
+         // spams the relayed log with a line per second. Release truth = off;
+         // a lab harness that wants the stats signal passes the flag itself.
+         << "--load-stats-overlay=no";
 
     // 240mp-level basic mpv knobs (see MpvBasicOptions.h): appended as CLI
     // options, so they win over the user's ~/.config/mpv/mpv.conf by mpv's own
