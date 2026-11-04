@@ -67,6 +67,10 @@ jobs:
           # Sanitize branch name for filename (replace / with -)
           BRANCH_SAFE="${BRANCH//\//-}"
           TARBALL_NAME="240-MP-${BRANCH_SAFE}-linux-arm64-${SHORT_SHA}"
+          # Carry the Pi-side CI wrapper inside the tarball: the deploy-pi.yml job is
+          # a workflow_run context with NO repo checkout, so the wrapper must ship as
+          # tarball payload (./scripts/...), never as a local scp path.
+          mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           tar -czf "${TARBALL_NAME}.tar.gz" -C install .
           echo "TARBALL_NAME=$TARBALL_NAME" >> $GITHUB_ENV
 
