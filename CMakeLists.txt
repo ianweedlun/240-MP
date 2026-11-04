@@ -308,6 +308,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-browse-parse COMMAND yt-browse-parse-tests)
 
+    # SponsorBlock -> mpv EDL pure logic (issue #28 plan E): videoUID collision
+    # filter, dead-range guards, merge, %len% escape, virtual-timeline gaps.
+    add_executable(yt-sponsor-edl-tests
+        src/util/tests/YtSponsorEdlTest.cpp)
+    set_target_properties(yt-sponsor-edl-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-sponsor-edl-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-edl-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-edl COMMAND yt-sponsor-edl-tests)
+
 endif()
 
 include(CPack)

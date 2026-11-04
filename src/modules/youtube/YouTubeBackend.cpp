@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QCryptographicHash>
 #include <QProcess>
 #include <QSaveFile>
 #include <QUrlQuery>
@@ -23,6 +24,9 @@
 
 static const char *kSubscriptionsFileName = "youtube_subscriptions.txt";
 static const char *kPlaylistsFileName     = "youtube_playlists.txt";
+// Device-flow tokens carry ~10 min expiry claims; slack guards clock skew
+// and lets callers refresh instead of using a dead bearer.
+constexpr qint64 kAuthSlackS = 120; // seconds
 
 static QString watchUrlFor(const QString &videoId) {
     return QStringLiteral("https://www.youtube.com/watch?v=") + videoId;
@@ -90,12 +94,39 @@ QVariantMap YouTubeBackend::check_subscriptions() {
 // ---------------------------------------------------------------------------
 
 void YouTubeBackend::load_subscriptions_feed(bool forceRefresh) {
+    ensureAuthLoaded();
+    const bool tokenLive = !m_accessToken.isEmpty()
+        && !(m_accessExpiresEpoch > 0
+             && QDateTime::currentMSecsSinceEpoch() / 1000 + kAuthSlackS >= m_accessExpiresEpoch);
+    if (tokenLive) {
+        // The signed-in feed does NOT come from FEsubscriptions: the TV
+        // client's subscription feed is a server-precomputed cache — the
+        // 2026-11-04 live probe showed 28 of 30 sampled channels' latest
+        // uploads entirely absent from its 29-43 unordered tiles while the
+        // official mobile app showed them. Account truth = live union:
+        // one FEchannels roster hop (fresh + real names, probe: 313 tiles)
+        // then wave-capped per-channel RSS (probe: ~110 ms/request from the
+        // Pi; TTL cache below makes repeat opens free).
+        m_feedWantsRoster = true;
+        m_emitFeedWhenDone = true;
+        browsePage(QStringLiteral("subschannels"), QStringLiteral("FEchannels"), 1, QVariantList());
+        return;
+    }
     m_emitFeedWhenDone = true;
     ensureFresh(forceRefresh);
 }
 
 void YouTubeBackend::load_channels(bool forceRefresh) {
     m_emitChannelsWhenDone = true;
+    if (!m_accessToken.isEmpty()) {
+        // Signed-in truth (user rule: InnerTube primary; text files are
+        // legacy fallback): FEchannels returns the whole subscribed-channel
+        // list in ONE page — 313 channelRenderer-free but TV-tiled tiles
+        // (probe-verified live: TILE_CONTENT_TYPE_CHANNEL + contentId +
+        // tileMetadataRenderer.title). No RSS storm, no continuation.
+        browsePage(QStringLiteral("subschannels"), QStringLiteral("FEchannels"), 1, QVariantList());
+        return;
+    }
     ensureFresh(forceRefresh);
 }
 
@@ -132,9 +163,41 @@ void YouTubeBackend::ensureFresh(bool forceRefresh) {
         finishAggregate(); // everything fresh — serve from cache
         return;
     }
-    m_pendingChannels = stale.size();
+    queueRefresh(stale);
+}
+
+void YouTubeBackend::stormFeedFromRoster(const QStringList &ids, bool forceRefresh)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QStringList stale;
+    for (const QString &id : ids) {
+        ChannelEntry &entry = m_channels[id];
+        entry.channelId = id;
+        if (forceRefresh || !entry.feedOk || now - entry.fetchedMs > kCacheTtlMs)
+            stale << id;
+    }
+    if (stale.isEmpty()) {
+        finishAggregate(); // roster already fresh within TTL — serve from cache
+        return;
+    }
+    queueRefresh(stale);
+}
+
+// Wave-capped refresh plumbing (see header comment on kMaxConcurrentFeedFetches).
+void YouTubeBackend::queueRefresh(const QStringList &stale)
+{
     for (const QString &id : stale)
-        refreshChannel(id);
+        m_refreshQueue.enqueue(id);
+    m_pendingChannels = m_refreshQueue.size();
+    pumpRefresh();
+}
+
+void YouTubeBackend::pumpRefresh()
+{
+    while (m_activeRefresh < kMaxConcurrentFeedFetches && !m_refreshQueue.isEmpty()) {
+        ++m_activeRefresh;
+        refreshChannel(m_refreshQueue.dequeue());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +291,12 @@ void YouTubeBackend::refreshChannel(const QString &channelId) {
         }
         // On failure: keep any previously cached videos (stale beats empty);
         // fetchedMs stays old so the next load retries this channel.
-        if (--m_pendingChannels <= 0) {
+        if (m_activeRefresh > 0)
+            --m_activeRefresh;
+        if (m_pendingChannels > 0)
+            --m_pendingChannels; // one completion per queued id (queueRefresh sized it)
+        pumpRefresh(); // release the slot and admit the next wave member
+        if (m_pendingChannels <= 0 && m_refreshQueue.isEmpty()) {
             m_pendingChannels = 0;
             finishAggregate();
         }
@@ -759,6 +827,197 @@ void YouTubeBackend::ensureUrlCacheLoaded()
                         kUrlCacheMaxEntries);
 }
 
+QString YouTubeBackend::sponsorCacheFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_sponsor.json");
+}
+
+void YouTubeBackend::ensureSponsorCacheLoaded()
+{
+    if (m_sponsorCacheLoaded)
+        return;
+    m_sponsorCacheLoaded = true;
+    QFile f(sponsorCacheFilePath());
+    if (f.open(QIODevice::ReadOnly)) {
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
+        if (doc.isArray()) {
+            for (const QJsonValue &e : doc.array()) {
+                const QJsonObject o = e.toObject();
+                const QString vid = o.value(QStringLiteral("videoId")).toString();
+                if (vid.isEmpty())
+                    continue;
+                m_sponsorCache.insert(vid, yt::segmentsFromRows(
+                    o.value(QStringLiteral("segments")).toArray()));
+            }
+        }
+    }
+}
+
+void YouTubeBackend::saveSponsorCache()
+{
+    QJsonArray arr;
+    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it) {
+        QJsonArray rows;
+        for (const yt::Segment &s : it.value()) {
+            QJsonObject o;
+            QJsonArray range;
+            range.append(s.start);
+            range.append(s.end);
+            o.insert(QStringLiteral("category"), s.category);
+            o.insert(QStringLiteral("segmentType"), s.action);
+            o.insert(QStringLiteral("segment"), range);
+            rows.append(o);
+        }
+        QJsonObject e;
+        e.insert(QStringLiteral("videoId"), it.key());
+        e.insert(QStringLiteral("segments"), rows);
+        arr.append(e);
+    }
+    QFile f(sponsorCacheFilePath());
+    if (f.open(QIODevice::WriteOnly))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+// k-anonymous window fetch (Red doctrine): only the first 4 hex chars of the
+// SHA-256 of the videoId leave the device; the response is filtered client-side
+// to the exact videoId. 4xx (prefix unknown = no segments) caches an empty
+// entry; network failures do not, so the next play retries.
+void YouTubeBackend::requestSponsorSegments(const QString &videoId)
+{
+    if (videoId.isEmpty())
+        return;
+    ensureSponsorCacheLoaded();
+    if (m_sponsorCache.contains(videoId)) {
+        emit sponsorReady(videoId);
+        return;
+    }
+    if (m_sponsorFetching.contains(videoId))
+        return;
+    m_sponsorFetching.insert(videoId);
+
+    const QByteArray digest =
+        QCryptographicHash::hash(videoId.toUtf8(), QCryptographicHash::Sha256);
+    const QString prefix = QString::fromLatin1(digest.toHex()).left(4);
+    const QString cats = QStringLiteral(
+        "%5B%22sponsor%22%2C%22selfpromo%22%2C%22intro%22%2C%22outro%22%2C%22inter"
+        "mission%22%2C%22preview%22%2C%22filler%22%2C%22interaction%22%5D");
+    const QString types = QStringLiteral("%5B%22skip%22%2C%22mute%22%2C%22full%22%5D");
+    QUrl url(QStringLiteral("https://sponsor.ajay.app/api/skipSegments/") + prefix
+             + QStringLiteral("?categories=") + cats
+             + QStringLiteral("&actionTypes=") + types);
+    m_sponsorStartMs.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+    qWarning("[Youtube] sponsor start vid=%s", qPrintable(videoId));
+
+    QNetworkReply *reply = m_nam.get(makeRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply, videoId]() {
+        const QNetworkReply::NetworkError err = reply->error();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool clientErr = (status >= 400 && status < 500); // 4xx = no segments for prefix
+        if (err != QNetworkReply::NoError && !clientErr) {
+            qWarning("[Youtube] sponsor transient err=%d vid=%s", int(err), qPrintable(videoId));
+            m_sponsorFetching.remove(videoId);
+            reply->deleteLater();
+            return;
+        }
+        QJsonParseError pe;
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &pe);
+        const QVector<yt::Segment> segs =
+            doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
+                          : QVector<yt::Segment>{};
+        m_sponsorCache.insert(videoId, segs);
+        saveSponsorCache();
+        m_sponsorFetching.remove(videoId);
+        const qint64 start = m_sponsorStartMs.take(videoId);
+        qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
+               qPrintable(videoId), segs.size(),
+               static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
+        emit sponsorReady(videoId);
+        reply->deleteLater();
+    });
+}
+
+// Per-category Off/Mark/Skip: "skip" ranges are cut out of the virtual timeline
+// (both halves identically, so audio stays in sync across every jump); "mark"
+// ranges stay playable but surface their boundaries as OSC chapter titles.
+QVariantMap YouTubeBackend::buildPlaybackEdl(const QString &videoId,
+                                             const QString &resolution,
+                                             const QVariantMap &actions)
+{
+    QVariantMap out;
+    const QString url = cachedPlaybackUrl(videoId, resolution);
+    if (url.isEmpty())
+        return out;
+    const QString audio = cachedPlaybackAudioUrl(videoId, resolution);
+    ensureSponsorCacheLoaded();
+    const QVector<yt::Segment> all = m_sponsorCache.value(videoId);
+    QVector<yt::Segment> skipSegs;
+    QVector<yt::Segment> markSegs;
+    for (const yt::Segment &s : all) {
+        const QString act = actions.value(s.category).toString().toLower();
+        if (act == QStringLiteral("skip"))
+            skipSegs.append(s);
+        else if (act == QStringLiteral("mark"))
+            markSegs.append(s);
+    }
+    static const QHash<QString, QString> labels{
+        {QStringLiteral("sponsor"), QStringLiteral("Sponsor")},
+        {QStringLiteral("selfpromo"), QStringLiteral("Self promo")},
+        {QStringLiteral("intro"), QStringLiteral("Intro")},
+        {QStringLiteral("outro"), QStringLiteral("Outro")},
+        {QStringLiteral("intermission"), QStringLiteral("Intermission")},
+        {QStringLiteral("preview"), QStringLiteral("Preview")},
+        {QStringLiteral("filler"), QStringLiteral("Filler")},
+        {QStringLiteral("interaction"), QStringLiteral("Interaction")}};
+
+    // OSC paints category-colored segment marks from this side-channel
+    // ("start-end:Label:action;" in RAW source seconds; the OSC converts to
+    // virtual time using the skip cuts). EDL itself only carries the cuts.
+    QStringList ranges;
+    const QSet<QString> drop{QStringLiteral("skip"), QStringLiteral("mute")};
+    QVector<QPair<double, double>> cuts;
+    auto collect = [&](const QVector<yt::Segment> &segs, const QString &kind) {
+        QStringList cats;
+        for (const yt::Segment &s : segs)
+            if (!cats.contains(s.category))
+                cats.append(s.category);
+        for (const QString &cat : cats) {
+            QVector<yt::Segment> catSegs;
+            for (const yt::Segment &s : segs)
+                if (s.category == cat)
+                    catSegs.append(s);
+            const auto catMerged = yt::mergeRanges(catSegs, drop);
+            for (const auto &pair : catMerged) {
+                if (kind == QLatin1String("skip"))
+                    cuts.append(pair);
+                ranges << QStringLiteral("%1-%2:%3:%4")
+                              .arg(pair.first, 0, 'f', 1)
+                              .arg(pair.second, 0, 'f', 1)
+                              .arg(labels.value(cat, cat))
+                              .arg(kind);
+            }
+        }
+    };
+    collect(skipSegs, QStringLiteral("skip"));
+    collect(markSegs, QStringLiteral("mark"));
+    std::sort(cuts.begin(), cuts.end(),
+              [](const QPair<double, double> &a, const QPair<double, double> &b) {
+                  return a.first != b.first ? a.first < b.first : a.second < b.second;
+              });
+    QVector<QPair<double, double>> merged;
+    for (const auto &r : cuts) {
+        if (!merged.isEmpty() && r.first <= merged.last().second)
+            merged.last().second = qMax(merged.last().second, r.second);
+        else
+            merged.append(r);
+    }
+    out.insert(QStringLiteral("videoEdl"), yt::buildEdl(url, merged, {}));
+    out.insert(QStringLiteral("audioEdl"),
+               audio.isEmpty() ? QString() : yt::buildEdl(audio, merged, {}));
+    out.insert(QStringLiteral("ranges"), ranges.join(QLatin1Char(';')));
+    return out;
+}
+
 QString YouTubeBackend::cachedUrlField(const QString &videoId,
                                        const QString &resolution,
                                        const QString &field)
@@ -857,6 +1116,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 {
     const QString bin = ytdlp::locate(m_dataRoot);
     if (bin.isEmpty()) {
+        qWarning("[Youtube] resolve fail vid=%s err=no-ytdlp", qPrintable(videoId));
         m_resolveKeys.remove(key);
         if (m_warmChainKey == key) {
             m_warmChainKey.clear();
@@ -866,6 +1126,8 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
     }
 
     auto *proc = new QProcess(this);
+    m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
+    qWarning("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
     const QStringList args{
         QStringLiteral("-g"),
         QStringLiteral("--no-playlist"),
@@ -887,6 +1149,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             if (!u.isEmpty())
                 urls << u;
         }
+        bool stored = false;
         if (!urls.isEmpty()) {
             const QString videoUrl = urls.value(0);
             const QString audioUrl = urls.value(1); // empty for combined formats
@@ -899,8 +1162,14 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             if (expire > QDateTime::currentMSecsSinceEpoch() / 1000) {
                 storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
                 emit playbackUrlReady(videoId);
+                stored = true;
             }
         }
+        const qint64 startedMs = m_resolveStartMs.take(key);
+        qWarning("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
+               qPrintable(videoId),
+               static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - startedMs),
+               urls.size(), stored ? 1 : 0);
         finishUrlResolve(key);
         proc->deleteLater();
     });
@@ -908,6 +1177,8 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             [this, proc, key](QProcess::ProcessError processError) {
                 if (processError == QProcess::FailedToStart) {
                     // launch failure: no finished signal, so unwind bookkeeping here
+                    qWarning("[Youtube] resolve fail err=failed-to-start");
+                    m_resolveStartMs.remove(key);
                     finishUrlResolve(key);
                     proc->deleteLater();
                 }
@@ -938,6 +1209,7 @@ void YouTubeBackend::pumpWarmQueue()
             continue; // someone else warmed it meanwhile — next entry
         m_warmChainKey = key;
         m_resolveKeys.insert(key);
+        qWarning("[Youtube] warm take vid=%s", qPrintable(videoId));
         launchUrlResolve(videoId, resolution, fmt, key);
         return;
     }
@@ -965,6 +1237,12 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
         m_warmQueue << token;
         ++queued;
     }
+    if (queued > 0)
+        qWarning("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
+    // Pre-fetch segment windows for the whole list page so the first pick
+    // already has them when the Player launches (~300 ms single GET each).
+    for (const QString &id : videoIds)
+        requestSponsorSegments(id);
     if (m_warmChainKey.isEmpty())
         pumpWarmQueue();
 }
@@ -1018,7 +1296,7 @@ static const QString kDeviceCodeEndpoint =
 static const QString kTokenEndpoint =
     QStringLiteral("https://www.youtube.com/o/oauth2/token");
 static constexpr int kPairPollMax = 120;          // 10 min at 5 s polls
-static constexpr int kAuthSlackS = 120;           // refresh before expiry
+// (kAuthSlackS hoisted to file scope above — refresh-before-expiry slack)
 static constexpr int kBrowseMaxPages = 5;         // continuation cap
 static constexpr int kBrowseMaxRows = 200;        // hard display cap
 
@@ -1352,6 +1630,52 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
     const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
     reply->deleteLater();
     const QJsonObject root = doc.object();
+    if (kind == QStringLiteral("subschannels")) {
+        // FEchannels: whole subscribed-channel list, one page (probe: 313
+        // tiles, no continuation). Names land in m_channels so buildChannelList
+        // shows real names; video lists stay lazy per-channel (RSS on open).
+        acc += ytui::extractChannelSyncRows(root);
+        const QString next = ytui::continuationToken(root);
+        qWarning("[Youtube] channel-sync page=%d rows=%lld http_ok=%d continued=%d",
+                 page, static_cast<long long>(acc.size()), netError ? 0 : 1,
+                 next.isEmpty() ? 0 : 1);
+        if (acc.isEmpty() && !next.isEmpty() && page < kBrowseMaxPages) {
+            browsePage(kind, next, page + 1, acc);
+            return;
+        }
+        QStringList ids;
+        for (const QVariant &row : acc) {
+            const QVariantMap r = row.toMap();
+            const QString id = r.value(QStringLiteral("channelId")).toString();
+            if (id.isEmpty() || ids.contains(id))
+                continue;
+            ids << id;
+            ChannelEntry &e = m_channels[id];
+            e.channelId = id;
+            if (!r.value(QStringLiteral("title")).toString().isEmpty())
+                e.channelName = r.value(QStringLiteral("title")).toString();
+        }
+        if (!ids.isEmpty())
+            m_channelOrder = ids;
+        else if (m_channelOrder.isEmpty())
+            qWarning("[Youtube] channel-sync yielded no ids (parse shape drift?)");
+        if (m_feedWantsRoster) {
+            // Signed-in Subscriptions opened: the roster just landed fresh —
+            // kick the RSS union off it (emit lands via finishAggregate).
+            m_feedWantsRoster = false;
+            const QStringList roster = ids.isEmpty() ? m_channelOrder : ids;
+            if (!roster.isEmpty())
+                stormFeedFromRoster(roster, /*forceRefresh=*/false);
+            else
+                ensureFresh(true); // roster dead-end — legacy file path retries
+            return;
+        }
+        if (m_emitChannelsWhenDone) {
+            m_emitChannelsWhenDone = false;
+            emit channelsLoaded(buildChannelList());
+        }
+        return;
+    }
     if (kind == QStringLiteral("watchlater") && acc.isEmpty() && page == 1) {
         // Discovery hop: the account's watch-later playlist id lives on the
         // signed-in my-youtube page next to its title. No stable browseId

@@ -9,7 +9,9 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QJsonObject>
+#include <QQueue>
 #include <QNetworkAccessManager>
+#include "../../util/YtSponsorEdl.h"
 
 // Backend for the YouTube module (V1 "feed" approach — no auth).
 //
@@ -88,6 +90,17 @@ public:
     Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
                                       const QString &resolution);
 
+    // SponsorBlock: ask for the k-anonymous segment window for a video (cached
+    // hits re-emit sponsorReady synchronously). Also fired for every warmed row
+    // so list pages arrive with segments pre-cached before the first pick.
+    Q_INVOKABLE void requestSponsorSegments(const QString &videoId);
+    // Wrap the fresh cached URL pair in an edl:// virtual timeline honoring the
+    // per-category actions ({category: "off"|"mark"|"skip"}). Returns {videoEdl,
+    // audioEdl} (empty string = use plain URL); empty map = no fresh pair yet.
+    Q_INVOKABLE QVariantMap buildPlaybackEdl(const QString &videoId,
+                                             const QString &resolution,
+                                             const QVariantMap &actions);
+
     // Plan D: device-flow sign-in (TV pairing) + account lists via InnerTube.
     // The public youtube-tv client pair (id/secret + InnerTube key) is taken
     // verbatim from the Kodi "youtube-tv" client of the plugin.video.youtube
@@ -161,8 +174,22 @@ signals:
     // Signed-in account playlists tab: rows = {playlistId, title, videoCountText}
     // in YouTube tab order (recent activity first, never re-sorted).
     void accountPlaylistsLoaded(const QVariant &playlists);
+    // SponsorBlock segment window finished for this video (fetch or cache hit);
+    // the Player gates its EDL-bearing launch on this + playbackUrlReady.
+    void sponsorReady(const QString &videoId);
 
 private:
+    // SponsorBlock state: normalized segments per videoId (an empty entry is a
+    // confirmed "no segments" and suppresses re-fetch; transient failures stay
+    // out of the map so the next play retries), in-flight set, lazy file cache.
+    QHash<QString, QVector<yt::Segment>> m_sponsorCache;
+    QSet<QString> m_sponsorFetching;
+    QHash<QString, qint64> m_sponsorStartMs;
+    bool m_sponsorCacheLoaded = false;
+    QString sponsorCacheFilePath() const;
+    void ensureSponsorCacheLoaded();
+    void saveSponsorCache();
+
     struct ChannelEntry {
         QString      channelId;
         QString      channelName;      // from the RSS feed <title>
@@ -254,6 +281,7 @@ private:
     QStringList         m_warmQueue;    // "videoId<US>resolution" tokens
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
+    QHash<QString, qint64> m_resolveStartMs; // key -> launch ms, for the journal elapsed figure
     QString              m_pendingListKind; // account list re-entered after a refresh swap
     QString       m_pendingPlaylistVideos;  // playlist-videos id re-entered after refresh
     QString       m_accountVideosEmitId;    // id echoed back in playlistVideosLoaded
@@ -299,4 +327,17 @@ private:
     static constexpr int    kYtdlResolveTimeoutMs = 30000;
     static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
     static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
+
+    // Wave-capped RSS refresh queue: the signed-in feed union touches every
+    // subscribed channel (~311 RSS GETs); issuing them all at once blows up
+    // the Pi's sockets. queueRefresh records the outstanding total, pumpRefresh
+    // keeps active fetches under kMaxConcurrentFeedFetches, and each
+    // completion admits the next in line.
+    QQueue<QString> m_refreshQueue;
+    int             m_activeRefresh = 0;
+    bool            m_feedWantsRoster = false; // FEchannels roster hop feeds the union
+    void            queueRefresh(const QStringList &stale);
+    void            pumpRefresh();
+    void            stormFeedFromRoster(const QStringList &ids, bool forceRefresh);
+    static constexpr int kMaxConcurrentFeedFetches = 32;
 };

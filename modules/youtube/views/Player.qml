@@ -40,10 +40,41 @@ FocusScope {
         // with --ytdl=no and skips ytdl_hook's re-resolve entirely. The audio
         // half rides --audio-file= (ytdl_hook's own mechanism for split
         // formats) so first play is exactly as fast as resume.
-        const playUrl = directPlayUrl !== "" ? directPlayUrl : videoUrl
+        // SponsorBlock: both halves get the SAME edl:// cut ranges so the audio
+        // stays in sync across every jump; "mark" categories add titled
+        // boundaries (OSC chapters) without cutting. Empty edl strings = plain
+        // URLs (nothing active for this video).
+        var playUrl = directPlayUrl
         var args = ytdlArgs.slice()
-        if (directPlayUrl !== "" && directAudioUrl !== "")
-            args.push("--audio-file=" + directAudioUrl)
+        var oscRanges = ""
+        if (playUrl !== "") {
+            const res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+            const cats = ["sponsor", "selfpromo", "intro", "outro", "intermission", "preview", "filler", "interaction"]
+            var acts = ({})
+            for (var ci = 0; ci < cats.length; ++ci) {
+                // Red-parity defaults while the key is untouched: sponsor and
+                // self-promo skip silently, everything else stays off.
+                var dflt = (cats[ci] === "sponsor" || cats[ci] === "selfpromo") ? "skip" : "off"
+                acts[cats[ci]] = (appCore.get_setting(moduleRoot.moduleId, "sponsor_" + cats[ci]) || dflt).toLowerCase()
+            }
+            const edl = youtubeBackend.buildPlaybackEdl(playerRoot.videoId, res, acts)
+            if (edl.videoEdl !== undefined && edl.videoEdl !== "")
+                playUrl = edl.videoEdl
+            if (directAudioUrl !== "")
+                args.push("--audio-file=" + (edl.audioEdl !== undefined && edl.audioEdl !== "" ? edl.audioEdl : directAudioUrl))
+            if (edl.ranges !== undefined && edl.ranges !== "")
+                oscRanges = edl.ranges
+            // OSC shows this media title instead of the (very long) edl:// URL.
+            var t = (item && item.title) ? item.title : "YouTube"
+            if (t.length > 36)
+                t = t.substring(0, 33) + "..."
+            args.push("--title=" + t)
+        } else {
+            playUrl = videoUrl
+        }
+        // OSC segment marks get their data out-of-band: raw source ranges the
+        // script converts to the cut virtual timeline itself (empty clears).
+        mpvController.setOscRanges(oscRanges)
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
@@ -58,6 +89,10 @@ FocusScope {
     // for playbackUrlReady rather than pay ytdl_hook's re-resolve.
     function preparePlayback() {
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+        // Segment windows: cached hit re-emits sponsorReady synchronously; a
+        // cold window is one ~300 ms GET, usually beating the yt-dlp resolve.
+        waitingSponsor = true
+        youtubeBackend.requestSponsorSegments(videoId)
         const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
         const directAudio = youtubeBackend.cachedPlaybackAudioUrl(videoId, resolution)
         // single-stream cache entries (live broadcasts, combined formats) are
@@ -67,12 +102,14 @@ FocusScope {
             directPlayUrl = direct
             directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
+            appCore.note_state("yt-play", "vid=" + videoId + " path=warm res=" + resolution)
             youtubeBackend.resolvePlayback(videoId, resolution)
             return true
         }
         directPlayUrl = ""
         directAudioUrl = ""
         ytdlArgs = []
+        appCore.note_state("yt-play", "vid=" + videoId + " path=cold res=" + resolution)
         youtubeBackend.resolvePlayback(videoId, resolution)
         return false
     }
@@ -101,6 +138,8 @@ FocusScope {
     // past it we take the ytdl path as the always-works fallback.
     property bool   waitingForResolve: false
     property int    pendingPlayStartMs: 0
+    property bool   waitingSponsor: false
+    property bool   launchAfterSponsor: false
 
     Timer {
         id: resolveWaitTimer
@@ -110,8 +149,9 @@ FocusScope {
             if (!playerRoot.waitingForResolve)
                 return
             playerRoot.waitingForResolve = false
-            // Resolve failed or timed out — fall back to ytdl_hook, which has
-            // its own error surfacing (PLAYBACK FAILED) if the video is bad.
+            resolveWaitTimer.stop()
+            appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=15s reason=timeout")
+            playerRoot.waitingSponsor = false
             var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
             playerRoot.play(playerRoot.pendingPlayStartMs)
@@ -131,13 +171,35 @@ FocusScope {
             const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
             const single = youtubeBackend.cachedPlaybackSingle(playerRoot.videoId, resolution)
             if (direct !== "" && (directAudio !== "" || single)) {
+                appCore.note_state("yt-resolve", "vid=" + playerRoot.videoId + " ok pair-ready")
                 playerRoot.directPlayUrl = direct
                 playerRoot.directAudioUrl = directAudio
                 playerRoot.ytdlArgs = ["--ytdl=no"]
+                if (playerRoot.waitingSponsor) {
+                    // hold until sponsorReady arrives so the launch can carry
+                    // the EDL (transient fetch failure is covered by the wait
+                    // timer, which clears waitingSponsor before falling back).
+                    playerRoot.launchAfterSponsor = true
+                    return
+                }
                 playerRoot.play(playerRoot.pendingPlayStartMs)
             }
             // If the pair somehow isn't there, let the wait timer's ytdl
             // fallback handle it rather than racing a second resolve.
+        }
+    }
+
+    Connections {
+        target: youtubeBackend
+        function onSponsorReady(readySponsorId) {
+            if (readySponsorId !== playerRoot.videoId)
+                return
+            playerRoot.waitingSponsor = false
+            appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " ready")
+            if (playerRoot.launchAfterSponsor) {
+                playerRoot.launchAfterSponsor = false
+                playerRoot.play(playerRoot.pendingPlayStartMs)
+            }
         }
     }
 

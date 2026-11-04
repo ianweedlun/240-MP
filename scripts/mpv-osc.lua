@@ -34,6 +34,22 @@ local A_OPAQUE = "&H00&"
 local A_TRANS  = "&HFF&"
 local A_DIM    = "&H99&"  -- 40% opacity for unfocused seek fill
 
+-- SponsorBlock default palette (hex table from ajayyy/SponsorBlock src/config.ts
+-- barTypes, GPL-3.0 prior art; ASS colors are BGR so the RRGGBB hexes below are
+-- byte-reversed). "Intermission" has no barTypes entry upstream — it inherits
+-- preview's blue, matching SponsorBlock's own category page grouping.
+local SB_TICK = {
+    Sponsor      = "&H00D400&",  -- #00d400
+    ["Self promo"] = "&H00FFFF&", -- #ffff00
+    Intro        = "&HFFFF00&",  -- #00ffff
+    Outro        = "&HED0202&",  -- #0202ed
+    Intermission = "&HD68F00&",  -- #008fd6 (inherits preview)
+    Preview      = "&HD68F00&",  -- #008fd6
+    Filler       = "&HFF0073&",  -- #7300ff
+    Interaction  = "&HFF00CC&",  -- #cc00ff
+}
+local SB_TICK_W = 3  -- tick width in OSD px
+
 local function get_audio_str()
     -- Transcoded stream: read track info passed explicitly from QML
     local transcode_audio = mp.get_opt("transcode-audio")
@@ -257,6 +273,60 @@ local function draw_menu()
     if fill_w > 0 then
         draw_rect(ass, lm + inset, bar_y + inset, fill_w, bar_h - 2 * inset,
                   C_WHITE, fill_alpha, 0, C_WHITE)
+    end
+
+    -- SponsorBlock marks. Ranges arrive via script-opts in RAW source seconds
+    -- ("start-end:Label:kind;..."); the EDL's skip cuts shrink the virtual
+    -- timeline, so positions must subtract every cut that ends at/before them.
+    -- Skip -> solid tick at the jump landing; Mark -> dim band over the range.
+    local sb = mp.get_opt("sb-ranges")
+    if sb and total > 0 then
+        local items, cuts = {}, {}
+        for item in sb:gmatch("[^;]+") do
+            local a, b, label, kind =
+                item:match("^([%d%.]+)%-([%d%.]+):([^:]+):(%a+)$")
+            if a then
+                table.insert(items, { a = tonumber(a), b = tonumber(b),
+                                      label = label, kind = kind })
+                if kind == "skip" then
+                    table.insert(cuts, { s = tonumber(a), e = tonumber(b) })
+                end
+            end
+        end
+        table.sort(cuts, function(x, y) return x.s < y.s end)
+        local function shift_before(x)
+            local sh = 0
+            for _, cut in ipairs(cuts) do
+                if cut.e <= x + 0.0001 then
+                    sh = sh + (cut.e - cut.s)
+                end
+            end
+            return sh
+        end
+        for _, it in ipairs(items) do
+            local col = SB_TICK[it.label]
+            if col then
+                if it.kind == "skip" then
+                    local vx = it.b - shift_before(it.b)
+                    if vx >= 0 and vx <= total then
+                        local tx = lm + inset + math.floor(inner_w * (vx / total))
+                        draw_rect(ass, tx, bar_y + inset, SB_TICK_W, bar_h - 2 * inset,
+                                  col, A_OPAQUE, 0, col)
+                    end
+                else
+                    local vs = it.a - shift_before(it.a)
+                    local ve = it.b - shift_before(it.b)
+                    if ve > vs and vs < total and ve > 0 then
+                        vs = math.max(0, vs)
+                        ve = math.min(total, ve)
+                        local tx = lm + inset + math.floor(inner_w * (vs / total))
+                        local tw = math.max(2, math.floor(inner_w * ((ve - vs) / total)))
+                        draw_rect(ass, tx, bar_y + inset, tw, bar_h - 2 * inset,
+                                  col, A_DIM, 0, col)
+                    end
+                end
+            end
+        end
     end
 
     -- ── Row 3: Buttons ────────────────────────────────────────────

@@ -88,6 +88,16 @@ FocusScope {
     // picking a row plays via the direct-URL path at the mpv-init floor
     // instead of paying a cold resolve. Already fresh/in-flight rows are skipped
     // backend-side; calling here is cheap and idempotent.
+    // Journal gate for list surfaces (issue #28): every rendered list states its
+    // source path + row count in /tmp/240mp_state.log so a remote run proves
+    // account-vs-file paths without screenshots.
+    function noteRows(path, count) {
+        if (!appCore.telemetryEnabled())
+            return
+        appCore.note_state("yt-rows", "view=" + mode + " path=" + path + " rows=" + count
+            + " shorts=" + (appCore.get_setting(moduleRoot.moduleId, "display_shorts") === false ? "off" : "on"))
+    }
+
     function warmUpItems() {
         var ids = []
         for (var i = 0; i < items.length && ids.length < 12; ++i) {
@@ -123,12 +133,11 @@ FocusScope {
             isLoading = true
             errorMessage = ""
             if (mode === "feed") {
-                if (youtubeBackend.check_signin().signedIn === true) {
-                    pendingAccountLoad = true
-                    youtubeBackend.loadAccountList("feed")
-                } else {
-                    youtubeBackend.load_subscriptions_feed()
-                }
+                // Signed in or not, one loader: when signed in, the backend
+                // now builds the feed from a live FEchannels roster + wave-capped
+                // RSS union — FEsubscriptions on the TV client is a server-precomputed
+                // cache (probe: 28/30 newest uploads missing, tiles out of order).
+                youtubeBackend.load_subscriptions_feed()
             } else if (mode === "playlist") {
                 // Signed in: account browse (fast, session-token truth); the
                 // yt-dlp file path stays for signed-out users and as the
@@ -153,6 +162,9 @@ FocusScope {
             if (itemsRoot.mode !== "feed")
                 return
             itemsRoot.isLoading = false
+            // signed-in loads now ride the roster+RSS union (backend chose it);
+            // signed-out remains the legacy subscription-file path.
+            itemsRoot.noteRows(youtubeBackend.check_signin().signedIn === true ? "union" : "file", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -162,6 +174,7 @@ FocusScope {
             if (itemsRoot.mode !== "channel" || loadedChannelId !== itemsRoot.channelId)
                 return
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("file", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -170,6 +183,7 @@ FocusScope {
         function onPlaylistVideosLoaded(loadedPlaylistId, videos) {
             if (itemsRoot.mode !== "playlist" || loadedPlaylistId !== itemsRoot.playlistId)
                 return
+            itemsRoot.noteRows(itemsRoot.pendingAccountLoad ? "account" : "file", videos.length)
             itemsRoot.pendingAccountLoad = false // shared signal: account path or file path
             itemsRoot.isLoading = false
             itemsRoot.items = itemsRoot.filterShorts(videos)
@@ -182,6 +196,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", videos.length)
             itemsRoot.items = itemsRoot.filterShorts(videos)
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -192,6 +207,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", (videos || []).length)
             itemsRoot.items = videos || []
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -202,6 +218,7 @@ FocusScope {
                 return
             itemsRoot.pendingAccountLoad = false
             itemsRoot.isLoading = false
+            itemsRoot.noteRows("account", (videos || []).length)
             itemsRoot.items = videos || []
             itemsRoot.restoreListIndex()
             itemsRoot.warmUpItems()
@@ -215,6 +232,7 @@ FocusScope {
                 if (itemsRoot.mode === "history") {
                     itemsRoot.isLoading = false
                     itemsRoot.items = youtubeBackend.getHistory()
+                    itemsRoot.noteRows("file-authfallback", itemsRoot.items.length)
                 } else if (itemsRoot.mode === "watchlater") {
                     itemsRoot.isLoading = false
                     itemsRoot.items = youtubeBackend.getWatchLater()

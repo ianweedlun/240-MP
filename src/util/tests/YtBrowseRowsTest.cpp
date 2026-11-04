@@ -150,6 +150,8 @@ private slots:
     void playlistRowsDesktopShelf();
     void playlistRowsTvTiles();
     void accountPlaylistsFilterKeepsPlAndLl();
+    void channelSyncTvTilesOnlyChannels();
+    void channelSyncWebRendererAndParamsId();
     void thumbnailUrlTilesWithoutContentId();
 };
 
@@ -559,6 +561,94 @@ void YtBrowseRowsTest::thumbnailUrlTilesWithoutContentId()
     const QVariantMap row = rows.at(0).toMap();
     QCOMPARE(row.value(QStringLiteral("videoId")), QStringLiteral("dQw4w9WgXcQ"));
     QCOMPARE(row.value(QStringLiteral("title")), QStringLiteral("Real playlist video"));
+}
+
+void YtBrowseRowsTest::channelSyncTvTilesOnlyChannels()
+{
+    // FEchannels page shape (probe-verified on the Pi: 313 tiles, every one
+    // TILE_CONTENT_TYPE_CHANNEL with contentId + tileMetadataRenderer.title).
+    // Channel tiles are rows; video/playlist tiles sharing the shape are not.
+    auto channelTile = [](const QString &id, const QString &title) {
+        QJsonObject titleObj;
+        titleObj.insert(QStringLiteral("simpleText"), title);
+        QJsonObject metaInner;
+        metaInner.insert(QStringLiteral("title"), titleObj);
+        QJsonObject metaWrap;
+        metaWrap.insert(QStringLiteral("tileMetadataRenderer"), metaInner);
+        QJsonObject tile;
+        tile.insert(QStringLiteral("contentType"), QStringLiteral("TILE_CONTENT_TYPE_CHANNEL"));
+        tile.insert(QStringLiteral("contentId"), id);
+        tile.insert(QStringLiteral("metadata"), metaWrap);
+        QJsonObject wrap;
+        wrap.insert(QStringLiteral("tileRenderer"), tile);
+        return wrap;
+    };
+    QJsonArray items;
+    items.append(channelTile(QStringLiteral("UCkkSTvV01g8TJ9P2kQ"), QStringLiteral("/noclip")));
+    items.append(channelTile(QStringLiteral("UCn8Z-M56rpfjt1X0oJyQ"), QStringLiteral("MattKC")));
+    // video tile must be ignored
+    QJsonObject vTile;
+    vTile.insert(QStringLiteral("contentType"), QStringLiteral("TILE_CONTENT_TYPE_VIDEO"));
+    vTile.insert(QStringLiteral("contentId"), QStringLiteral("dQw4w9WgXcQ"));
+    QJsonObject vWrap;
+    vWrap.insert(QStringLiteral("tileRenderer"), vTile);
+    items.append(vWrap);
+    const QJsonObject root = sectionOf(items);
+
+    const QVariantList rows = ytui::extractChannelSyncRows(root);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows[0].toMap().value(QStringLiteral("channelId")), QStringLiteral("UCkkSTvV01g8TJ9P2kQ"));
+    QCOMPARE(rows[0].toMap().value(QStringLiteral("title")), QStringLiteral("/noclip"));
+    QCOMPARE(rows[1].toMap().value(QStringLiteral("title")), QStringLiteral("MattKC"));
+}
+
+void YtBrowseRowsTest::channelSyncWebRendererAndParamsId()
+{
+    // Web client shape: channelRenderer with channelId directly...
+    QJsonObject directTitle;
+    directTitle.insert(QStringLiteral("simpleText"), QStringLiteral("Dude Perfect"));
+    QJsonObject direct;
+    direct.insert(QStringLiteral("channelId"), QStringLiteral("UCqTVfT5xTF_dYdZfVYVHLux"));
+    direct.insert(QStringLiteral("title"), directTitle);
+    QJsonObject directWrap;
+    directWrap.insert(QStringLiteral("channelRenderer"), direct);
+
+    // ...and the params fallback: browseEndpoint params = protobuf then base64;
+    // the UC id is raw ASCII inside. Build the exact proto a channel endpoint
+    // carries: string field 0x12 of length 24.
+    QByteArray proto;
+    proto.append('\x12');
+    proto.append('\x18'); // 24 decimal
+    proto += QStringLiteral("UCmQx7xwYH0oXvQ").leftJustified(24, QLatin1Char('x')).toUtf8();
+    const QString params = QString::fromLatin1(proto.toBase64().constData());
+    QJsonObject ep;
+    ep.insert(QStringLiteral("params"), params);
+    QJsonObject epWrap;
+    epWrap.insert(QStringLiteral("browseEndpoint"), ep);
+    QJsonObject viaParams;
+    viaParams.insert(QStringLiteral("title"), epWrap); // wrong slot on purpose: real title below
+    QJsonObject titleObj;
+    titleObj.insert(QStringLiteral("runs"), [params]() { QJsonObject r; r.insert(QStringLiteral("text"), QStringLiteral("Fallback Channel")); QJsonArray a; a.append(r); return a; }());
+    viaParams.insert(QStringLiteral("title"), titleObj);
+    QJsonObject pWrap;
+    pWrap.insert(QStringLiteral("browseEndpoint"), ep);
+    viaParams.insert(QStringLiteral("channelRenderer"), QJsonObject()); // sentinel, overwritten below
+    QJsonObject chObj;
+    chObj.insert(QStringLiteral("title"), titleObj);
+    chObj.insert(QStringLiteral("browseEndpoint"), ep);
+    QJsonObject chWrap;
+    chWrap.insert(QStringLiteral("channelRenderer"), chObj);
+
+    QJsonArray items;
+    items.append(directWrap);
+    items.append(chWrap);
+    const QJsonObject root = sectionOf(items);
+
+    const QVariantList rows = ytui::extractChannelSyncRows(root);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows[0].toMap().value(QStringLiteral("channelId")), QStringLiteral("UCqTVfT5xTF_dYdZfVYVHLux"));
+    QCOMPARE(rows[1].toMap().value(QStringLiteral("title")), QStringLiteral("Fallback Channel"));
+    QVERIFY(rows[1].toMap().value(QStringLiteral("channelId")).toString().startsWith(QStringLiteral("UCmQx7xwYH0oXvQ")));
 }
 
 QTEST_MAIN(YtBrowseRowsTest)
