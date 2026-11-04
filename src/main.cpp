@@ -12,6 +12,8 @@
 #include <QTimer>
 #include <locale.h>
 #include <csignal>
+#include <thread>
+#include <QThread>
 
 #include "AppCore.h"
 #include "modules/local_files/LocalFilesBackend.h"
@@ -233,6 +235,28 @@ int main(int argc, char *argv[]) {
 
     // Screenshot debug capture grabs through this window (see AppCore::captureScreenshot).
     appCore.setQuickWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().first()));
+
+    // Auto-capture debug mode (#43 beta accelerators): MP240_AUTOCAP_S=<secs>
+    // (>=5) snapshots every N seconds on a side thread — continuous visual QA
+    // while the agent drives, without manual Tab presses. Debug-only: readback
+    // races the render loop on EGLFS (accepted for debug captures), and the
+    // frame during mpv video playback is near-black (known framebuffer limit).
+    if (const char *ac = std::getenv("MP240_AUTOCAP_S")) {
+        const int n = std::atoi(ac);
+        if (n >= 5) {
+            QQuickWindow *capWin = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+            if (capWin) {
+                std::thread capLoop([n, &appCore] {
+                    for (;;) {
+                        std::this_thread::sleep_for(std::chrono::seconds(n));
+                        (void)appCore.takeScreenshot();
+                    }
+                });
+                capLoop.detach();
+                qInfo("[main] auto-capture every %d s (MP240_AUTOCAP_S)", n);
+            }
+        }
+    }
 
 #ifdef Q_OS_MAC
     if (QWindow *win = qobject_cast<QWindow *>(engine.rootObjects().first())) {
