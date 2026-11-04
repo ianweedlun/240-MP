@@ -36,7 +36,15 @@ systemctl start 240mp-terminal.service
 sleep 2
 
 # Extract (FHS tarball → /opt/240mp), re-own, clean up.
+# QML-only fast path (2026-11-03, #43): if the tarball binary md5 equals the
+# installed one, only share/ assets changed -> no reboot; restart the app via
+# the VT sequence (start 240mp, free the terminal getty). User-sanctioned 100%.
+OLD_MD5=$(md5sum "$INSTALL_DIR/bin/240mp" 2>/dev/null | awk '{print $1}' || echo none)
+NEW_MD5=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp 2>/dev/null | md5sum | awk '{print $1}')
+ASSETS_ONLY=0
+[ "$OLD_MD5" = "$NEW_MD5" ] && [ "$OLD_MD5" != "none" ] && ASSETS_ONLY=1
 tar -xzf "$TARBALL" --strip-components=3 -C "$INSTALL_DIR"
+
 chown -R "${OWNER}:" "$INSTALL_DIR"
 rm -f "$TARBALL"
 
@@ -44,5 +52,13 @@ rm -f "$TARBALL"
 printf '[Service]\nExecStopPost=+/usr/local/bin/240mp-stop\n' > /etc/systemd/system/240mp.service.d/override.conf
 systemctl daemon-reload
 
-# Reboot so the new binary starts (never restart the service directly).
+# Start the app: reboot for a new binary; for assets-only, restart via VT swap
+# (getty currently holds the VT from the stop-phase above).
+if [ "$ASSETS_ONLY" = "1" ]; then
+    echo "ASSETS-ONLY deploy: binary md5 $NEW_MD5 unchanged — no reboot, VT restart."
+    systemctl stop 240mp-terminal.service 2>/dev/null || true
+    sleep 1
+    systemctl start 240mp.service
+    exit 0
+fi
 systemctl reboot
