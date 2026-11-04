@@ -74,7 +74,7 @@ FocusScope {
         }
         // OSC segment marks get their data out-of-band: raw source ranges the
         // script converts to the cut virtual timeline itself (empty clears).
-        mpvController.set_osc_ranges(oscRanges)
+        mpvController.setOscRanges(oscRanges)
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
