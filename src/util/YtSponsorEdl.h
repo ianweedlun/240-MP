@@ -98,7 +98,14 @@ inline QVector<QPair<double, double>> mergeRanges(const QVector<Segment> &segs,
     return out;
 }
 
-// EDL values containing , ; \n or ! need the %<len>%<value> form.
+// mpv 0.40 requires the %<len>% prefix on EVERY EDL file field (even a comma-free
+// https:// URL fails "Missing filename in segment" unescaped), but plain form is
+// fine for short option values like titles. Always escape files; escape other
+// values only when they carry , ; \n or !.
+inline QString edlFile(const QString &v)
+{
+    return QStringLiteral("%") + QString::number(v.size()) + QStringLiteral("%") + v;
+}
 inline QString edlValue(const QString &v)
 {
     for (const QChar &c : v) {
@@ -171,7 +178,7 @@ inline QString buildEdl(const QString &url,
             return;
         if (!body.isEmpty())
             body += u';';
-        body += edlValue(url);
+        body += edlFile(url);
         const bool hasStart = a > 1e-9;
         if (open) {
             if (hasStart)

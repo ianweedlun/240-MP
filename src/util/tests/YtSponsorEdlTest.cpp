@@ -97,6 +97,10 @@ void YtSponsorEdlTest::edlValueEscapeRoundtrip()
              QStringLiteral("https://x/play?v=1&a=b&sig=c%2Fd"));
     // Comma in a title forces the %<len>%<value> form.
     QCOMPARE(yt::edlValue(QStringLiteral("a,b")), QStringLiteral("%3%a,b"));
+    // EDL FILE fields always carry the %<len>% prefix (mpv 0.40 refuses unescaped
+    // https:// filenames outright).
+    QCOMPARE(yt::edlFile(QStringLiteral("https://x/play?v=1")),
+             QStringLiteral("%18%https://x/play?v=1"));
 }
 
 void YtSponsorEdlTest::buildEdlSkipOnlyComputesVirtualGaps()
@@ -107,10 +111,11 @@ void YtSponsorEdlTest::buildEdlSkipOnlyComputesVirtualGaps()
     skip.append(QPair<double, double>(20.0, 25.0));
     const QString edl = yt::buildEdl(u, skip, {});
     // play 0-5, jump to 15 for 5s (omitting 5-15 and 20-25), then rest open.
-    QCOMPARE(edl, QStringLiteral("edl://!no_chapters;%1,0,5;%1,15,5;%1,25").arg(u).arg(u).arg(u));
+    const QString e = QStringLiteral("%%1%").arg(u.size()) + u;
+    QCOMPARE(edl, QStringLiteral("edl://!no_chapters;") + e + ",0,5;" + e + ",15,5;" + e + ",25");
     // Skip from t=0: only the open tail remains.
     const QString headSkip = yt::buildEdl(u, {QPair<double, double>(0.0, 10.0)}, {});
-    QCOMPARE(headSkip, QStringLiteral("edl://!no_chapters;%1,10").arg(u));
+    QCOMPARE(headSkip, QStringLiteral("edl://!no_chapters;") + e + ",10");
 }
 
 void YtSponsorEdlTest::buildEdlMarkBoundariesCarryTitles()
@@ -120,7 +125,8 @@ void YtSponsorEdlTest::buildEdlMarkBoundariesCarryTitles()
     marks.append({QStringLiteral("sponsor"), QStringLiteral("skip"), 10.0, 20.0});
     const QString edl = yt::buildEdl(u, {}, marks);
     // No content cut; boundary cuts make the 10-20 segment titled for OSC chapters.
-    QCOMPARE(edl, QStringLiteral("edl://%1,0,10;%1,10,10,title=sponsor;%1,20").arg(u).arg(u).arg(u));
+    const QString e = QStringLiteral("%%1%").arg(u.size()) + u;
+    QCOMPARE(edl, QStringLiteral("edl://") + e + ",0,10;" + e + ",10,10,title=sponsor;" + e + ",20");
 }
 
 void YtSponsorEdlTest::buildEdlSkipAndMarkMix()
@@ -132,7 +138,8 @@ void YtSponsorEdlTest::buildEdlSkipAndMarkMix()
     marks.append({QStringLiteral("sponsor"), QStringLiteral("skip"), 10.0, 20.0});
     const QString edl = yt::buildEdl(u, skip, marks);
     // 5-10 and 10-15 are cut (skip wins the space), 15-20 is the marked remainder.
-    QCOMPARE(edl, QStringLiteral("edl://%1,0,5;%1,15,5,title=sponsor;%1,20").arg(u).arg(u).arg(u));
+    const QString e = QStringLiteral("%%1%").arg(u.size()) + u;
+    QCOMPARE(edl, QStringLiteral("edl://") + e + ",0,5;" + e + ",15,5,title=sponsor;" + e + ",20");
 }
 
 void YtSponsorEdlTest::buildEdlEmptyWhenNothingActive()
