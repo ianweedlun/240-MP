@@ -21,6 +21,7 @@
 #include <QQueue>
 #include <QString>
 #include <QRegularExpression>
+#include <QUrl>
 
 namespace ytui {
 
@@ -187,6 +188,86 @@ inline QVariantList extractBrowseRows(const QJsonObject &root, int maxRows)
                     rows << row;
                     if (maxRows > 0 && rows.size() >= maxRows)
                         return rows;
+                }
+            }
+            const QList<QString> keys = o.keys();
+            for (const QString &key : keys)
+                queue.enqueue(o.value(key));
+        } else if (v.isArray()) {
+            const QJsonArray arr = v.toArray();
+            for (const QJsonValue &item : arr)
+                queue.enqueue(item);
+        }
+    }
+    return rows;
+}
+
+// Subscribed-channels sync rows (FEsubscriptions browse of the signed-in
+// account): channelRenderer tiles carry the channel NAME cheaply and in bulk
+// — one network trip for the whole list, where per-channel RSS needs one fetch
+// per subscriber. Both web (channelRenderer) and TV (tileRenderer
+// TILE_CONTENT_TYPE_CHANNEL) shapes are walked so a client flip survives.
+inline QVariantList extractChannelSyncRows(const QJsonObject &root)
+{
+    QVariantList rows;
+    QQueue<QJsonValue> queue;
+    queue.enqueue(QJsonValue(root));
+    while (!queue.isEmpty()) {
+        const QJsonValue v = queue.dequeue();
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            if (o.contains(QStringLiteral("channelRenderer"))) {
+                const QJsonObject r = o.value(QStringLiteral("channelRenderer")).toObject();
+                QString channelId = r.value(QStringLiteral("channelId")).toString();
+                if (channelId.isEmpty()) {
+                    // Canonical location: browseEndpoint params (protobuf
+                    // base64 — "Eg" prefix decodes to the UC… id at offset 8
+                    // in observed FE payloads; kept lenient: any 25-char UC
+                    // token in the decoded blob is the id).
+                    const QJsonObject ep = r.value(QStringLiteral("browseEndpoint")).toObject();
+                    const QString params = ep.value(QStringLiteral("params")).toString();
+                    if (!params.isEmpty()) {
+                        // browseEndpoint params are protobuf serialized, then
+                        // base64'd — the UC id sits as raw ASCII in the decoded
+                        // blob. Percent-decode first (http layer), then base64.
+                        QByteArray blob = QUrl::fromPercentEncoding(params.toUtf8()).toUtf8();
+                        blob = QByteArray::fromBase64(blob);
+                        for (int p = blob.indexOf(QByteArrayLiteral("UC")); p >= 0;
+                             p = blob.indexOf(QByteArrayLiteral("UC"), p + 1)) {
+                            bool ok = blob.size() >= p + 24;
+                            for (int i = 2; ok && i < 24; ++i) {
+                                const unsigned char ch = blob[p + i];
+                                ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+                                     || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+                            }
+                            if (ok) {
+                                channelId = QString::fromUtf8(blob.mid(p, 24));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!channelId.isEmpty()) {
+                    QVariantMap row;
+                    row["channelId"] = channelId;
+                    row["title"]     = textOf(r.value(QStringLiteral("title")));
+                    const QJsonArray thumbs = r.value(QStringLiteral("thumbnail")).toObject()
+                                                 .value(QStringLiteral("thumbnails")).toArray();
+                    row["thumbnailUrl"] = thumbs.isEmpty() ? QString() : thumbs.first().toObject().value(QStringLiteral("url")).toString();
+                    rows << row;
+                }
+            }
+            if (o.contains(QStringLiteral("tileRenderer"))) {
+                const QJsonObject t = o.value(QStringLiteral("tileRenderer")).toObject();
+                const QString ctype = t.value(QStringLiteral("contentType")).toString();
+                if (ctype == QStringLiteral("TILE_CONTENT_TYPE_CHANNEL")) {
+                    const QJsonObject meta = t.value(QStringLiteral("metadata")).toObject()
+                                                 .value(QStringLiteral("tileMetadataRenderer")).toObject();
+                    QVariantMap row;
+                    row["channelId"] = t.value(QStringLiteral("contentId")).toString();
+                    row["title"]     = textOf(meta.value(QStringLiteral("title")));
+                    if (!row["channelId"].toString().isEmpty() && !row["title"].toString().isEmpty())
+                        rows << row;
                 }
             }
             const QList<QString> keys = o.keys();

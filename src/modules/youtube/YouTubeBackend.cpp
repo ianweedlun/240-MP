@@ -97,6 +97,15 @@ void YouTubeBackend::load_subscriptions_feed(bool forceRefresh) {
 
 void YouTubeBackend::load_channels(bool forceRefresh) {
     m_emitChannelsWhenDone = true;
+    if (!m_accessToken.isEmpty()) {
+        // Signed-in truth (user rule: InnerTube primary; text files are
+        // legacy fallback): FEchannels returns the whole subscribed-channel
+        // list in ONE page — 313 channelRenderer-free but TV-tiled tiles
+        // (probe-verified live: TILE_CONTENT_TYPE_CHANNEL + contentId +
+        // tileMetadataRenderer.title). No RSS storm, no continuation.
+        browsePage(QStringLiteral("subschannels"), QStringLiteral("FEchannels"), 1, QVariantList());
+        return;
+    }
     ensureFresh(forceRefresh);
 }
 
@@ -1563,6 +1572,41 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
     const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
     reply->deleteLater();
     const QJsonObject root = doc.object();
+    if (kind == QStringLiteral("subschannels")) {
+        // FEchannels: whole subscribed-channel list, one page (probe: 313
+        // tiles, no continuation). Names land in m_channels so buildChannelList
+        // shows real names; video lists stay lazy per-channel (RSS on open).
+        acc += ytui::extractChannelSyncRows(root);
+        const QString next = ytui::continuationToken(root);
+        qWarning("[Youtube] channel-sync page=%d rows=%lld http_ok=%d continued=%d",
+                 page, static_cast<long long>(acc.size()), netError ? 0 : 1,
+                 next.isEmpty() ? 0 : 1);
+        if (acc.isEmpty() && !next.isEmpty() && page < kBrowseMaxPages) {
+            browsePage(kind, next, page + 1, acc);
+            return;
+        }
+        QStringList ids;
+        for (const QVariant &row : acc) {
+            const QVariantMap r = row.toMap();
+            const QString id = r.value(QStringLiteral("channelId")).toString();
+            if (id.isEmpty() || ids.contains(id))
+                continue;
+            ids << id;
+            ChannelEntry &e = m_channels[id];
+            e.channelId = id;
+            if (!r.value(QStringLiteral("title")).toString().isEmpty())
+                e.channelName = r.value(QStringLiteral("title")).toString();
+        }
+        if (!ids.isEmpty())
+            m_channelOrder = ids;
+        else if (m_channelOrder.isEmpty())
+            qWarning("[Youtube] channel-sync yielded no ids (parse shape drift?)");
+        if (m_emitChannelsWhenDone) {
+            m_emitChannelsWhenDone = false;
+            emit channelsLoaded(buildChannelList());
+        }
+        return;
+    }
     if (kind == QStringLiteral("watchlater") && acc.isEmpty() && page == 1) {
         // Discovery hop: the account's watch-later playlist id lives on the
         // signed-in my-youtube page next to its title. No stable browseId
