@@ -114,6 +114,26 @@ FocusScope {
         return false
     }
 
+    Timer {
+        id: sponsorWaitTimer
+        // Bounded sponsor hold: a dead SponsorBlock domain means the backend
+        // silently gives up (transient err) and no sponsorReady ever fires.
+        // Playback must never depend on that request — expire the hold and
+        // launch without segments (late segments still apply via property filter).
+        interval: 6000
+        repeat: false
+        onTriggered: {
+            if (!playerRoot.waitingSponsor)
+                return
+            playerRoot.waitingSponsor = false
+            appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " wait-expired")
+            if (playerRoot.launchAfterSponsor) {
+                playerRoot.launchAfterSponsor = false
+                play(pendingPlayStartMs)
+            }
+        }
+    }
+
     // Starting mpv runs synchronously and, on the Pi, immediately switches VT
     // (suspending Qt's render thread) before the LOADING frame can paint. Defer
     // the launch one tick so the loading indicator is rendered first.
@@ -180,6 +200,7 @@ FocusScope {
                     // the EDL (transient fetch failure is covered by the wait
                     // timer, which clears waitingSponsor before falling back).
                     playerRoot.launchAfterSponsor = true
+                    sponsorWaitTimer.restart()
                     return
                 }
                 playerRoot.play(playerRoot.pendingPlayStartMs)
@@ -261,10 +282,16 @@ FocusScope {
             }
         } else {
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) {
-                mpvController.sendKey("ESC")
+                if (!playerRoot.playbackStarted)
+                    goBack()
+                else
+                    mpvController.sendKey("ESC")
                 event.accepted = true
             } else if (event.key === Qt.Key_Backspace) {
-                mpvController.sendKey("BS")
+                if (!playerRoot.playbackStarted)
+                    goBack()
+                else
+                    mpvController.sendKey("BS")
                 event.accepted = true
             } else if (event.key === Qt.Key_Up) {
                 mpvController.sendKey("UP")
