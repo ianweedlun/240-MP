@@ -21,6 +21,22 @@ namespace ytauth {
 
 inline constexpr qint64 kAuthSlackS = 120; // refresh this far before nominal expiry
 
+// Credential ladder (beta contract, user-locked 2026-11-04): a pasted browser
+// cookie (~1y life, no refresh plumbing) is the most stable carrier when the
+// user has provided one, so cookie wins when present; the device-flow OAuth
+// chain is the recovery path; the legacy subs-text file is the last stand.
+// Pure decision function — unit-tested; the backend just feeds the two bools.
+enum class CredentialMode { Cookie, OAuth, FileFallback };
+
+constexpr inline CredentialMode credentialMode(bool cookiePresent, bool oauthUsable)
+{
+    if (cookiePresent)
+        return CredentialMode::Cookie;
+    if (oauthUsable)
+        return CredentialMode::OAuth;
+    return CredentialMode::FileFallback;
+}
+
 // expiresEpoch 0 (or negative) = unknown TTL — treat as never expired, the
 // legacy "no expiry recorded" state from paired-auth docs.
 inline constexpr bool accessExpired(qint64 expiresEpoch, qint64 nowSecs)

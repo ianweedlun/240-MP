@@ -27,9 +27,11 @@ FocusScope {
     property string notice: ""
     property bool signedInNow: false
     property bool signOutRequested: false
+    property bool cookieNow: false
 
     Component.onCompleted: {
         var status = youtubeBackend.check_signin()
+        cookieNow = status.cookieFallback === true
         if (status.signedIn === true) {
             signedInNow = true
         } else if (status.pairingActive === true) {
@@ -149,6 +151,23 @@ FocusScope {
             wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
         }
+    }
+
+    // Cookie fallback status row (beta contract #44 ladder): the CRT can at
+    // least SEE which credential the ladder picked; the blob itself is an
+    // SSH-paste path (no browser on the CRT, device flow cannot mint cookies).
+    Text {
+        visible: signInRoot.signedInNow
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.topMargin: root.sh * 0.30
+        anchors.leftMargin: root.sw * 0.28
+        text: signInRoot.cookieNow
+              ? "COOKIE FALLBACK: PRESENT - USED FOR BROWSE + PLAYBACK"
+              : "COOKIE FALLBACK: OFF - OPTIONAL SSH PASTE OF cookies.txt"
+        color: root.tertiaryColor
+        font.family: root.globalFont
+        font.pixelSize: root.sh * 0.026
     }
 
     // Signed-in exit door: SELECT on SIGN OUT performs sign-out (stays on

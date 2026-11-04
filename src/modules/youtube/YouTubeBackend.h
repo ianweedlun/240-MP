@@ -307,6 +307,7 @@ private:
     int    m_pollsLeft = 0;
     void   ensureAuthLoaded();         // lazy load + expiry note (no request)
     QString authFilePath() const;
+    QString cookieHeaderValue() const;   // Netscape cookies.txt -> browse Cookie line ("" = absent)
     void   saveAuthFile();             // write the auth doc (atomic swap)
     void   requestDeviceCode();
     void   schedulePairPoll();         // QTimer self-chain until consent/expiry

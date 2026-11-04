@@ -32,6 +32,24 @@ private slots:
         QVERIFY(!ytauth::accessExpired(2000000, 1000000)); // still ahead
         QVERIFY(ytauth::accessExpired(1000000, 2000000));  // long past
     }
+
+    void ladderCookieWinsWhenPresent()
+    {
+        // Locked decision: cookie-first. Even a fully alive OAuth chain bows
+        // to a pasted cookie — the cookie is the stable carrier when present.
+        QVERIFY(ytauth::credentialMode(true, true) == ytauth::CredentialMode::Cookie);
+        QVERIFY(ytauth::credentialMode(true, false) == ytauth::CredentialMode::Cookie);
+    }
+
+    void ladderOauthRecovers()
+    {
+        QVERIFY(ytauth::credentialMode(false, true) == ytauth::CredentialMode::OAuth);
+    }
+
+    void ladderLastStand()
+    {
+        QVERIFY(ytauth::credentialMode(false, false) == ytauth::CredentialMode::FileFallback);
+    }
 };
 
 QTEST_MAIN(YtAuthGateTest)

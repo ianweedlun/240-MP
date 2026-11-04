@@ -1133,7 +1133,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
     auto *proc = new QProcess(this);
     m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
     qWarning("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
-    const QStringList args{
+    QStringList args{
         QStringLiteral("-g"),
         QStringLiteral("--no-playlist"),
         QStringLiteral("--no-warnings"),
@@ -1141,6 +1141,10 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
         QStringLiteral("--"),
         watchUrlFor(videoId),
     };
+    // Same cookies.txt feeds the playback path natively (locked decision):
+    // googlevideo 403 on cold caches disappears even while OAuth is fine.
+    if (QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt")))
+        args << QStringLiteral("--cookies") << (m_dataRoot + QStringLiteral("/cookies.txt"));
     connect(proc, &QProcess::finished, this, [this, proc, key, videoId]() {
         // yt-dlp -g prints one URL per selected format: the usual
         // bestvideo+bestaudio split prints video on line 1 and audio on line 2;
@@ -1315,6 +1319,38 @@ QString YouTubeBackend::authFilePath() const
     return m_dataRoot + QStringLiteral("/youtube_auth.json");
 }
 
+// Cookie fallback carrier (beta contract #44, user-locked ladder): Netscape
+// cookies.txt dropped at <dataRoot>/cookies.txt via SSH from any signed-in
+// browser. ~1-year life, zero refresh plumbing. SmartTube prior art carries
+// NO cookie path (their SAPISID block is commented-out innertube.py dead code),
+// so this is our own shape — and read-only browse GETs need no SAPISIDHASH
+// signature header, just the Cookie line. Account-safety: presence only; the
+// values never reach logs or QML.
+QString YouTubeBackend::cookieHeaderValue() const
+{
+    QFile f(m_dataRoot + QStringLiteral("/cookies.txt"));
+    if (!f.exists() || !f.open(QIODevice::ReadOnly))
+        return {};
+    const QByteArray raw = f.readAll();
+    f.close();
+    QString header;
+    for (const QByteArray &lineRaw : raw.split('\n')) {
+        const QString line = QString::fromLatin1(lineRaw).trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
+            continue;
+        const QStringList fields = line.split(QLatin1Char('\t'));
+        if (fields.size() < 7)
+            continue;
+        const QString domain = fields.at(0);
+        if (!(domain.endsWith(QStringLiteral("youtube.com")) || domain.endsWith(QStringLiteral("google.com"))))
+            continue;
+        if (!header.isEmpty())
+            header += QStringLiteral("; ");
+        header += fields.at(5) + QLatin1Char('=') + fields.at(6);
+    }
+    return header;
+}
+
 void YouTubeBackend::ensureAuthLoaded()
 {
     if (mAuthLoaded)
@@ -1404,6 +1440,13 @@ QVariantMap YouTubeBackend::check_signin()
                 || !m_refreshToken.isEmpty());
     m[QStringLiteral("hasRefresh")]    = !m_refreshToken.isEmpty();
     m[QStringLiteral("pairingActive")] = m_pairActive;
+    // Ladder telemetry — presence word only, cookie bytes never leave the file.
+    const bool cookiePresent = QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt"));
+    m[QStringLiteral("cookieFallback")] = cookiePresent;
+    qWarning("[Youtube] auth-mode=%s",
+             cookiePresent                              ? "cookie"
+             : (!m_accessToken.isEmpty() && !m_refreshToken.isEmpty()) ? "oauth"
+                                                                        : "file");
     return m;
 }
 
@@ -1644,8 +1687,14 @@ void YouTubeBackend::browsePage(const QString &browseKind, const QString &cursor
     // The session token is what makes FEsubscriptions/FEhistory account-truth;
     // without it those browseIds 400 server-side (observed live). setRawHeader
     // is the repo's cross-Qt-version header pattern (Emby uses it too).
-    req.setRawHeader("Authorization",
-                     QStringLiteral("Bearer %1").arg(m_accessToken).toUtf8());
+    // Credential ladder (ytauth::credentialMode in YtAuthGate.h, cookie-first
+    // per locked decision): a present pasted cookie outranks the 1h bearer.
+    const QString cookieHeader = cookieHeaderValue();
+    if (!cookieHeader.isEmpty())
+        req.setRawHeader("Cookie", cookieHeader.toUtf8());
+    else if (!m_accessToken.isEmpty())
+        req.setRawHeader("Authorization",
+                         QStringLiteral("Bearer %1").arg(m_accessToken).toUtf8());
     QNetworkReply *reply = m_nam.post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, reply, browseKind, page, acc]() {
         finishBrowsePage(browseKind, reply, acc, page);
