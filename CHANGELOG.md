@@ -4,7 +4,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
-### Changed — mpv OSC button rename (feature/beta)
+### Changed — mpv OSC button rename (beta)
 - On-screen playback control button relabeled `CROP` → `FILL` (both OSC scripts): with the geometry-driven auto-fill rule it toggles panscan fill on/off, and the old label lied about what it did. Internal `hide-crop` script opt and code comments aligned to the new name.
 
 ### Fixed — YouTube Subscriptions freshness (feature/youtube-finish)
