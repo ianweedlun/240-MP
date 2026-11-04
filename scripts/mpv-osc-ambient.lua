@@ -1,7 +1,7 @@
 local assdraw = require 'mp.assdraw'
 
 local menu_visible = false
-local focus_btn = 1  -- index into buttons (CROP when shown, then STOP)
+local focus_btn = 1  -- index into buttons (FILL when shown, then STOP)
 local update_timer = nil
 local idle_timer = nil
 
@@ -30,11 +30,11 @@ local function draw_text(ass, x, y, anchor, text, fs, fc, fa)
         anchor, x, y, fs, fc, fa, text))
 end
 
--- CROP is omitted when MpvController flags a decode path where --panscan
+-- FILL is omitted when MpvController flags a decode path where --panscan
 -- blanks the video (Pi 3 overlay path with 1080p Playback ON).
 local buttons = {}
 if mp.get_opt("hide-crop") ~= "1" then
-    buttons[#buttons + 1] = { label = "CROP", action = function() mp.command("no-osd cycle-values panscan 0 1") end }
+    buttons[#buttons + 1] = { label = "FILL", action = function() mp.command("no-osd cycle-values panscan 0 1") end }
 end
 buttons[#buttons + 1] = { label = "STOP", action = function() mp.command("quit") end }
 

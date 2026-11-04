@@ -287,7 +287,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         scriptOpts << QString("transcode-offset=%1").arg(double(transcodeOffsetSec), 0, 'f', 3);
     if (screensaverTimeout > 0)
         scriptOpts << QString("screensaver_timeout=%1").arg(screensaverTimeout);
-    // Tell the OSC scripts to hide their CROP button on decode paths where
+    // Tell the OSC scripts to hide their FILL button on decode paths where
     // --panscan would blank the video (Pi 3 overlay path, 1080p Playback ON).
     if (cropUnavailable())
         scriptOpts << QStringLiteral("hide-crop=1");
@@ -361,7 +361,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // Auto Fit is NOT decided here: stream geometry (YouTube, Plex, Jellyfin)
     // is unknown at launch, so the fit is applied per load through IPC once mpv
     // reports window + content geometry — see the "video-params/aspect"
-    // observer in onIpcReadyRead and applyAutoFit(). The OSC CROP button still
+    // observer in onIpcReadyRead and applyAutoFit(). The OSC FILL button still
     // toggles live, and hide-crop=1 (set below) hides it on crop-incapable
     // decode paths.
 
