@@ -115,20 +115,22 @@ jobs:
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
             "$TARBALL" "$USER@$HOST:$PI_PATH"
 
-          # Ship the wrapper itself from the tarball payload (added by ci.yml as
-          # ./scripts/240mp-ci-deploy.sh): this job has no repo checkout, and the
-          # Pi's hand-installed /usr/local/bin copy was stale. Refreshing right
-          # before calling it makes a wrapper fast-path change live on that same deploy.
-          if tar -xzf "$TARBALL" -O ./scripts/240mp-ci-deploy.sh > /tmp/wrapper-shipped.sh 2>/dev/null && [ -s /tmp/wrapper-shipped.sh ]; then
-            scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
-              /tmp/wrapper-shipped.sh "$USER@$HOST:/tmp/wrapper-${REV_SHA}.sh"
+          # Wrapper refresh convention (2026-11-04): ghdeploy's sudo grants ONLY the
+          # wrapper CALL (see /etc/sudoers.d/240mp-ci: NOPASSWD wrapper *). It can NEVER
+          # `sudo install` a fresh copy — that sudo asks for a password (rc=1, silent-ish).
+          # Wrapper LOGIC changes are refreshed out-of-band by a privileged shell (agent
+          # ian route: sudo install -m 755 ... /usr/local/bin/240mp-ci-deploy) BEFORE the
+          # wave that depends on them. The tarball may still carry the copy for reference.
+          if $SSH "$USER@$HOST" "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null; then
+            echo "Wrapper present on Pi — invoking root-side dance"
           else
-            echo "Wrapper not shipped in tarball (old CI) — using Pi's existing /usr/local/bin copy"
+            echo "Wrapper MISSING on Pi — refresh via privileged shell first; deploy skipped"
+            exit 1
           fi
 
           echo "Root-side dance via /usr/local/bin/240mp-ci-deploy (its systemctl reboot kills this ssh) ..."
           rc=0
-          $SSH "$USER@$HOST" "sudo install -m 755 /tmp/wrapper-${REV_SHA}.sh /usr/local/bin/240mp-ci-deploy && sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
           echo "wrapper call returned rc=$rc (connection death = rebooting, as expected)"
 
