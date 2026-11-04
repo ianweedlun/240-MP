@@ -25,6 +25,7 @@ class YtUrlFreshTest : public QObject {
 private slots:
     void parseExpireParamBoundaries();
     void parseMissingAndMalformed();
+    void parseManifestSlashForm();
     void freshVsSafetyMargin();
     void pruneDropsExpiredThenCapsByNewestWindow();
 };
@@ -56,6 +57,18 @@ void YtUrlFreshTest::parseMissingAndMalformed()
     // Empty value / bare separator.
     QVERIFY(yturl::expireEpochFromUrl(QStringLiteral("https://x/y?expire=")) == 0);
     QVERIFY(yturl::expireEpochFromUrl(QStringLiteral("https://x/y?expire&&a=1")) == 0);
+}
+
+void YtUrlFreshTest::parseManifestSlashForm()
+{
+    // The yt-dlp HLS-manifest fallback (live rebroadcasts) keeps the expiry in
+    // slash-delimited path segments — same epoch, different dialect.
+    QVERIFY(yturl::expireEpochFromUrl(
+        QStringLiteral("https://manifest.googlevideo.com/api/manifest/hls_playlist/id/abc.1/expire/1793832910/ei/x&sig=ABC")) == 1793832910LL);
+    // Same strictness as the query dialect: mixed value rejected, not truncated.
+    QVERIFY(yturl::expireEpochFromUrl(QStringLiteral("https://m/x/expire/1790a/y")) == 0);
+    // Name must sit right after a delimiter: "xexpire/" must not match.
+    QVERIFY(yturl::expireEpochFromUrl(QStringLiteral("https://m/xexpire/1790/y")) == 0);
 }
 
 void YtUrlFreshTest::freshVsSafetyMargin()

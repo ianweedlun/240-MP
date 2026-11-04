@@ -20,27 +20,30 @@
 
 namespace yturl {
 
-// expire= parameter as epoch seconds; 0 when absent or malformed. Matches only
-// at a query-parameter boundary (?expire= or &expire=) so decoys like eexpire=
-// don't hit, and requires the value to run to the next & (or end) so a mixed
-// value like "1790abc" is rejected rather than truncated.
+// expire= parameter as epoch seconds; 0 when absent or malformed. Two URL
+// dialects carry it: progressive googlevideo streams use query parameters
+// (?expire= or &expire= — decoys like eexpire= can't hit because the match
+// point must sit right after the delimiter), and the yt-dlp HLS-manifest
+// fallback for live/rebroadcast sources uses slash-delimited path segments
+// (.../expire/<epoch>/...; same strictness: value must run to the next '/'
+// so a mixed value like "1790abc" is rejected rather than truncated).
 inline qint64 expireEpochFromUrl(const QString &url)
 {
-    const int q = url.indexOf(QLatin1Char('?'));
-    if (q < 0)
-        return 0;
-    for (int i = q; i < url.size(); ++i) {
+    for (int i = 0; i < url.size(); ++i) {
         const QChar sep = url.at(i);
-        if (sep != QLatin1Char('?') && sep != QLatin1Char('&'))
+        const bool query = (sep == QLatin1Char('?') || sep == QLatin1Char('&'));
+        const bool slash = (sep == QLatin1Char('/'));
+        if (!query && !slash)
             continue;
-        if (url.mid(i + 1, 7) != QStringLiteral("expire="))
+        if (url.mid(i + 1, 7) != (slash ? QStringLiteral("expire/")
+                                         : QStringLiteral("expire=")))
             continue;
         int j = i + 8;
         while (j < url.size() && url.at(j).isDigit())
             ++j;
         if (j == i + 8)
             return 0;
-        if (j < url.size() && url.at(j) != QLatin1Char('&'))
+        if (j < url.size() && url.at(j) != (slash ? QLatin1Char('/') : QLatin1Char('&')))
             return 0;
         return url.mid(i + 8, j - (i + 8)).toLongLong();
     }
