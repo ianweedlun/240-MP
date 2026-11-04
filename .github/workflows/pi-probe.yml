@@ -4,7 +4,7 @@ name: Pi Reachability Probe
 # Informational — always exits 0; read the verdict line.
 on:
   push:
-    branches: ['dev', 'feature/**']
+    branches: ['dev', 'feature/**', 'beta']
     paths-ignore: ['**.md'] # docs-only pushes don't probe the Pi
 
 jobs:

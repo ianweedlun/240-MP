@@ -7,7 +7,7 @@ name: CI macOS
 # the original CI (AGL-pinned macos-15 etc. preserved).
 on:
   push:
-    branches: [dev, 'feature/**']
+    branches: [dev, 'feature/**', beta]
     paths-ignore: ['**.md'] # docs-only pushes (.hermes.md syncs, changelogs, plans) don't queue builds
   pull_request:
     branches: [dev]

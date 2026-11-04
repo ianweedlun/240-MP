@@ -8,9 +8,10 @@ on:
 jobs:
   deploy:
     name: Deploy to Raspberry Pi
-    # Any dev or feature-branch CI completion triggers a deploy (no hand-maintained branch list).
+    # Any dev, feature-branch, or top-level beta CI completion triggers a deploy.
     if: >-
       github.event.workflow_run.head_branch == 'dev' ||
+      github.event.workflow_run.head_branch == 'beta' ||
       startsWith(github.event.workflow_run.head_branch, 'feature/')
     runs-on: ubuntu-latest
     permissions:
