@@ -4,6 +4,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube review pair: sign-in cookie row and OSC info garbage
+- The SignIn subview drew a `COOKIE FALLBACK: OFF - OPTIONAL SSH PASTE OF cookies.txt`
+  line under "SIGNED IN" on every signed-in visit — setup instructions no viewer acts
+  on, crowding the status headline. The row is gone; the credential-ladder tier stays
+  journal-only (`auth-mode=cookie|oauth` in `check_signin()` telemetry).
+- The mpv OSC track-info row printed the external `--audio-file=` sidecar's mpv-derived
+  title, which for YouTube's split googlevideo pair is the raw **URL query tail**
+  (`webm&rqh=1&clen=...&sig=...`), wrapping the top-left corner into a wall of debug
+  text after every seek and SponsorBlock cut (Ian report, live-probed on the Pi).
+  `mpv-osc.lua` now drops URL-junk titles (`clean_title`), keeps real track names
+  (Plex/Jellyfin commentary, `subinfo` friendly names) intact, and caps each info
+  row to one line (`fit_oneline`). YouTube's row reads `AUDIO: ENG OPUS 2CH 48000 HZ`.
+  Logic gate: 6/6 in a lua harness on the Pi against the patched file (live stream
+  values mocked); nav-menu timing/UX untouched.
+
 ### Fixed — YouTube signed-in layer dying one hour after pairing (Playlists row vanished)
 - YouTube access tokens live ~1 h. `check_signin()` reported only liveness, so an
   hour after pairing the account layer — the Playlists row, account feed and

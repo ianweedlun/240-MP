@@ -50,6 +50,26 @@ local SB_TICK = {
 }
 local SB_TICK_W = 3  -- tick width in OSD px
 
+-- mpv derives an external track's title from its filename, and for the
+-- --audio-file=/sidecar handoff (YouTube split streams) that "filename" is the
+-- raw googlevideo URL: the query tail ("webm&rqh=1&clen=...&sig=...==") comes
+-- through verbatim and wraps the OSD info row into a wall of debug garbage
+-- (Ian review, Nov 5). Titles carrying URL punctuation are junk — drop them;
+-- real track names (COMMENTARY, ENGLISH, Jellyfin subinfo names) survive.
+local function clean_title(s)
+    if s == nil or s == "" then return "" end
+    if s:find("[&=?/:]") or s:find("%%") then return "" end
+    if s:len() > 40 then return s:sub(1, 37) .. "..." end
+    return s
+end
+
+-- The info rows draw at a single ASS position with no wrap control; a long
+-- concatenation spills across lines at the screen edge. Cap keeps one line.
+local function fit_oneline(s)
+    if s:len() > 60 then return s:sub(1, 57) .. "..." end
+    return s
+end
+
 local function get_audio_str()
     -- Transcoded stream: read track info passed explicitly from QML
     local transcode_audio = mp.get_opt("transcode-audio")
@@ -60,7 +80,7 @@ local function get_audio_str()
 
     local id = mp.get_property_number("current-tracks/audio/id", 0)
     if id == 0 then return "(NONE)" end
-    local title    = (mp.get_property("current-tracks/audio/title", "") or ""):upper()
+    local title    = clean_title(mp.get_property("current-tracks/audio/title", "") or ""):upper()
     local lang     = (mp.get_property("current-tracks/audio/lang",  "") or ""):upper()
     local codec    = (mp.get_property("current-tracks/audio/codec", "") or ""):upper()
     local channels = mp.get_property_number("current-tracks/audio/audio-channels", 0)
@@ -91,7 +111,7 @@ local function get_sub_str()
     if ext ~= "" and subinfo[ext] and subinfo[ext] ~= "" then
         return tostring(subinfo[ext]):upper()
     end
-    local title = (mp.get_property("current-tracks/sub/title", "") or ""):upper()
+    local title = clean_title((mp.get_property("current-tracks/sub/title", "") or "")):upper()
     local lang  = (mp.get_property("current-tracks/sub/lang",  "") or ""):upper()
     local codec = (mp.get_property("current-tracks/sub/codec", "") or ""):upper()
     local parts = {}
@@ -246,9 +266,9 @@ local function draw_menu()
     local info_lh  = math.floor(info_fs * 1.5)
     local info_y   = math.floor(wh * 0.125)
 
-    draw_text(ass, lm, info_y, 4, "AUDIO: " .. get_audio_str(), info_fs, C_WHITE, A_OPAQUE)
+    draw_text(ass, lm, info_y, 4, "AUDIO: " .. fit_oneline(get_audio_str()), info_fs, C_WHITE, A_OPAQUE)
     if has_sub then
-        draw_text(ass, lm, info_y + info_lh, 4, "SUBTITLE: " .. get_sub_str(),  info_fs, C_WHITE, A_OPAQUE)
+        draw_text(ass, lm, info_y + info_lh, 4, "SUBTITLE: " .. fit_oneline(get_sub_str()), info_fs, C_WHITE, A_OPAQUE)
     end
 
     -- ── Row 1: Time text ──────────────────────────────────────────
