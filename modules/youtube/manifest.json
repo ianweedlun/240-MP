@@ -50,14 +50,14 @@
       "label": "SponsorBlock",
       "type": "submenu",
       "submenu_view": "views/SponsorSettings.qml",
-      "description": "Open per-category segment controls (Off/Mark/Skip). Sponsor and self-promo skip silently by default; Mark shows chapter marks without cutting."
+      "description": "Set per-category segment controls to either Off/Mark/Skip."
     },
     {
       "key": "device_sign_in",
       "label": "Sign In on YouTube",
       "type": "submenu",
       "submenu_view": "views/SignIn.qml",
-      "description": "Open the sign-in screen: an 8-char code appears there; type it at the shown URL on any device. Grants account subscriptions, history and watch-later. The code stays on screen until you approve it or press BACK (which cancels); once signed in, the same screen offers sign-out."
+      "description": "Peform device code login to Youtube."
     },
     {
       "key": "delete_watch_later",

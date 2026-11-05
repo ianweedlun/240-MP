@@ -37,8 +37,11 @@
       "label": "Thumbnail Display",
       "type": "list_single",
       "default": "RIGHT",
-      "options": ["OFF", "LEFT", "RIGHT"],
-      "description": "Where to show thumbnails"
+      "options": [
+        "OFF",
+        "LEFT",
+        "RIGHT"
+      ]
     },
     {
       "key": "retroarch_path",
@@ -52,7 +55,10 @@
       "label": "Playlist Sort",
       "type": "list_single",
       "default": "SYSTEM",
-      "options": ["SYSTEM", "COMPANY"],
+      "options": [
+        "SYSTEM",
+        "COMPANY"
+      ],
       "description": "[SYSTEM] Alpha by shortname [COMPANY] Sort by company"
     }
   ]
