@@ -42,7 +42,7 @@ FocusScope {
             label: "Auto Fit",
             options: ["Off", "On"],
             value: appSettings["auto_fit"] || "Off",
-            description: "[ON] Fit content to current aspect ratio\n [OFF] Do not reshape content",
+            description: "[ON] Fit content to current aspect ratio [OFF] Do not reshape content",
             moduleId: ""
         })
 
@@ -57,7 +57,7 @@ FocusScope {
             label: "Video Levels",
             options: ["Auto", "Limited", "Full"],
             value: appSettings["video_output_levels"] || "Auto",
-            description: "Match the color range your display expects\n[LIMITED] If blacks crush  [FULL] If blacks look gray",
+            description: "[LIMITED] If blacks crush [FULL] If blacks look gray",
             moduleId: ""
         })
 
@@ -70,7 +70,7 @@ FocusScope {
             label: "Audio Normalize",
             options: ["Off", "Track", "Album"],
             value: appSettings["replaygain"] || "Custom (auto)",
-            description: "Normalizes volume with ReplayGain\n[TRACK] Use per-track tags [ALBUM] Use per-album tags",
+            description: "[TRACK] Use per-track tags [ALBUM] Use per-album tags",
             moduleId: ""
         })
         items.push({
@@ -97,7 +97,7 @@ FocusScope {
             label: "Audio Channels",
             options: ["Auto", "Stereo", "Mono"],
             value: appSettings["audio_channels"] || "Custom (auto)",
-            description: "[STEREO] Two channels  [MONO] One channel (shared CRT speaker)",
+            description: "[STEREO] Two channels [MONO] One channel (shared CRT speaker)",
             moduleId: ""
         })
 
