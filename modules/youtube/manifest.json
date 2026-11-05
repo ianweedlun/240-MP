@@ -50,7 +50,7 @@
       "label": "SponsorBlock",
       "type": "submenu",
       "submenu_view": "views/SponsorSettings.qml",
-      "description": "Open per-category segment controls (Off/Mark/Skip). Sponsor and self-promo skip silently by default; Mark shows chapter marks without cutting."
+      "description": "Set per-category segment controls to either Off/Mark/Skip."
     },
     {
       "key": "device_sign_in",
