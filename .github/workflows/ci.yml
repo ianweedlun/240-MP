@@ -2,10 +2,9 @@ name: CI
 
 on:
   push:
-    # burst/* work branches deliberately absent: lab/local only, CI runs when
-    # they merge into dev (issue #44 topology).
-    branches: [dev, 'feature/**', beta]
-    paths-ignore: ['**.md'] # docs-only pushes (.hermes.md syncs, changelogs, plans) don't queue builds
+    # burst/* work branches deliberately absent: lab/local only, CI runs when they merge into dev
+    branches: [dev, 'feature/**']
+    paths-ignore: ['**.md','**.yml'] # docs and CI-only pushes
   pull_request:
     # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
     branches: [dev, beta]
