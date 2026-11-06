@@ -47,7 +47,11 @@
       "key": "intro_skip",
       "label": "Intro Skip",
       "type": "list_single",
-      "options": ["Off", "Auto", "Button"],
+      "options": [
+        "Off",
+        "Auto",
+        "Button"
+      ],
       "default": "Off",
       "requires_auth": true,
       "description": "Uses Emby's intro chapter markers when the server has detected them"
@@ -56,7 +60,11 @@
       "key": "outro_skip",
       "label": "Credit Skip",
       "type": "list_single",
-      "options": ["Off", "Auto", "Button"],
+      "options": [
+        "Off",
+        "Auto",
+        "Button"
+      ],
       "default": "Off",
       "requires_auth": true,
       "description": "Uses Emby's credit chapter markers when the server has detected them"
