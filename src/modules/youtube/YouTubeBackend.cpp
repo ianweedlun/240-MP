@@ -1460,10 +1460,15 @@ QVariantMap YouTubeBackend::check_signin()
     // Ladder telemetry — presence word only, cookie bytes never leave the file.
     const bool cookiePresent = QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt"));
     m[QStringLiteral("cookieFallback")] = cookiePresent;
+    // Post-axe telemetry: the label IS the credentialMode() ladder (single
+    // source). The old inline paraphrase claimed an "oauth" for dead tokens
+    // and printed "file" — a mode that is deliberately no longer a credential.
+    const auto credMode = ytauth::credentialMode(
+        cookiePresent, m[QStringLiteral("signedIn")].toBool());
     qWarning("[Youtube] auth-mode=%s",
-             cookiePresent                              ? "cookie"
-             : (!m_accessToken.isEmpty() && !m_refreshToken.isEmpty()) ? "oauth"
-                                                                        : "file");
+             credMode == ytauth::CredentialMode::Cookie ? "cookie"
+             : credMode == ytauth::CredentialMode::OAuth ? "oauth"
+                                                        : "signedOut");
     return m;
 }
 
