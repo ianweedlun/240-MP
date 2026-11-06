@@ -2,7 +2,7 @@ name: Sync .hermes.md
 on:
   push:
     branches: [dev]
-    paths: ['.hermes.md', '.hermes.megacave.md']
+    paths: ['.hermes.md']
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
           ref: dev
 
-      - name: Sync .hermes.md + .hermes.megacave.md to all branches
+      - name: Sync .hermes.md to all branches
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -33,8 +33,7 @@ jobs:
             git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
 
             # Skip branches whose doc blobs already match dev (both files)
-            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/dev:.hermes.md" 2>/dev/null && \
-               git diff --quiet "origin/$BRANCH:.hermes.megacave.md" "origin/dev:.hermes.megacave.md" 2>/dev/null; then
+            if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/dev:.hermes.md" 2>/dev/null; then
               echo "$BRANCH: doc blobs already in sync"
               continue
             fi
@@ -42,9 +41,8 @@ jobs:
             git checkout -B "$BRANCH" "origin/$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
             git show "origin/dev:.hermes.md" > .hermes.md
-            git show "origin/dev:.hermes.megacave.md" > .hermes.megacave.md
-            git add .hermes.md .hermes.megacave.md
-            git commit -m "docs: sync .hermes.md + megacave mirror from dev (auto-sync)"
+            git add .hermes.md
+            git commit -m "docs: sync .hermes.md from dev (auto-sync)"
             git push origin "$BRANCH"
             echo "$BRANCH: synced"
           done
