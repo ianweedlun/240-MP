@@ -4,6 +4,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — YouTube credential ladder sheds upstream's file-fed last stand (legacy axe burst)
+- `CredentialMode` loses the legacy mode: `FileFallback` → `SignedOut`. With neither
+  a pasted cookie nor a live device-flow chain, the account surface now shows **nothing**
+  and the views point at pairing — upstream's file-fed display is gone from the ladder.
+  `youtube_subscriptions.txt` stays as a **pre-pairing roster seed** (bootstrap channels
+  before pairing), and legacy pos-only resume entries stay tolerated (save-file compat,
+  a different axis). The unit test `ladderLastStand` became `ladderSignedOutNoLastStand`.
+- `Items.qml` cold-start text leads with pairing ("PAIR YOUTUBE IN SIGN-IN SETTINGS")
+  and offers the two txt files as the fallback bootstrap, not the other way round.
+- Roster dead-end retry comment made honest: it retries on the SEEDED roster, not a
+  credential-mode file path.
+
+### Changed — Deploy-to-Pi gate: only a genuine push into beta deploys
+- The deploy job gains `if: github.event.workflow_run.event == 'push'`. Trigger-level
+  `branches: [beta]` alone also matches PR-triggered CI completions whose payload
+  `head_branch` is the **PR head** (observed with PR #51 headed on beta) — those could
+  deploy a pre-merge sha. A merge into beta is a push event and still deploys ✓.
+
 ### Fixed — YouTube cold-play waits end at once when the resolve already failed (#28 polish wave)
 - Every case where the background resolve **completes but stores nothing** — dead network,
   bot-gated 403, ytdl spawn failure, no yt-dlp binary, entry already expired at store time —
