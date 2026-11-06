@@ -30,6 +30,28 @@ jobs:
           arch: clang_64
           cache: true
 
+      # ccache lane (issue #32 spring-clean follow-through): the macOS lane kept
+      # re-running from zero on identity re-pushes and re-queued PR builds - the
+      # chronic bottleneck (mac runners intermittently refuse capacity). With a
+      # persistent cache, an identity re-push or a PR/merge pair hits almost fully.
+      # Paired with the CMake APP_VERSION fix (target-wide -D on the sha busted
+      # EVERY TU per push; now only the 2 TUs that use it see it) - without that
+      # fix any ccache lane is dead weight by construction.
+      - name: Restore ccache
+        id: ccache-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: 240mp-ccache-macos-arm64-${{ github.event_name }}-${{ github.ref_name }}
+          restore-keys: |
+            240mp-ccache-macos-arm64-
+
+      - name: Install ccache (brew unless preinstalled)
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then brew install ccache; fi
+          mkdir -p "${RUNNER_TEMP}/ccache"
+          echo "CCACHE_DIR=${RUNNER_TEMP}/ccache" >> "$GITHUB_ENV"
+
       - name: Install SDL2 from source
         run: |
           SDL2_VERSION=2.32.10
@@ -52,10 +74,19 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
             -DBUILD_TESTS=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DAPP_VERSION="${{ github.sha }}"
 
       - name: Build
         run: cmake --build build --parallel
+
+      # Saved right after Build (not at workflow end): test/install steps must not
+      # throw away the compile results, so the store step sits before them.
+      - name: Save ccache
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
       - name: Run tests
         run: |

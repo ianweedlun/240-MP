@@ -84,7 +84,15 @@ add_executable(240mp
     $<$<BOOL:${APPLE}>:src/util/MacosUtils.mm>
 )
 
-target_compile_definitions(240mp PRIVATE APP_VERSION="${APP_VERSION}")
+# Per-TU, NOT target-level: the CI value is the commit/tag sha, and a target-wide
+# -DAPP_VERSION changes the compile line of EVERY TU on every push, which busts
+# ccache entirely (zero hits across pushes - the ccache lane was dead weight).
+# Only the two TUs that reference APP_VERSION see it; everything else caches.
+set(APP_VERSION_DEF "APP_VERSION=\"${APP_VERSION}\"")
+set_property(SOURCE src/main.cpp
+                 APPEND PROPERTY COMPILE_DEFINITIONS ${APP_VERSION_DEF})
+set_property(SOURCE src/modules/weather/WeatherBackend.cpp
+             APPEND PROPERTY COMPILE_DEFINITIONS ${APP_VERSION_DEF})
 
 target_link_libraries(240mp PRIVATE
     Qt6::Core
