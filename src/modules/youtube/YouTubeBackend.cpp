@@ -1762,7 +1762,9 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
             if (!roster.isEmpty())
                 stormFeedFromRoster(roster, /*forceRefresh=*/false);
             else
-                ensureFresh(true); // roster dead-end — legacy file path retries
+                ensureFresh(true); // roster dead-end — retry on the SEEDED roster
+                // (subs-text seed is a pre-pairing bootstrap, not a credential mode:
+                // the 2026-11-06 axe removed the file as the ladder's last stand)
             return;
         }
         if (m_emitChannelsWhenDone) {

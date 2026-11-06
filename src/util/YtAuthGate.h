@@ -21,12 +21,15 @@ namespace ytauth {
 
 inline constexpr qint64 kAuthSlackS = 120; // refresh this far before nominal expiry
 
-// Credential ladder (beta contract, user-locked 2026-11-04): a pasted browser
-// cookie (~1y life, no refresh plumbing) is the most stable carrier when the
-// user has provided one, so cookie wins when present; the device-flow OAuth
-// chain is the recovery path; the legacy subs-text file is the last stand.
+// Credential ladder (beta contract, user-locked 2026-11-04; axe 2026-11-06):
+// a pasted browser cookie (~1y life, no refresh plumbing) is the most stable
+// carrier when the user has provided one, so cookie wins when present; the
+// device-flow OAuth chain is the recovery path. With NEITHER, the account
+// surface shows nothing and the views point at pairing — the legacy subs-text
+// file is a pre-pairing roster seed only and is deliberately NOT a credential
+// mode anymore (upstream's file-fed display path is gone from the ladder).
 // Pure decision function — unit-tested; the backend just feeds the two bools.
-enum class CredentialMode { Cookie, OAuth, FileFallback };
+enum class CredentialMode { Cookie, OAuth, SignedOut };
 
 constexpr inline CredentialMode credentialMode(bool cookiePresent, bool oauthUsable)
 {
@@ -34,7 +37,7 @@ constexpr inline CredentialMode credentialMode(bool cookiePresent, bool oauthUsa
         return CredentialMode::Cookie;
     if (oauthUsable)
         return CredentialMode::OAuth;
-    return CredentialMode::FileFallback;
+    return CredentialMode::SignedOut;
 }
 
 // expiresEpoch 0 (or negative) = unknown TTL — treat as never expired, the
