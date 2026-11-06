@@ -35,7 +35,18 @@
       "key": "music_volume",
       "label": "Music Volume",
       "type": "list_single",
-      "options": ["10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"],
+      "options": [
+        "10%",
+        "20%",
+        "30%",
+        "40%",
+        "50%",
+        "60%",
+        "70%",
+        "80%",
+        "90%",
+        "100%"
+      ],
       "default": "50%",
       "description": "Volume level for background music"
     },
@@ -43,14 +54,21 @@
       "key": "units",
       "label": "Units",
       "type": "list_single",
-      "options": ["Metric", "US"],
+      "options": [
+        "Metric",
+        "US"
+      ],
       "default": "Metric"
     },
     {
       "key": "screen_time",
       "label": "Screen Time",
       "type": "list_single",
-      "options": ["10 SEC", "30 SEC", "60 SEC"],
+      "options": [
+        "10 SEC",
+        "30 SEC",
+        "60 SEC"
+      ],
       "default": "10 SEC",
       "description": "How long each screen stays up before the loop advances"
     },
@@ -58,7 +76,10 @@
       "key": "hours_format",
       "label": "Hours Format",
       "type": "list_single",
-      "options": ["24-hour", "12-hour"],
+      "options": [
+        "24-hour",
+        "12-hour"
+      ],
       "default": "24-hour"
     }
   ]
