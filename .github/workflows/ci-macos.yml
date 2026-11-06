@@ -7,10 +7,12 @@ name: CI macOS
 # the original CI (AGL-pinned macos-15 etc. preserved).
 on:
   push:
-    branches: [dev, 'feature/**', beta]
-    paths-ignore: ['**.md'] # docs-only pushes (.hermes.md syncs, changelogs, plans) don't queue builds
+    # burst/* work branches deliberately absent: lab/local only, CI runs when they merge into dev
+    branches: [dev, 'feature/**']
+    paths-ignore: ['**.md','**.yml'] # docs and CI-only pushes
   pull_request:
-    branches: [dev]
+    # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
+    branches: [beta]
 
 jobs:
   build-macos-arm64:
