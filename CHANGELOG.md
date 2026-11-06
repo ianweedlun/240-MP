@@ -4,6 +4,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — macOS CI cache lane warm + per-TU APP_VERSION define
+- macOS CI re-ran from zero on every identity re-push and re-queued PR build — the chronic
+  capacity bottleneck. Two-part fix, one deploy:
+- `CMakeLists.txt`: `-DAPP_VERSION` moved from a target-wide define (which put it on every
+  TU's compile line, so ccache hits were zero by construction) to a per-SOURCE define on
+  the only two TUs that use it (`main.cpp`, `WeatherBackend.cpp`). Verified on a fresh
+  Ninja configure: exactly those two object rules carry the flag, both compile green;
+  test targets touch neither file.
+- `ci-macos.yml`: `actions/cache` restore@v6 + save@v6 split so the store step sits
+  directly after Build (a test failure still banks the compile cache); `CCACHE_DIR` under
+  `RUNNER_TEMP`; key = event+ref with prefix fallback. ccache hashes inputs, so
+  cross-commit reuse is always safe.
+
 ### Fixed — YouTube review pair: sign-in cookie row and OSC info garbage
 - The SignIn subview drew a `COOKIE FALLBACK: OFF - OPTIONAL SSH PASTE OF cookies.txt`
   line under "SIGNED IN" on every signed-in visit — setup instructions no viewer acts
