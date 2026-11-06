@@ -42,8 +42,9 @@ FocusScope {
             else if (plStatus.fileExists)
                 errorMessage = plStatus.error
             else
-                errorMessage = "REQUIRED FILES NOT FOUND\n\n"
-                             + "ADD YOUTUBE_SUBSCRIPTIONS.TXT OR YOUTUBE_PLAYLISTS.TXT\n\n"
+                errorMessage = "NOTHING WIRED UP YET\n\n"
+                             + "PAIR YOUTUBE IN SIGN-IN SETTINGS,\n"
+                             + "OR ADD YOUTUBE_SUBSCRIPTIONS.TXT / YOUTUBE_PLAYLISTS.TXT\n\n"
                              + "PLEASE SEE THE WIKI FOR DETAILS"
             return
         }
