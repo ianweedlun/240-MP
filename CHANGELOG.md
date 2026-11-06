@@ -4,6 +4,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — SponsorBlock settings subview opens clean (QML contract, was a 4-error cascade)
+- `SponsorSettings.qml` lacked the mandatory file-scoped `property var navParams: ({})`: every
+  open of the subview fired `Main.qml` "Cannot assign to non-existent property", a
+  ReferenceError poisoning `moduleId`, and a null-receiver `AppBar{}` icon binding — four
+  QML error lines per open, silently. Now mirrors the sibling-view pattern (all 15 other
+  views declare it; SignIn's `_selfInfo` file-scope snapshot feeds the AppBar icon, since
+  context props like `appCore` aren't visible inside imported-component bindings).
+  Lab drive of the full Settings→YouTube→SponsorBlock walk: 4 errors → 0, clean stack return.
+
 ### Changed — YouTube credential ladder sheds upstream's file-fed last stand (legacy axe burst)
 - `CredentialMode` loses the legacy mode: `FileFallback` → `SignedOut`. With neither
   a pasted cookie nor a live device-flow chain, the account surface now shows **nothing**
