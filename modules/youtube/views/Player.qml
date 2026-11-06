@@ -168,7 +168,13 @@ FocusScope {
         onTriggered: {
             if (!playerRoot.waitingForResolve)
                 return
-            playerRoot.takeYtdlFallback("timeout-15s")
+            playerRoot.waitingForResolve = false
+            resolveWaitTimer.stop()
+            appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=15s reason=timeout")
+            playerRoot.waitingSponsor = false
+            var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+            playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
+            playerRoot.play(playerRoot.pendingPlayStartMs)
         }
     }
 
@@ -198,24 +204,9 @@ FocusScope {
                     return
                 }
                 playerRoot.play(playerRoot.pendingPlayStartMs)
-            } else {
-                // Pair not usable despite the ready signal (defensive): the
-                // timer was stopped above, so without this nothing else would
-                // launch it — take the fallback right here, never dead-end.
-                playerRoot.takeYtdlFallback("pair-not-fresh")
             }
-        }
-
-        // Resolve completed but stored nothing usable: a cold-waiting Player
-        // ends its wait at once instead of burning the 15 s cap and paying
-        // ytdl_hook's re-resolve a second time (network dead, bot-gated 403,
-        // live source, signed window too short to ever serve).
-        function onPlaybackResolveDone(doneVideoId) {
-            if (doneVideoId !== playerRoot.videoId || !playerRoot.waitingForResolve)
-                return
-            appCore.note_state("yt-resolve",
-                               "vid=" + playerRoot.videoId + " done-nothing-stored")
-            playerRoot.takeYtdlFallback("empty-resolve")
+            // If the pair somehow isn't there, let the wait timer's ytdl
+            // fallback handle it rather than racing a second resolve.
         }
     }
 
@@ -231,24 +222,6 @@ FocusScope {
                 playerRoot.play(playerRoot.pendingPlayStartMs)
             }
         }
-    }
-
-    // One fallback, three callers: the 15 s wait cap (resolveWaitTimer above),
-    // a resolve that stored nothing usable (onPlaybackResolveDone below), and
-    // the defensive pair-not-there fallthrough (onPlaybackUrlReady). mpv
-    // resolves the watch URL itself via ytdl_hook — always works, no EDL for
-    // this viewing (segments apply to future ones).
-    function takeYtdlFallback(reason) {
-        playerRoot.waitingForResolve = false
-        playerRoot.waitingSponsor = false
-        resolveWaitTimer.stop()
-        appCore.note_state("yt-fallback",
-                           "vid=" + playerRoot.videoId + " reason=" + reason)
-        var resolution = appCore.get_setting(moduleRoot.moduleId,
-                                            "playback_resolution") || "480p"
-        playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" +
-                               youtubeBackend.ytdlFormatForResolution(resolution)]
-        playerRoot.play(playerRoot.pendingPlayStartMs)
     }
 
     function playAt(startMs) {
