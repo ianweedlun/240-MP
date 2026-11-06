@@ -3,20 +3,15 @@ name: Deploy to Pi
 on:
   workflow_run:
     workflows: ["CI"]
+    branches: [beta]
     types: [completed]
 
 jobs:
   deploy:
     name: Deploy to Raspberry Pi
-    # Beta-only deploy (issue #44 topology): dev pushes get CI but NEVER touch
-    # the Pi; beta is the validated showcase and its builds are the only Pi
-    # deploys. beta is seeded at #28 close (contract locked with the maintainer).
-    if: >-
-      github.event.workflow_run.head_branch == 'beta'
     runs-on: ubuntu-latest
     permissions:
       actions: read
-
     steps:
       - name: Stage identity key (key-only auth, no password secrets)
         run: |

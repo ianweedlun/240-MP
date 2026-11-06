@@ -4,6 +4,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube cold-play waits end at once when the resolve already failed (#28 polish wave)
+- Every case where the background resolve **completes but stores nothing** — dead network,
+  bot-gated 403, ytdl spawn failure, no yt-dlp binary, entry already expired at store time —
+  left the Player waiting out its full 15 s cap, and only then did mpv's `ytdl_hook` pay a
+  second full resolve: worst cold path ~30 s. `playbackResolveDone(videoId)` now ends that
+  wait at once, and `Player.qml` routes all three cold failures (timeout / empty resolve /
+  stale pair) through one `takeYtdlFallback(reason)` path instead of one inlined copy.
+- The URL-cache **store gate now runs the same pure `urlFresh` freshness check** (same
+  120 s margin) as the read side: short-window entries stop being stored-but-never-served
+  dead weight, and the ready-signal dead-end state can no longer happen.
+- A transient SponsorBlock failure now **emits `sponsorReady` on the failure path** —
+  the next playback retries instead of the Player waiting out the full 6 s ceiling.
+  Failures stay uncached.
+- Hygiene in the same touch: three `%d`-vs-`qsizetype` format sites in `YouTubeBackend.cpp`
+  made exact, so the TU compiles warning-free on the CI lanes.
+Gates: unit suites green (yt-url-cache 7/7, yt-sponsor-edl 10/10), TU compiles clean; the
+runtime behavior lands with the Pi test.
+
 ### Changed — macOS CI cache lane warm + per-TU APP_VERSION define
 - macOS CI re-ran from zero on every identity re-push and re-queued PR build — the chronic
   capacity bottleneck. Two-part fix, one deploy:

@@ -1,11 +1,11 @@
 name: Pi Reachability Probe
 # One-shot diagnostic: can a GitHub runner reach the Pi via the WAN path
-# (Cloudflare grey-cloud DNS -> WAN IP; firewall maps WAN:2222 -> Pi LAN:22)?
 # Informational — always exits 0; read the verdict line.
 on:
-  push:
-    branches: ['dev', 'feature/**', 'beta']
-    paths-ignore: ['**.md'] # docs-only pushes don't probe the Pi
+  pull_request:
+    # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
+    branches: [beta]
+    paths-ignore: ['**.md','**.yml'] # docs & CI PRs don't trigger actions
 
 jobs:
   probe:
