@@ -44,7 +44,7 @@ jobs:
       - name: Decide mode + target ref (rc = PR head, restore = Pi's saved rev)
         run: |
           PR='${{ github.event.pull_request.number }}'
-          post_comment() { local b; b=$(cat); jq -n --arg b "$b" '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments" -o /dev/null || echo "WARN: comment post failed"; }
+          post_comment() { local b resp; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; }
           echo "PR=$PR" >> $GITHUB_ENV
           echo "PR_NUM=pr-$PR" >> $GITHUB_ENV
           if [ '${{ github.event.action }}' != 'closed' ]; then
@@ -107,7 +107,7 @@ jobs:
         run: |
           MODE="${{ env.MODE }}"; PR="${{ env.PR }}"; REF="${{ env.REF }}"; PR_NUM="pr-$PR"
           TARBALL="${{ env.TARBALL }}"
-          post_comment() { local b; b=$(cat); jq -n --arg b "$b" '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments" -o /dev/null || echo "WARN: comment post failed"; }
+          post_comment() { local b resp; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; }
           HOST='${{ secrets.PI_SSH_HOSTNAME }}'
           USER='${{ secrets.PI_SSH_USERNAME }}'
           SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
