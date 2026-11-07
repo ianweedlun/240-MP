@@ -25,7 +25,7 @@ FocusScope {
     // File-scope module-info snapshot (SignIn.qml pattern): context props like
     // appCore are not visible inside imported-component bindings (AppBar{}),
     // so resolve once here and hand the value in.
-    property var _selfInfo: appCore.get_module_info(moduleId)
+    property var _selfInfo: appCore ? appCore.get_module_info(moduleId) : ({})
 
     property var cats: [
         { key: "sponsor_sponsor",      label: "SPONSOR",      def: "Skip" },

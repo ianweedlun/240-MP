@@ -81,7 +81,7 @@ FocusScope {
     // ---
     // Header
     // ---
-    property var _selfInfo: appCore.get_module_info(navParams.moduleId || "com.240mp.youtube")
+    property var _selfInfo: appCore ? appCore.get_module_info(navParams.moduleId || "com.240mp.youtube") : ({})
     AppBar {
         iconSource: _selfInfo.icon
         title: "YOUTUBE"
