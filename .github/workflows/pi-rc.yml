@@ -1,0 +1,179 @@
+name: Pi RC deploy (pre-merge PR test)
+
+# On-demand pre-merge verification (contract 2026-11-07): beta stays the Pi's
+# daily driver — PR code NEVER lands on the Pi unless the dev->beta PR carries
+# the `pi-test` label. Label it = PR HEAD rebuild + RC deploy + reboot; the
+# evidence (marker, md5, state-log boot line) is posted on the PR; Ian tests
+# the un-merged bits on the CRT, then approves and merges himself — the
+# existing beta-push deploy remains the ONLY official deploy path.
+# If a labeled PR is CLOSED UNMERGED, the previous official beta build is
+# auto-restored on the Pi (one extra reboot, Pi back to truth).
+# Same one-deploy-at-a-time rule as everything else: never RC two PRs, never
+# merge while an RC deploy is mid-flight.
+# Same-repo PRs only (fork PRs get no secrets — our flow never opens fork PRs).
+
+on:
+  pull_request:
+    actions: [opened, labeled, synchronize, reopened, closed]
+
+jobs:
+  pi-rc:
+    name: PR Pi verification (RC / restore)
+    if: >-
+      github.event.pull_request.base.ref == 'beta' &&
+      (
+        (github.event.action != 'closed' &&
+         contains(github.event.pull_request.labels.*.name, 'pi-test'))
+        ||
+        (github.event.action == 'closed' && !github.event.pull_request.merged)
+      )
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      issues: write
+    steps:
+      - name: Stage identity key (key-only auth, no password secrets)
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -q -lf /tmp/pi_id
+
+      - name: Decide mode + target ref (rc = PR head, restore = Pi's saved rev)
+        run: |
+          PR='${{ github.event.pull_request.number }}'
+          echo "PR=$PR" >> $GITHUB_ENV
+          echo "PR_NUM=pr-$PR" >> $GITHUB_ENV
+          if [ '${{ github.event.action }}' != 'closed' ]; then
+            echo "MODE=rc" >> $GITHUB_ENV
+            echo "REF=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+            exit 0
+          fi
+          # closed & unmerged: only this PR gets restored, and only if it
+          # actually RC-deployed (marker carries the owning PR number).
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          RC_PR=$($SSH "cat \$HOME/.240mp-rc-deployed-pr 2>/dev/null" || true)
+          if [ "$RC_PR" != "$PR_NUM" ]; then
+            echo "This PR never RC-deployed (or a later RC owns the Pi) — nothing to restore."
+            echo "MODE=skip" >> $GITHUB_ENV
+            exit 0
+          fi
+          REV=$($SSH "cat \$HOME/.240mp-rc-restore-rev 2>/dev/null" || true)
+          if [ -z "$REV" ]; then
+            gh pr comment "$PR" --repo ianweedlun/240-MP --body "PR closed without merge but the Pi carried its RC build; **auto-restore target unknown** — land beta manually: ./scripts/deploy-pi.sh --latest beta"
+            echo "MODE=skip" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "MODE=restore" >> $GITHUB_ENV
+          echo "REF=$REV" >> $GITHUB_ENV
+
+      - name: Checkout PR head (rc mode)
+        if: env.MODE == 'rc'
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Checkout saved beta rev (restore mode)
+        if: env.MODE == 'restore'
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ env.REF }}
+
+      - name: Build arm64 (same recipe as ci.yml)
+        if: env.MODE != 'skip'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
+            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev ccache
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ github.event.pull_request.number }}-pi-rc"
+          cmake --build build --parallel
+          cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
+          mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
+          TARBALL="240-MP-pi-rc-${{ github.event.pull_request.number }}-linux-arm64-$(git rev-parse --short HEAD)"
+          tar -czf "${TARBALL}.tar.gz" -C install .
+          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+
+      - name: Deploy to Pi (RC or restore) + verify
+        if: env.MODE != 'skip'
+        run: |
+          MODE="${{ env.MODE }}"; PR="${{ env.PR }}"; REF="${{ env.REF }}"; PR_NUM="pr-$PR"
+          TARBALL="${{ env.TARBALL }}"
+          HOST='${{ secrets.PI_SSH_HOSTNAME }}'
+          USER='${{ secrets.PI_SSH_USERNAME }}'
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          LOCAL_MD5=$(tar -xzf "$TARBALL".tar.gz -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
+
+          if ! $SSH "$USER@$HOST" true 2>/tmp/ssh_err; then
+            gh pr comment "$PR" --repo ianweedlun/240-MP --body "**Pi offline.** Build for $MODE verified locally (md5 $LOCAL_MD5) but NOT deployed — land manually when it's back: ./scripts/deploy-pi.sh"
+            exit 0
+          fi
+
+          if [ "$MODE" = "rc" ]; then
+            RC_REV=$($SSH "cat \$HOME/.240mp-rc-deployed-rev 2>/dev/null" || true)
+            if [ "$RC_REV" = "$REF" ]; then
+              echo "RC fast-path: this exact PR head is already the RC build on the Pi — no transfer, no reboot, no duplicate comment."
+              exit 0
+            fi
+            OFFICIAL=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
+            [ -n "$OFFICIAL" ] && $SSH "echo $OFFICIAL > \$HOME/.240mp-rc-restore-rev" || true
+          else
+            CUR=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
+            if [ "$CUR" = "$REF" ]; then
+              $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev" || true
+              gh pr comment "$PR" --repo ianweedlun/240-MP --body "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot."
+              exit 0
+            fi
+          fi
+
+          PI_PATH="/tmp/240mp-rc-$REF.tar.gz"
+          scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            "$TARBALL".tar.gz "$USER@$HOST:$PI_PATH"
+
+          $SSH "$USER@$HOST" "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null || {
+            gh pr comment "$PR" --repo ianweedlun/240-MP --body "Pi wrapper /usr/local/bin/240mp-ci-deploy MISSING — refresh via privileged shell, then re-fire the trigger."
+            exit 1
+          }
+          rc=0
+          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
+          echo "wrapper call rc=$rc (connection death = rebooting, as expected)"
+
+          for i in $(seq 1 15); do
+            sleep 20
+            OUT=$($SSH "$USER@$HOST" "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || continue
+            echo "check $i:" "$(echo "$OUT" | tr '\n' ' ')"
+            if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+              BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log" 2>/dev/null || true)
+              if [ "$MODE" = "rc" ]; then
+                $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev; echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr"
+                {
+                  echo "### Pi RC deploy — PR $PR_NUM (**un-merged code on the Pi**)"
+                  echo "- build: PR head \`$(git rev-parse HEAD)\` → Pi binary md5 \`$LOCAL_MD5\` (matches tarball), service **active**, verified loop"
+                  echo "- previous official rev \`${OFFICIAL:-none}\` saved as restore target — closing this PR restores it automatically"
+                  echo "- boot state log: \`$(echo "$BOOT" | tr '\n' ' ')\`"
+                  echo ""
+                  echo "CRT test the PR's behaviors now: your word on the behaviors gates your approving review; merge = official deploy over this RC."
+                } > /tmp/rc_body.md
+              else
+                $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev; rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev"
+                {
+                  echo "### Pi restored to official beta \`$REF\`"
+                  echo "- PR closed without merge; Pi rebuilt to the saved rev, service active, md5 verified. Pi back on beta truth."
+                } > /tmp/rc_body.md
+              fi
+              gh pr comment "$PR" --repo ianweedlun/240-MP --body-file /tmp/rc_body.md
+              echo "DEPLOYED+VERIFIED ($MODE): service active, md5 matches"
+              exit 0
+            fi
+          done
+          echo "VERIFY FAILED: service active + md5 $LOCAL_MD5 not confirmed after 15 tries"
+          exit 1
+
+      - name: Evidence on skip modes
+        if: env.MODE == 'skip' && github.event.action == 'closed' && !github.event.pull_request.merged
+        run: |
+          gh pr comment '${{ github.event.pull_request.number }}' --repo ianweedlun/240-MP --body "Closed without merge — this PR never put a build on the Pi; nothing to restore."
