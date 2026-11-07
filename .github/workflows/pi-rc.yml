@@ -51,7 +51,9 @@ jobs:
           fi
           # closed & unmerged: only this PR gets restored, and only if it
           # actually RC-deployed (marker carries the owning PR number).
-          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          SSH_HOST='${{ secrets.PI_SSH_HOSTNAME }}'
+          SSH_USER='${{ secrets.PI_SSH_USERNAME }}'
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $SSH_USER@$SSH_HOST"
           RC_PR=$($SSH "cat \$HOME/.240mp-rc-deployed-pr 2>/dev/null" || true)
           if [ "$RC_PR" != "$PR_NUM" ]; then
             echo "This PR never RC-deployed (or a later RC owns the Pi) — nothing to restore."
@@ -104,10 +106,10 @@ jobs:
           TARBALL="${{ env.TARBALL }}"
           HOST='${{ secrets.PI_SSH_HOSTNAME }}'
           USER='${{ secrets.PI_SSH_USERNAME }}'
-          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
           LOCAL_MD5=$(tar -xzf "$TARBALL".tar.gz -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
 
-          if ! $SSH "$USER@$HOST" true 2>/tmp/ssh_err; then
+          if ! $SSH true 2>/tmp/ssh_err; then
             gh pr comment "$PR" --repo ianweedlun/240-MP --body "**Pi offline.** Build for $MODE verified locally (md5 $LOCAL_MD5) but NOT deployed — land manually when it's back: ./scripts/deploy-pi.sh"
             exit 0
           fi
@@ -133,12 +135,12 @@ jobs:
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
             "$TARBALL".tar.gz "$USER@$HOST:$PI_PATH"
 
-          $SSH "$USER@$HOST" "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null || {
+          $SSH "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null || {
             gh pr comment "$PR" --repo ianweedlun/240-MP --body "Pi wrapper /usr/local/bin/240mp-ci-deploy MISSING — refresh via privileged shell, then re-fire the trigger."
             exit 1
           }
           rc=0
-          $SSH "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          $SSH "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
           if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
           echo "wrapper call rc=$rc (connection death = rebooting, as expected)"
 
