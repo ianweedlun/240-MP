@@ -4,6 +4,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Module roots survive shutdown teardown (null-appCore re-eval, was a silent TypeError)
+- At process teardown the QML tree re-evaluates view property bindings while context
+  properties are already nulled: `modules/{plex,local_files,retroarch}/views/Root.qml:14`
+  ran `appCore.get_module_info(...)` against a null `appCore` during shutdown — noisy
+  console TypeError on every quit, invisible live but polluting runlogs/diagnostics.
+  Now the established guard parity all other module roots already use:
+  `appCore ? appCore.get_module_info(moduleId) : ({})` (nfc/weather/scripts/emby/
+  ambient/youtube roots already carry it; these three predate the pattern).
+
 ### Fixed — YouTube warm opens self-heal when a clock-fresh cached URL still 403s (warm-403 cure)
 - A cached googlevideo URL can pass the `expire=` clock check yet be rejected 403 on
   replay: the signature binds to the minting session **and IP**, so `urlFresh()` is not a
