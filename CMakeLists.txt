@@ -305,6 +305,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-url-cache COMMAND yt-url-cache-tests)
 
+    # Warm-403 reactive cure (2026-11-07 night): eviction semantics the Player
+    # retry leans on — exact-key removal, format isolation, harmless miss,
+    # no resurrection through prune. Same pure helpers, no processes/network.
+    add_executable(yt-url-invalidate-tests
+        src/util/tests/YtUrlCacheInvalidateTest.cpp)
+    set_target_properties(yt-url-invalidate-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-url-invalidate-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-url-invalidate-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-url-invalidate COMMAND yt-url-invalidate-tests)
+
     # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
     # before-expiry semantics. No processes, no network.
     add_executable(yt-auth-gate-tests

@@ -1072,6 +1072,21 @@ bool YouTubeBackend::cachedPlaybackSingle(const QString &videoId,
                            QDateTime::currentMSecsSinceEpoch() / 1000, kUrlSafetyMarginS);
 }
 
+void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
+                                         const QString &resolution)
+{
+    if (videoId.isEmpty())
+        return;
+    ensureUrlCacheLoaded();
+    const QString fmt = ytdlFormatForResolution(resolution);
+    if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
+        return; // nothing stored for this pair: the cold path is already in effect
+    QFile f(urlCacheFilePath());
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact));
+}
+
 void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
                                        const QString &audioUrl, bool single, qint64 expireEpoch)
 {
