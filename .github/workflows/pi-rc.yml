@@ -30,7 +30,6 @@ jobs:
     runs-on: ubuntu-24.04-arm
     permissions:
       issues: write
-      pull_requests: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -45,6 +44,7 @@ jobs:
       - name: Decide mode + target ref (rc = PR head, restore = Pi's saved rev)
         run: |
           PR='${{ github.event.pull_request.number }}'
+          post_comment() { local b; b=$(cat); jq -n --arg b "$b" '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments" -o /dev/null || echo "WARN: comment post failed"; }
           echo "PR=$PR" >> $GITHUB_ENV
           echo "PR_NUM=pr-$PR" >> $GITHUB_ENV
           if [ '${{ github.event.action }}' != 'closed' ]; then
@@ -65,7 +65,7 @@ jobs:
           fi
           REV=$($SSH "cat \$HOME/.240mp-rc-restore-rev 2>/dev/null" || true)
           if [ -z "$REV" ]; then
-            gh pr comment "$PR" --repo ianweedlun/240-MP --body "PR closed without merge but the Pi carried its RC build; **auto-restore target unknown** — land beta manually: ./scripts/deploy-pi.sh --latest beta"
+            echo "PR closed without merge but the Pi carried its RC build; **auto-restore target unknown** — land beta manually: ./scripts/deploy-pi.sh --latest beta" | post_comment
             echo "MODE=skip" >> $GITHUB_ENV
             exit 0
           fi
@@ -107,13 +107,14 @@ jobs:
         run: |
           MODE="${{ env.MODE }}"; PR="${{ env.PR }}"; REF="${{ env.REF }}"; PR_NUM="pr-$PR"
           TARBALL="${{ env.TARBALL }}"
+          post_comment() { local b; b=$(cat); jq -n --arg b "$b" '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments" -o /dev/null || echo "WARN: comment post failed"; }
           HOST='${{ secrets.PI_SSH_HOSTNAME }}'
           USER='${{ secrets.PI_SSH_USERNAME }}'
           SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
           LOCAL_MD5=$(tar -xzf "$TARBALL".tar.gz -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
 
           if ! $SSH true 2>/tmp/ssh_err; then
-            gh pr comment "$PR" --repo ianweedlun/240-MP --body "**Pi offline.** Build for $MODE verified locally (md5 $LOCAL_MD5) but NOT deployed — land manually when it's back: ./scripts/deploy-pi.sh"
+            echo "**Pi offline.** Build for $MODE verified locally (md5 $LOCAL_MD5) but NOT deployed — land manually when it's back: ./scripts/deploy-pi.sh" | post_comment
             exit 0
           fi
 
@@ -129,7 +130,7 @@ jobs:
             CUR=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
             if [ "$CUR" = "$REF" ]; then
               $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev" || true
-              gh pr comment "$PR" --repo ianweedlun/240-MP --body "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot."
+              echo "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot." | post_comment
               exit 0
             fi
           fi
@@ -139,7 +140,7 @@ jobs:
             "$TARBALL".tar.gz "$USER@$HOST:$PI_PATH"
 
           $SSH "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null || {
-            gh pr comment "$PR" --repo ianweedlun/240-MP --body "Pi wrapper /usr/local/bin/240mp-ci-deploy MISSING — refresh via privileged shell, then re-fire the trigger."
+            echo "Pi wrapper /usr/local/bin/240mp-ci-deploy MISSING — refresh via privileged shell, then re-fire the trigger." | post_comment
             exit 1
           }
           rc=0
@@ -177,7 +178,7 @@ jobs:
                   echo "- PR closed without merge; Pi rebuilt to the saved rev, service active, md5 verified. Pi back on beta truth."
                 } > /tmp/rc_body.md
               fi
-              gh pr comment "$PR" --repo ianweedlun/240-MP --body-file /tmp/rc_body.md
+              post_comment < /tmp/rc_body.md
               echo "DEPLOYED+VERIFIED ($MODE): service active, md5 matches"
               exit 0
             fi
@@ -188,4 +189,4 @@ jobs:
       - name: Evidence on skip modes
         if: env.MODE == 'skip' && github.event.action == 'closed' && !github.event.pull_request.merged
         run: |
-          gh pr comment '${{ github.event.pull_request.number }}' --repo ianweedlun/240-MP --body "Closed without merge — this PR never put a build on the Pi; nothing to restore."
+          jq -n --arg b "Closed without merge — this PR never put a build on the Pi; nothing to restore." '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/${{ github.event.pull_request.number }}/comments" -o /dev/null || echo "WARN: comment post failed"
