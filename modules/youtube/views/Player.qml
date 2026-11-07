@@ -25,6 +25,8 @@ FocusScope {
     property string errorMessage:     ""
     property var    ytdlArgs:         []
     property int    lastStartMs:      0   // what the last attempt started from, for retry
+    property bool   lastOpenWasWarm: false // the launched attempt took the cached-URL direct path
+    property bool   retryWarm403:    false // one reactive cold retry per open (user opens reset it)
 
     // Track last non-null values during playback for robust save on exit
     property int    lastKnownPositionMs: 0
@@ -102,6 +104,9 @@ FocusScope {
             directPlayUrl = direct
             directAudioUrl = directAudio
             ytdlArgs = ["--ytdl=no"]
+            // A cached URL is about to be the stream: mark it so a launch that
+            // dies before first position can take the reactive warm-403 cure.
+            lastOpenWasWarm = true
             appCore.note_state("yt-play", "vid=" + videoId + " path=warm res=" + resolution)
             youtubeBackend.resolvePlayback(videoId, resolution)
             return true
@@ -109,6 +114,7 @@ FocusScope {
         directPlayUrl = ""
         directAudioUrl = ""
         ytdlArgs = []
+        lastOpenWasWarm = false
         appCore.note_state("yt-play", "vid=" + videoId + " path=cold res=" + resolution)
         youtubeBackend.resolvePlayback(videoId, resolution)
         return false
@@ -239,6 +245,7 @@ FocusScope {
             return false
         item = playlistItems[++playlistIndex]
         playbackStarted = false
+        retryWarm403 = false
         lastKnownPositionMs = 0
         lastKnownDurationMs = 0
         savedPositionMs = 0
@@ -255,6 +262,8 @@ FocusScope {
                 event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 errorMessage = ""
+                // Explicit user retry: fresh allowance for the warm-403 cure too.
+                retryWarm403 = false
                 // Retry: the cache may have been filled by the resolve that
                 // ran while the error was up — re-prep so we take the direct
                 // path when it's available.
@@ -274,6 +283,7 @@ FocusScope {
                 event.accepted = true
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                 overlayVisible = false
+                retryWarm403 = false
                 // Resume prompt sat open while the background resolve ran, so
                 // the pair is very likely cached by now — but if the user hit
                 // select instantly, playAt waits for the resolve to land.
@@ -332,6 +342,23 @@ FocusScope {
             // yt-dlp missing/outdated or an unplayable stream surfaces as mpv exit
             // code 2 before any position event — show the error instead of leaving.
             if (reason === "failed" && !playbackStarted) {
+                // Reactive warm-403 cure: a clock-fresh cached googlevideo URL
+                // can STILL 403 — the signature binds to the minting session and
+                // IP, so urlFresh is not a playback oracle. When a warm launch
+                // dies before the first position event, evict its entry and run
+                // the cold resolve once; a fresh URL bound to THIS session
+                // replaces it. Capped to one retry per open so a genuinely dead
+                // yt-dlp still ends at its message instead of looping.
+                if (lastOpenWasWarm && !retryWarm403) {
+                    retryWarm403 = true
+                    var res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+                    youtubeBackend.invalidateCachedUrl(videoId, res)
+                    appCore.note_state("yt-warm403",
+                                       "vid=" + videoId + " evicted; re-entering cold from " + lastStartMs)
+                    preparePlayback()
+                    playAt(lastStartMs)
+                    return
+                }
                 playerRoot.errorMessage = "PLAYBACK FAILED\n\nPLEASE CHECK THAT YT-DLP IS INSTALLED AND UP TO DATE"
                 return
             }

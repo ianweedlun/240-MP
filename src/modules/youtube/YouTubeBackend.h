@@ -76,6 +76,13 @@ public:
     Q_INVOKABLE bool cachedPlaybackSingle(const QString &videoId,
                                           const QString &resolution);
 
+    // Reactive warm-403 cure: a clock-fresh cached URL can still 403 (the
+    // signature binds to the minting session/IP, not just expire=). When the
+    // Player's warm launch dies before first position, it evicts that entry
+    // and re-enters the cold resolve — costs network only on actual failure.
+    Q_INVOKABLE void invalidateCachedUrl(const QString &videoId,
+                                         const QString &resolution);
+
     // Plan A warm-up: one pass over watch history finds the newest video with
     // an unfinished resume position and fires its background resolve, so the
     // resume-into-a-warm-stream case costs zero at play time.

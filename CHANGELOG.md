@@ -4,6 +4,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Pre-merge PR verification on the Pi (`pi-test` label + `pi-rc.yml`)
+- A dev→beta PR labeled `pi-test` gets its PR-head build RC-deployed to the Pi (rebuild on the arm64 runner, `240mp-ci-deploy` dance, service+md5 verify) with an evidence comment (marker, md5, boot state-log) posted on the PR. Beta stays the Pi's daily driver otherwise: unlabeled PRs never touch it. Closing such a PR without merging auto-restores the previously deployed beta build (one extra reboot). Ian's approving review + merge stay manual; the beta-push deploy remains the only official deploy.
+
+### Fixed — Module roots survive shutdown teardown (null-appCore re-eval, was a silent TypeError)
+- At process teardown the QML tree re-evaluates view property bindings while context
+  properties are already nulled: `modules/{plex,local_files,retroarch}/views/Root.qml:14`
+  ran `appCore.get_module_info(...)` against a null `appCore` during shutdown — noisy
+  console TypeError on every quit, invisible live but polluting runlogs/diagnostics.
+  Now the established guard parity all other module roots already use:
+  `appCore ? appCore.get_module_info(moduleId) : ({})` (nfc/weather/scripts/emby/
+  ambient/youtube roots already carry it; these three predate the pattern).
+
+### Fixed — YouTube warm opens self-heal when a clock-fresh cached URL still 403s (warm-403 cure)
+- A cached googlevideo URL can pass the `expire=` clock check yet be rejected 403 on
+  replay: the signature binds to the minting session **and IP**, so `urlFresh()` is not a
+  playback oracle. A warm launch that dies before the first position event now evicts that
+  cache entry (`invalidateCachedUrl`, exact `videoId|format` key) and re-enters the cold
+  resolve once, minting a URL bound to THIS session. One reactive retry per open
+  (`lastOpenWasWarm`/`retryWarm403`, reset by user retry/resume/playlist advance) so a
+  genuinely dead yt-dlp still ends at its message instead of looping. New pure-logic test
+  target `yt-url-invalidate` pins eviction semantics: exact-key removal, format isolation,
+  idempotent miss, no resurrection through prune.
+
+### Fixed — SponsorBlock settings subview opens clean (QML contract, was a 4-error cascade)
+- `SponsorSettings.qml` lacked the mandatory file-scoped `property var navParams: ({})`: every
+  open of the subview fired `Main.qml` "Cannot assign to non-existent property", a
+  ReferenceError poisoning `moduleId`, and a null-receiver `AppBar{}` icon binding — four
+  QML error lines per open, silently. Now mirrors the sibling-view pattern (all 15 other
+  views declare it; SignIn's `_selfInfo` file-scope snapshot feeds the AppBar icon, since
+  context props like `appCore` aren't visible inside imported-component bindings).
+  Lab drive of the full Settings→YouTube→SponsorBlock walk: 4 errors → 0, clean stack return.
+
+### Changed — YouTube credential ladder sheds upstream's file-fed last stand (legacy axe burst)
+- `CredentialMode` loses the legacy mode: `FileFallback` → `SignedOut`. With neither
+  a pasted cookie nor a live device-flow chain, the account surface now shows **nothing**
+  and the views point at pairing — upstream's file-fed display is gone from the ladder.
+  `youtube_subscriptions.txt` stays as a **pre-pairing roster seed** (bootstrap channels
+  before pairing), and legacy pos-only resume entries stay tolerated (save-file compat,
+  a different axis). The unit test `ladderLastStand` became `ladderSignedOutNoLastStand`.
+- `Items.qml` cold-start text leads with pairing ("PAIR YOUTUBE IN SIGN-IN SETTINGS")
+  and offers the two txt files as the fallback bootstrap, not the other way round.
+- Roster dead-end retry comment made honest: it retries on the SEEDED roster, not a
+  credential-mode file path.
+
+### Changed — Deploy-to-Pi gate: only a genuine push into beta deploys
+- The deploy job gains `if: github.event.workflow_run.event == 'push'`. Trigger-level
+  `branches: [beta]` alone also matches PR-triggered CI completions whose payload
+  `head_branch` is the **PR head** (observed with PR #51 headed on beta) — those could
+  deploy a pre-merge sha. A merge into beta is a push event and still deploys ✓.
+
 ### Fixed — YouTube cold-play waits end at once when the resolve already failed (#28 polish wave)
 - Every case where the background resolve **completes but stores nothing** — dead network,
   bot-gated 403, ytdl spawn failure, no yt-dlp binary, entry already expired at store time —

@@ -1072,6 +1072,21 @@ bool YouTubeBackend::cachedPlaybackSingle(const QString &videoId,
                            QDateTime::currentMSecsSinceEpoch() / 1000, kUrlSafetyMarginS);
 }
 
+void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
+                                         const QString &resolution)
+{
+    if (videoId.isEmpty())
+        return;
+    ensureUrlCacheLoaded();
+    const QString fmt = ytdlFormatForResolution(resolution);
+    if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
+        return; // nothing stored for this pair: the cold path is already in effect
+    QFile f(urlCacheFilePath());
+    if (!f.open(QIODevice::WriteOnly))
+        return;
+    f.write(QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact));
+}
+
 void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
                                        const QString &audioUrl, bool single, qint64 expireEpoch)
 {
@@ -1443,10 +1458,15 @@ QVariantMap YouTubeBackend::check_signin()
     // Ladder telemetry — presence word only, cookie bytes never leave the file.
     const bool cookiePresent = QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt"));
     m[QStringLiteral("cookieFallback")] = cookiePresent;
+    // Post-axe telemetry: the label IS the credentialMode() ladder (single
+    // source). The old inline paraphrase claimed an "oauth" for dead tokens
+    // and printed "file" — a mode that is deliberately no longer a credential.
+    const auto credMode = ytauth::credentialMode(
+        cookiePresent, m[QStringLiteral("signedIn")].toBool());
     qWarning("[Youtube] auth-mode=%s",
-             cookiePresent                              ? "cookie"
-             : (!m_accessToken.isEmpty() && !m_refreshToken.isEmpty()) ? "oauth"
-                                                                        : "file");
+             credMode == ytauth::CredentialMode::Cookie ? "cookie"
+             : credMode == ytauth::CredentialMode::OAuth ? "oauth"
+                                                        : "signedOut");
     return m;
 }
 
@@ -1745,7 +1765,9 @@ void YouTubeBackend::finishBrowsePage(const QString &kind, QNetworkReply *reply,
             if (!roster.isEmpty())
                 stormFeedFromRoster(roster, /*forceRefresh=*/false);
             else
-                ensureFresh(true); // roster dead-end — legacy file path retries
+                ensureFresh(true); // roster dead-end — retry on the SEEDED roster
+                // (subs-text seed is a pre-pairing bootstrap, not a credential mode:
+                // the 2026-11-06 axe removed the file as the ladder's last stand)
             return;
         }
         if (m_emitChannelsWhenDone) {

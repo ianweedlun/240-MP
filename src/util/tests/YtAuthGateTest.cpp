@@ -46,9 +46,11 @@ private slots:
         QVERIFY(ytauth::credentialMode(false, true) == ytauth::CredentialMode::OAuth);
     }
 
-    void ladderLastStand()
+    void ladderSignedOutNoLastStand()
     {
-        QVERIFY(ytauth::credentialMode(false, false) == ytauth::CredentialMode::FileFallback);
+        // The 2026-11-06 axe: no credential means signed out, not a file
+        // fallback. Views must ask for pairing, never a silent file display.
+        QVERIFY(ytauth::credentialMode(false, false) == ytauth::CredentialMode::SignedOut);
     }
 };
 

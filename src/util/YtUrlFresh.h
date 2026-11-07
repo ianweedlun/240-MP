@@ -62,6 +62,22 @@ inline QString cacheKeyFor(const QString &videoId, const QString &formatSpec)
     return videoId + QLatin1Char('|') + formatSpec;
 }
 
+// Reactive warm-403 cure: erase the one entry for (videoId, formatSpec).
+// A clock-fresh signed googlevideo URL can STILL 403 on replay — the signature
+// is bound to the minting session/IP as well as to expire= — so urlFresh is
+// not a playback oracle. When a warm launch fails, evicting its entry forces
+// the next open through the cold resolve, which mints a URL bound to THIS
+// session. Returns whether an entry was actually removed.
+inline bool invalidateCachedEntry(QJsonObject &cache, const QString &videoId,
+                                  const QString &formatSpec)
+{
+    const QString key = cacheKeyFor(videoId, formatSpec);
+    if (!cache.contains(key))
+        return false;
+    cache.remove(key);
+    return true;
+}
+
 // Drop every entry whose signed window has closed (expire epoch <= now), plus
 // corrupt values; then cap to the newest maxEntries by expiry epoch — entries
 // with the farthest remaining windows win the scarce slot, not insertion order.

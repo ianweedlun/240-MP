@@ -16,7 +16,16 @@ FocusScope {
 
     focus: true
 
+    // Loader contract: Main.qml injects navParams via setSource's sourceProperties
+    // — the file-scoped declaration is mandatory (same as SignIn/every sibling view).
+    property var navParams: ({})
+
     property string moduleId: navParams.moduleId || "com.240mp.youtube"
+
+    // File-scope module-info snapshot (SignIn.qml pattern): context props like
+    // appCore are not visible inside imported-component bindings (AppBar{}),
+    // so resolve once here and hand the value in.
+    property var _selfInfo: appCore ? appCore.get_module_info(moduleId) : ({})
 
     property var cats: [
         { key: "sponsor_sponsor",      label: "SPONSOR",      def: "Skip" },
@@ -56,7 +65,7 @@ FocusScope {
     }
 
     AppBar {
-        iconSource: appCore.get_module_info(moduleId).icon
+        iconSource: _selfInfo.icon
         title: "YOUTUBE"
         subtitle: "SPONSORBLOCK"
         anchors.top: parent.top
