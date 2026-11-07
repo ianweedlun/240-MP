@@ -32,6 +32,8 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
+      AGENT_TOK: ${{ secrets.AGENT_GH_TOKEN }}
+
     steps:
       - name: Stage identity key (key-only auth, no password secrets)
         run: |
@@ -44,7 +46,7 @@ jobs:
       - name: Decide mode + target ref (rc = PR head, restore = Pi's saved rev)
         run: |
           PR='${{ github.event.pull_request.number }}'
-          post_comment() { local b resp; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; }
+          post_comment() { local b resp code; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; return 1; }; }
           echo "PR=$PR" >> $GITHUB_ENV
           echo "PR_NUM=pr-$PR" >> $GITHUB_ENV
           if [ '${{ github.event.action }}' != 'closed' ]; then
@@ -107,7 +109,7 @@ jobs:
         run: |
           MODE="${{ env.MODE }}"; PR="${{ env.PR }}"; REF="${{ env.REF }}"; PR_NUM="pr-$PR"
           TARBALL="${{ env.TARBALL }}"
-          post_comment() { local b resp; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; }
+          post_comment() { local b resp code; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; return 1; }; }
           HOST='${{ secrets.PI_SSH_HOSTNAME }}'
           USER='${{ secrets.PI_SSH_USERNAME }}'
           SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
@@ -189,4 +191,4 @@ jobs:
       - name: Evidence on skip modes
         if: env.MODE == 'skip' && github.event.action == 'closed' && !github.event.pull_request.merged
         run: |
-          jq -n --arg b "Closed without merge — this PR never put a build on the Pi; nothing to restore." '{body:$b}' | curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/${{ github.event.pull_request.number }}/comments" -o /dev/null || echo "WARN: comment post failed"
+          resp=$(jq -n --arg b "Closed without merge — this PR never put a build on the Pi; nothing to restore." '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/${{ github.event.pull_request.number }}/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; exit 1; }
