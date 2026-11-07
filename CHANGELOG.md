@@ -4,6 +4,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube warm opens self-heal when a clock-fresh cached URL still 403s (warm-403 cure)
+- A cached googlevideo URL can pass the `expire=` clock check yet be rejected 403 on
+  replay: the signature binds to the minting session **and IP**, so `urlFresh()` is not a
+  playback oracle. A warm launch that dies before the first position event now evicts that
+  cache entry (`invalidateCachedUrl`, exact `videoId|format` key) and re-enters the cold
+  resolve once, minting a URL bound to THIS session. One reactive retry per open
+  (`lastOpenWasWarm`/`retryWarm403`, reset by user retry/resume/playlist advance) so a
+  genuinely dead yt-dlp still ends at its message instead of looping. New pure-logic test
+  target `yt-url-invalidate` pins eviction semantics: exact-key removal, format isolation,
+  idempotent miss, no resurrection through prune.
+
 ### Fixed — SponsorBlock settings subview opens clean (QML contract, was a 4-error cascade)
 - `SponsorSettings.qml` lacked the mandatory file-scoped `property var navParams: ({})`: every
   open of the subview fired `Main.qml` "Cannot assign to non-existent property", a
