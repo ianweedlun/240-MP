@@ -149,7 +149,10 @@ jobs:
             if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
               BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log" 2>/dev/null || true)
               if [ "$MODE" = "rc" ]; then
-                $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev; echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr"
+                for i in $(seq 1 10); do
+                  $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev && echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr" && break
+                  echo "marker write attempt $i failed (Pi still settling), retry"; sleep 20
+                done
                 {
                   echo "### Pi RC deploy — PR $PR_NUM (**un-merged code on the Pi**)"
                   echo "- build: PR head \`$(git rev-parse HEAD)\` → Pi binary md5 \`$LOCAL_MD5\` (matches tarball), service **active**, verified loop"
@@ -159,7 +162,10 @@ jobs:
                   echo "CRT test the PR's behaviors now: your word on the behaviors gates your approving review; merge = official deploy over this RC."
                 } > /tmp/rc_body.md
               else
-                $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev; rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev"
+                for i in $(seq 1 10); do
+                  $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev" && break
+                  echo "restore marker write attempt $i failed (Pi still settling), retry"; sleep 20
+                done
                 {
                   echo "### Pi restored to official beta \`$REF\`"
                   echo "- PR closed without merge; Pi rebuilt to the saved rev, service active, md5 verified. Pi back on beta truth."
