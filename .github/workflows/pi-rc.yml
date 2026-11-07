@@ -146,9 +146,10 @@ jobs:
 
           for i in $(seq 1 15); do
             sleep 20
-            OUT=$($SSH "$USER@$HOST" "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || continue
-            echo "check $i:" "$(echo "$OUT" | tr '\n' ' ')"
-            if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+            PI_MD5R=$($SSH "md5sum /opt/240mp/bin/240mp | cut -d' ' -f1" 2>/dev/null || true)
+            APP_PID=$($SSH "pgrep -f '240mp/bin/24[m]p' | head -1" 2>/dev/null || true)
+            echo "check $i: md5=$PI_MD5R pid=$APP_PID"
+            if [ -n "$APP_PID" ] && [ "$PI_MD5R" = "$LOCAL_MD5" ]; then
               BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log" 2>/dev/null || true)
               if [ "$MODE" = "rc" ]; then
                 for i in $(seq 1 10); do
