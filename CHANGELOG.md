@@ -4,6 +4,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Pre-merge PR verification on the Pi (`pi-test` label + `pi-rc.yml`)
+- A dev→beta PR labeled `pi-test` gets its PR-head build RC-deployed to the Pi (rebuild on the arm64 runner, `240mp-ci-deploy` dance, service+md5 verify) with an evidence comment (marker, md5, boot state-log) posted on the PR. Beta stays the Pi's daily driver otherwise: unlabeled PRs never touch it. Closing such a PR without merging auto-restores the previously deployed beta build (one extra reboot). Ian's approving review + merge stay manual; the beta-push deploy remains the only official deploy.
+
 ### Fixed — Module roots survive shutdown teardown (null-appCore re-eval, was a silent TypeError)
 - At process teardown the QML tree re-evaluates view property bindings while context
   properties are already nulled: `modules/{plex,local_files,retroarch}/views/Root.qml:14`
