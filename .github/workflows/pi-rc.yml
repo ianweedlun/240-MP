@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     permissions:
       issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Stage identity key (key-only auth, no password secrets)
         run: |
