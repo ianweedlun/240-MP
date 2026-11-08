@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Empty playlists settle with a visible empty-state message (spinner was permanent)
+- `modules/retroarch/views/Games.qml` gated its LOADING spinner on `!Component.onCompletedCalled` — a property that **was never defined anywhere in the app** (qmllint: `Member "onCompletedCalled" not found on QQmlComponentAttached`; repo grep zero hits). Reading an undefined property is silently falsy forever, so any playlist with 0 games stayed LOADING indefinitely and the companion "No games in this playlist" Column (gated on `!spinner.visible`) was unreachable. Same pattern shadowed in `_base_games`/`_base_playlists`.
+- Fix: real root-level `property bool listLoaded` set in the view's `Component.onCompleted` after the model assignment; spinner and empty-state text now branch on it. Lab-proven by screenshot band-analysis on an empty playlist (purple spinner box → gray text line, pixel counts objective), pure-QML change (no new unit surface); qmllint confirms `listLoaded` resolves and no `onCompletedCalled` member warning remains (only pre-existing unresolved-import noise).
+
 ### Added — Pre-merge PR verification on the Pi (`pi-test` label + `pi-rc.yml`)
 - A dev→beta PR labeled `pi-test` gets its PR-head build RC-deployed to the Pi (rebuild on the arm64 runner, `240mp-ci-deploy` dance, service+md5 verify) with an evidence comment (marker, md5, boot state-log) posted on the PR. Beta stays the Pi's daily driver otherwise: unlabeled PRs never touch it. Closing such a PR without merging auto-restores the previously deployed beta build (one extra reboot). Ian's approving review + merge stay manual; the beta-push deploy remains the only official deploy.
 
