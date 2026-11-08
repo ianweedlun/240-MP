@@ -2,9 +2,11 @@
 #include <QDir>
 #include <QFile>
 #include <QMap>
+#include <QHash>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
+#include <cmath>
 
 // Palette-consistency tests for built-in color schemes: pure text-in, checks-out.
 // Parses the themes map in Main.qml and the colorOpts list in views/Settings.qml
@@ -80,6 +82,43 @@ QStringList readPickerOptions(const QString &root)
     }
     return out;
 }
+
+// WCAG 2.x relative-luminance contrast ratio for two #RRGGBB strings. The
+// contrast contract for the theme table: every text/fill role pair the views
+// actually render must clear the AA floor against the fill it draws on. The
+// pair list below was walked mechanically over the view sources (fill-bearing
+// items with Text descendants; conditional branches paired by identical
+// conditions) on the dev tip 2026-11-08 — see the audit script at
+// /home/ian/src/vibes/theme_audit.py for the same table.
+constexpr double kAaFloor = 4.5;
+
+double srgbChannel(int c)
+{
+    const double v = c / 255.0;
+    return v <= 0.04045 ? v * 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+}
+
+double relativeLuminance(const QString &hex)
+{
+    const QString h = hex.startsWith('#') ? hex.mid(1) : hex;
+    if (h.size() < 6)
+        return -1.0;
+    const double r = srgbChannel(h.mid(0, 2).toInt(nullptr, 16));
+    const double g = srgbChannel(h.mid(2, 2).toInt(nullptr, 16));
+    const double b = srgbChannel(h.mid(4, 2).toInt(nullptr, 16));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+double contrastRatio(const QString &a, const QString &b)
+{
+    const double la = relativeLuminance(a);
+    const double lb = relativeLuminance(b);
+    if (la < 0.0 || lb < 0.0)
+        return -1.0;
+    const double hi = qMax(la, lb);
+    const double lo = qMin(la, lb);
+    return (hi + 0.05) / (lo + 0.05);
+}
 }
 
 class ColorSchemesTest : public QObject {
@@ -89,6 +128,7 @@ private slots:
     void builtInThemesHaveFiveWellFormedKeys();
     void pickerOffersExactlyBuiltInThemes();
     void newFeatureSchemesArePresent();
+    void renderedRolePairsClearAaFloor();
 };
 
 void ColorSchemesTest::builtInThemesHaveFiveWellFormedKeys()
@@ -136,6 +176,47 @@ void ColorSchemesTest::newFeatureSchemesArePresent()
     for (const QString &name : added) {
         QVERIFY(themes.contains(name));
         QVERIFY(opts.contains(name));
+    }
+}
+
+// The five (text-role, fill-role) pairs the app actually renders, taken
+// verbatim from the mechanical walk over all module + core views: every
+// fill-bearing item with Text descendants, branches paired by identical
+// conditions, translucent fills skipped. If a view starts painting text on a
+// new role combination, this list grows with it and the contract re-checks all
+// palettes against it.
+void ColorSchemesTest::renderedRolePairsClearAaFloor()
+{
+    const QString root = findRepoRoot();
+    QVERIFY(!root.isEmpty());
+    const QMap<QString, QString> themes = readThemes(root);
+    QVERIFY(!themes.isEmpty());
+
+    const QStringList pairs{
+        "tertiary surface",  // list headers + rules on the page field
+        "primary surface",   // row titles on the page field
+        "secondary surface", // secondary/preview text on the page field
+        "surface accent",    // selected-row labels on the accent bar
+        "accent surface",    // accent-painted labels on the page field
+    };
+
+    QRegularExpression hexRe(
+        QStringLiteral("\"(primary|secondary|tertiary|surface|accent)\"\\s*:\\s*\"(#[0-9A-Fa-f]{6})\""));
+    for (auto it = themes.begin(); it != themes.end(); ++it) {
+        QHash<QString, QString> colors;
+        QRegularExpressionMatchIterator mi = hexRe.globalMatch(it.value());
+        while (mi.hasNext()) {
+            const QRegularExpressionMatch m = mi.next();
+            const QStringList caps = m.capturedTexts();
+            if (!colors.contains(caps[1]))
+                colors.insert(caps[1], caps[2]);
+        }
+        for (const QString &pair : pairs) {
+            const QStringList roles = pair.split(' ');
+            if (!colors.contains(roles[0]) || !colors.contains(roles[1]))
+                continue; // malformed entries are caught by the key tests
+            QVERIFY(contrastRatio(colors[roles[0]], colors[roles[1]]) >= kAaFloor);
+        }
     }
 }
 

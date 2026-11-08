@@ -26,38 +26,38 @@ Window {
         "Video 1": {
             "primary": "#FFFFFF",
             "secondary": "#C2BFE4",
-            "tertiary": "#8480C9",
+            "tertiary": "#8D8ACD",  // was #8480C9: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#0A0094",
             "accent": "#AECFFF"
         },
         "Late Night": {
             "primary": "#FFFFFF",
             "secondary": "#A1A1A1",
-            "tertiary": "#444444",
+            "tertiary": "#767676",  // was #444444: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#000000",
             "accent": "#FFD900"
         },
         "Synthwave": {
             "primary": "#FFFFFF",
             "secondary": "#D48BFF",
-            "tertiary": "#7836B5",
+            "tertiary": "#9A5FCF",  // was #7836B5: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#12012B",
             "accent": "#00E5FF"
         },
         "Terminal": {
             "primary": "#4AF626",
             "secondary": "#32A81B",
-            "tertiary": "#1A590E",
+            "tertiary": "#288815",  // was #1A590E: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#000000",
             "accent": "#4AF626"
         },
         "T-120": {
             "primary": "#000000",
-            "secondary": "#818181",
-            "tertiary": "#df9c27",
+            "secondary": "#6F6F6F",  // was #818181: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
+            "tertiary": "#956616",  // was #df9c27: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#FAF5E8",
-            "accent": "#EE442F"
-        },
+            "accent": "#D72712"
+          // was #EE442F: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)},
         "Amber": {
             "primary": "#FFB000",
             "secondary": "#B37B00",
@@ -68,14 +68,14 @@ Window {
         "Kinescope": {
             "primary": "#FFFFFF",
             "secondary": "#9E9E9E",
-            "tertiary": "#424242",
+            "tertiary": "#7E7E7E",  // was #424242: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#121212",
             "accent": "#FFFFFF"
         },
         "SMPTE ECR 1-1978": {  // 75% max 0xFF == 0xBF, 40% max 0xFF == 0x66, 7.5% max 0xFF == 0x13; 75/7.5 targets per https://en.wikipedia.org/wiki/SMPTE_color_bars#Analog_NTSC - mixed with 40% in "off channels" to both wash out and improve contrast
             "primary": "#BFBFBF",
             "secondary": "#66BF66",
-            "tertiary": "#6666BF",
+            "tertiary": "#7777C6",  // was #6666BF: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#131313",
             "accent": "#BF6666"
         },
@@ -83,39 +83,39 @@ Window {
         // Role mapping is documented in each entry's comment.
         "Dracula": {  // official draculatheme.com palette (https://draculatheme.com/contribute): text F8F8FF / comment 62727A / current-line 44475A / background 282A36 / purple BD93F9
             "primary": "#F8F8FF",   // text
-            "secondary": "#62727A", // comment (dimmed text)
-            "tertiary": "#44475A",  // current line (panel rows)
+            "secondary": "#86959D",  // was #62727A: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit) // comment (dimmed text)
+            "tertiary": "#8E92A9",  // was #44475A: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)  // current line (panel rows)
             "surface": "#282A36",   // background
             "accent": "#BD93F9"     // purple (selection highlight, signal dot)
         },
         "Tokyo Night": {  // official tokyo-night-vscode-theme README palette (https://github.com/tokyo-night/tokyo-night-vscode-theme): terminal-white C0CAF5 / markdown-text 9AA5CE / comments 565F89 / editor-background 1A1B26 / terminal-red F7768E
             "primary": "#C0CAF5",
             "secondary": "#9AA5CE",
-            "tertiary": "#565F89",
+            "tertiary": "#7A83AB",  // was #565F89: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#1A1B26",
             "accent": "#F7768E"
         },
         "Nord": {  // published Gogh-based "Nord" terminal scheme (colors.properties dumps, e.g. github.com/Ghosalach/Gogh): foreground D8DEE9 / bright-black 4C566A / color0 3B4252 / background 2E3440 / ice-blue 88C0D0
             "primary": "#D8DEE9",
-            "secondary": "#4C566A",
-            "tertiary": "#3B4252",
+            "secondary": "#939EB2",  // was #4C566A: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
+            "tertiary": "#949EB2",  // was #3B4252: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#2E3440",
             "accent": "#88C0D0"
         },
         "Solarized Dark": {  // official Solarized spec via published "Solarized Dark" terminal scheme: base2-cream EEE8D5 (emphasized text) / foreground 839496 / base02 073642 (panels) / base03 002B36 (background) / blue 268BD2
             "primary": "#EEE8D5",
             "secondary": "#839496",
-            "tertiary": "#073642",
+            "tertiary": "#149BBD",  // was #073642: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#002B36",
-            "accent": "#268BD2"
-        },
+            "accent": "#3295DA"
+          // was #268BD2: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)},
         "Monokai": {  // published Monokai scheme (base46 catalog, credits https=//monokai.pro/): text F8F8F2 / dim-gray A59F85 / panel one_bg 363731 / background 272822 / pink F92672
             "primary": "#F8F8F2",
             "secondary": "#A59F85",
-            "tertiary": "#363731",
+            "tertiary": "#8E9183",  // was #363731: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#272822",
-            "accent": "#F92672"
-        }
+            "accent": "#FA4D8C"
+          // was #F92672: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)}
     })
     property var allThemes: themes  // may gain a "Custom" entry on startup
     property string currentTheme: "Video 1"
