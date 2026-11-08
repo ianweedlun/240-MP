@@ -10,6 +10,10 @@ FocusScope {
     readonly property string systemName: navParams.systemName || ""
     readonly property bool showAllPlaylists: systemId === ""
 
+    // See Games.qml: the LOADING guard needs a real truth flag —
+    // `Component.onCompletedCalled` was never a Qt property.
+    property bool listLoaded: false
+
     signal navigateTo(string path, var params, var listState)
     signal goBack()
 
@@ -42,7 +46,7 @@ FocusScope {
         width: root.sw * 0.3
         height: root.sh * 0.15
         color: "transparent"
-        visible: playlistList.count === 0 && !Component.onCompletedCalled
+        visible: playlistList.count === 0 && !playlistsRoot.listLoaded
         border.color: root.accentColor
         border.width: 2
         radius: 8
@@ -204,6 +208,7 @@ FocusScope {
             ? retroarchBackend.refreshAllPlaylists()
             : retroarchBackend.refreshPlaylists(systemId)
         playlistList.model = pls
+        playlistsRoot.listLoaded = true
         if (pls.length > 0) {
             var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
             playlistList.currentIndex = Math.min(restore, pls.length - 1)
