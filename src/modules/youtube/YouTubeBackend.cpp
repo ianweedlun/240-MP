@@ -1134,6 +1134,7 @@ QString YouTubeBackend::warmToken(const QString &videoId,
 void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &resolution,
                                      const QString &fmt, const QString &key)
 {
+    Q_UNUSED(resolution); // ytdlp's -f fmt carries the quality selection; param kept for the QML call-site's arity
     const QString bin = ytdlp::locate(m_dataRoot);
     if (bin.isEmpty()) {
         qWarning("[Youtube] resolve fail vid=%s err=no-ytdlp", qPrintable(videoId));

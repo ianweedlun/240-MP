@@ -272,7 +272,9 @@ bool ScriptLauncher::start(const ScriptEntry &entry, QString *errorOut) {
     // needs CAP_DAC_OVERRIDE or a udev rule widening the mode. If we can't, run
     // without a controlling terminal (which is how mpv already runs) rather than
     // failing the script.
-    std::array<char, 16> devPath{};
+    // "/dev/tty%d" worst case: 8 prefix + 10 digits + NUL — 16 truncated (warned
+    // under -Wformat-truncation). Widen for the honest worst case.
+    std::array<char, 24> devPath{};
     bool wantCtty = wantCttyRequested;
     if (wantCtty) {
         std::snprintf(devPath.data(), devPath.size(), "/dev/tty%d", vt);

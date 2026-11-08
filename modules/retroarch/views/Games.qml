@@ -10,6 +10,14 @@ FocusScope {
     readonly property string playlistName: navParams.playlistName || ""
     readonly property string playlistBasename: navParams.playlistBasename || ""
     readonly property string shortName: navParams.shortName || ""
+
+    // Truth for the LOADING guard: set once refreshGames has populated the model.
+    // NOTE: `Component.onCompletedCalled` is not a Qt property — the Component
+    // scope exposes only completed/destruction signal handlers (verified against
+    // QQmlComponentAttached in plugins.qmltypes). The phantom read undefined =
+    // falsy forever, so an empty playlist kept the spinner and its
+    // "No games in this playlist" state was unreachable.
+    property bool listLoaded: false
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
         // null/undefined means "never set" — the manifest default (RIGHT),
@@ -66,7 +74,7 @@ FocusScope {
         width: root.sw * 0.3
         height: root.sh * 0.15
         color: "transparent"
-        visible: gameList.count === 0 && !Component.onCompletedCalled
+        visible: gameList.count === 0 && !gamesRoot.listLoaded
         border.color: root.accentColor
         border.width: 2
         radius: 8
@@ -238,6 +246,7 @@ FocusScope {
     Component.onCompleted: {
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
+        gamesRoot.listLoaded = true
         if (games.length > 0) {
             var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
             gameList.currentIndex = Math.min(restore, games.length - 1)

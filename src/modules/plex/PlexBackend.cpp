@@ -933,6 +933,7 @@ QVariantList PlexBackend::get_switchable_servers() {
 void PlexBackend::build_stream_url(const QString &ratingKey,
                                    const QString &partKey,
                                    const QString &sessionId) {
+    Q_UNUSED(ratingKey); // kept for the QML call-site's positional arity; stream URL is built from partKey+session
     QString uri = serverUrl();
     QString token = serverToken();
     // Cloud-hosted extras have part keys that already carry a query string
@@ -2610,6 +2611,7 @@ void PlexBackend::request_transcode(const QString &ratingKey, const QString &par
 
 void PlexBackend::update_timeline(const QString &ratingKey, const QString &partKey,
                                   const QString &state, int timeMs, int durationMs) {
+    Q_UNUSED(partKey); // the /timeline call addresses the item by ratingKey; partKey kept for the QML call-site's arity
     QString uri = serverUrl(), token = serverToken();
     QUrl url(uri + "/:/timeline");
     QUrlQuery q;

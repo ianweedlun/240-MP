@@ -155,9 +155,10 @@ void LocalFilesBackend::get_subtitle_languages() {
     options.append(QVariantMap{{"id","-"},{"label","Any"}});
 
     QVariantList locList = QJsonDocument::fromJson(file.readAll()).toVariant().toList();
-    for (const QVariant loc : locList)
+    for (const QVariant &loc : locList)
     {
-        QVariantMap langOption = QVariantMap{{"id",loc.toJsonObject()["id"].toString()},{"label",loc.toJsonObject()["label"].toString()}};
+        const QJsonObject obj = loc.toJsonObject();   // once per row, not twice
+        QVariantMap langOption = QVariantMap{{"id",obj["id"].toString()},{"label",obj["label"].toString()}};
         if (langOption["label"].toString() == "" || addedLabels.contains(langOption["label"].toString())) continue;
         addedLabels.append(langOption["label"].toString());
         options.append(langOption);
