@@ -57,7 +57,8 @@ Window {
             "tertiary": "#956616",  // was #df9c27: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#FAF5E8",
             "accent": "#D72712"
-          // was #EE442F: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)},
+            // was #EE442F: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
+        },
         "Amber": {
             "primary": "#FFB000",
             "secondary": "#B37B00",
@@ -108,14 +109,16 @@ Window {
             "tertiary": "#149BBD",  // was #073642: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#002B36",
             "accent": "#3295DA"
-          // was #268BD2: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)},
+            // was #268BD2: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
+        },
         "Monokai": {  // published Monokai scheme (base46 catalog, credits https=//monokai.pro/): text F8F8F2 / dim-gray A59F85 / panel one_bg 363731 / background 272822 / pink F92672
             "primary": "#F8F8F2",
             "secondary": "#A59F85",
             "tertiary": "#8E9183",  // was #363731: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
             "surface": "#272822",
             "accent": "#FA4D8C"
-          // was #F92672: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)}
+            // was #F92672: hue preserved, lifted to AA floor 4.5 vs surface (theme_audit)
+        }
     })
     property var allThemes: themes  // may gain a "Custom" entry on startup
     property string currentTheme: "Video 1"
