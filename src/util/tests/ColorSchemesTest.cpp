@@ -95,7 +95,7 @@ constexpr double kAaFloor = 4.5;
 double srgbChannel(int c)
 {
     const double v = c / 255.0;
-    return v <= 0.04045 ? v * 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+    return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
 }
 
 double relativeLuminance(const QString &hex)
@@ -103,10 +103,23 @@ double relativeLuminance(const QString &hex)
     const QString h = hex.startsWith('#') ? hex.mid(1) : hex;
     if (h.size() < 6)
         return -1.0;
-    const double r = srgbChannel(h.mid(0, 2).toInt(nullptr, 16));
-    const double g = srgbChannel(h.mid(2, 2).toInt(nullptr, 16));
-    const double b = srgbChannel(h.mid(4, 2).toInt(nullptr, 16));
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    auto hexVal = [](QChar c) {
+        if (c >= '0' && c <= '9')
+            return c.digitValue();
+        const QChar l = c.toLower();
+        if (l >= 'a' && l <= 'f')
+            return 10 + (l.unicode() - u'a');
+        return -1;
+    };
+    auto byteAt = [&](int i) {
+        const int hi = hexVal(h.at(i));
+        const int lo = hexVal(h.at(i + 1));
+        return (hi < 0 || lo < 0) ? -1 : hi * 16 + lo;
+    };
+    const int r = byteAt(0), g = byteAt(2), b = byteAt(4);
+    if (r < 0 || g < 0 || b < 0)
+        return -1.0;
+    return 0.2126 * srgbChannel(r) + 0.7152 * srgbChannel(g) + 0.0722 * srgbChannel(b);
 }
 
 double contrastRatio(const QString &a, const QString &b)
@@ -215,7 +228,12 @@ void ColorSchemesTest::renderedRolePairsClearAaFloor()
             const QStringList roles = pair.split(' ');
             if (!colors.contains(roles[0]) || !colors.contains(roles[1]))
                 continue; // malformed entries are caught by the key tests
-            QVERIFY(contrastRatio(colors[roles[0]], colors[roles[1]]) >= kAaFloor);
+            const QString ta = colors[roles[0]], fb = colors[roles[1]];
+            const double got = contrastRatio(ta, fb);
+            QVERIFY2(got >= kAaFloor,
+                     qPrintable(QStringLiteral("theme=%1 pair=%2-on-%3 text=%4 fill=%5 ratio=%6")
+                                    .arg(it.key()).arg(roles[0]).arg(roles[1])
+                                    .arg(ta).arg(fb).arg(got, 0, 'f', 2)));
         }
     }
 }
