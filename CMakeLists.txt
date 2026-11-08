@@ -84,6 +84,12 @@ add_executable(240mp
     $<$<BOOL:${APPLE}>:src/util/MacosUtils.mm>
 )
 
+# App target wears the same warning gate the test targets carry: a full -Wall
+# -Wextra sweep found 0 errors / 6 findings in 30k LOC, so the gate is cheap
+# permanent teeth (future regressions show up in CI logs) — deliberately NOT
+# -Werror: the six findings are real cleanup, not build-breakers.
+target_compile_options(240mp PRIVATE -Wall -Wextra)
+
 # Per-TU, NOT target-level: the CI value is the commit/tag sha, and a target-wide
 # -DAPP_VERSION changes the compile line of EVERY TU on every push, which busts
 # ccache entirely (zero hits across pushes - the ccache lane was dead weight).

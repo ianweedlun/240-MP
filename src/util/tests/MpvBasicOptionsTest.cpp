@@ -127,7 +127,7 @@ void MpvsBasicOptionsTest::setUiValueReplacesInPlace()
     const QString p2 = makeConf("edit2.conf",
         "audio-gain=4\ncontrast=1.2 # inline? no\n");
     QVERIFY(mpvopts::setUiValue(p2, "audio_gain", "8"));
-    QFile f(p2); f.open(QIODevice::ReadOnly);
+    QFile f(p2); (void)f.open(QIODevice::ReadOnly);
     const QString after = f.readAll(); f.close();
     QCOMPARE(after, QStringLiteral("audio-gain=8\ncontrast=1.2 # inline? no\n"));
     rmTmpTree();
@@ -137,7 +137,7 @@ void MpvsBasicOptionsTest::setUiValueAppendsWhenAbsent()
 {
     const QString path = makeConf("append.conf", "contrast=1.2\n");
     QVERIFY(mpvopts::setUiValue(path, "deinterlace", "Auto"));
-    QFile f(path); f.open(QIODevice::ReadOnly);
+    QFile f(path); (void)f.open(QIODevice::ReadOnly);
     const QString after = f.readAll(); f.close();
     QCOMPARE(after, QStringLiteral("contrast=1.2\ndeinterlace=auto\n"));
     rmTmpTree();
@@ -147,7 +147,7 @@ void MpvsBasicOptionsTest::unknownUiTokenIsRejected()
 {
     const QString path = makeConf("reject.conf", "contrast=1.2"); // no trailing NL preserved
     QVERIFY(!mpvopts::setUiValue(path, "deinterlace", "Bananas"));
-    QFile f(path); f.open(QIODevice::ReadOnly);
+    QFile f(path); (void)f.open(QIODevice::ReadOnly);
     QCOMPARE(QString::fromUtf8(f.readAll()), QStringLiteral("contrast=1.2")); // untouched
     f.close();
     rmTmpTree();

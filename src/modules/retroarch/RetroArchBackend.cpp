@@ -422,7 +422,7 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
             }
         }
 
-        qInfo("[RetroArch] Decompressed %d chunks, total %d bytes (expected: %llu)",
+        qInfo("[RetroArch] Decompressed %d chunks, total %lld bytes (expected: %llu)",
               chunkCount, decompressed.size(), (qlonglong)totalSize);
 
         if (!decompressed.isEmpty()) {
