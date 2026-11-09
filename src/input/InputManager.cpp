@@ -770,6 +770,8 @@ void InputManager::pollDebugKeyChannel()
         else if (cmd == QLatin1String("select") || cmd == QLatin1String("enter")) a = Action::Select;
         else if (cmd == QLatin1String("back") || cmd == QLatin1String("escape")) a = Action::Back;
         else if (cmd == QLatin1String("playpause") || cmd == QLatin1String("space")) a = Action::PlayPause;
+        else if (cmd == QLatin1String("channelup") || cmd == QLatin1String("channel_up")) a = Action::ChannelUp;
+        else if (cmd == QLatin1String("channeldown") || cmd == QLatin1String("channel_down")) a = Action::ChannelDown;
         if (a != Action::None)
             deliverPress(a, false);
     }
