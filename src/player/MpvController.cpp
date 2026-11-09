@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -50,6 +51,9 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     m_hasMpvOscScript     = QFile::exists(m_appRoot + "/scripts/mpv-osc.lua");
     m_hasAmbientOscScript = QFile::exists(m_appRoot + "/scripts/mpv-osc-ambient.lua");
     m_hasMediaKeysScript  = QFile::exists(m_appRoot + "/scripts/mpv-media-keys.lua");
+    m_hasChannelOsdScript = QFile::exists(m_appRoot + "/scripts/mpv-osd-channel.lua");
+    qDebug("[MpvController] channel banner script: %s",
+           m_hasChannelOsdScript ? "found" : "NOT FOUND");
 
     m_ipc = new QLocalSocket(this);
     connect(m_ipc, &QLocalSocket::connected, this, [this] {
@@ -60,6 +64,9 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         sendCommand({"observe_property", 2, "duration"});
         sendCommand({"observe_property", 3, "playlist-pos"});
         sendCommand({"observe_property", 4, "pause"});
+        sendCommand({"observe_property", 5, "volume"});
+        sendCommand({"set_property", "volume", m_volume});
+
         // Auto Fit watch wires: one-shot reads for the output DISPLAY size
         // (get_property + top-level integer request_id; request_id is an echo
         // field, and display-width/display-height are the only properties that
@@ -84,6 +91,20 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                 sendCommand({"get_property", "display-height"}, 9002);
             }
         }
+
+        const QString num  = m_pendingOsd.value("number").toString();
+        const QString name = m_pendingOsd.value("name").toString();
+        if ((!num.isEmpty() || !name.isEmpty()) && m_hasChannelOsdScript) {
+            qDebug("[MpvController] channel banner sent: %s %s",
+                   qPrintable(num), qPrintable(name));
+            sendCommand({"script-message", "240mp-osd-channel", num, name,
+                         QString::number(m_pendingOsd.value("seconds", 1.5).toDouble(), 'f', 2),
+                         QString::number(m_pendingOsd.value("offsetX", 0.0).toDouble(), 'f', 4),
+                         QString::number(m_pendingOsd.value("offsetY", 0.0).toDouble(), 'f', 4),
+                         m_pendingOsd.value("font").toString(),
+                         m_pendingOsd.value("color").toString()});
+            m_pendingOsd.clear();
+        }
     });
     connect(m_ipc, &QLocalSocket::readyRead, this, &MpvController::onIpcReadyRead);
 
@@ -105,6 +126,7 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         if (silenceMs > 30000) {
             qWarning("[MpvController] WATCHDOG: no IPC time-pos event for %lld s — possible freeze",
                      silenceMs / 1000);
+            emit playbackStalled(int(silenceMs / 1000));
         }
     });
 }
@@ -225,6 +247,15 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // media keys work anytime mpv is playing, not just inside a given module.
     if (m_hasMediaKeysScript)
         args << QString("--script=%1").arg(m_appRoot + "/scripts/mpv-media-keys.lua");
+
+    if (m_hasChannelOsdScript)
+        args << QString("--script=%1").arg(m_appRoot + "/scripts/mpv-osd-channel.lua");
+
+    {
+        const QString fontsDir = m_appRoot + "/assets/fonts";
+        if (QFileInfo::exists(fontsDir))
+            args << QString("--sub-fonts-dir=%1").arg(fontsDir);
+    }
 
     // Screen saver Lua script — only loaded when the user has opted in via the
     // screensaver_timeout setting (a positive number of seconds; "OFF" parses
@@ -522,11 +553,23 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 }
 
 void MpvController::stop() {
+    m_pendingOsd.clear();
+
     if (m_ipc->state() == QLocalSocket::ConnectedState) {
         sendCommand({"quit"});
     } else if (m_process && m_process->state() != QProcess::NotRunning) {
         m_process->terminate();
     }
+}
+
+void MpvController::forceStop() {
+    m_pendingOsd.clear();
+    if (!m_process || m_process->state() == QProcess::NotRunning) return;
+    m_process->terminate();
+    QPointer<QProcess> proc = m_process;
+    QTimer::singleShot(2000, this, [proc] {
+        if (proc && proc->state() != QProcess::NotRunning) proc->kill();
+    });
 }
 
 void MpvController::seekTo(int positionMs) {
@@ -540,6 +583,18 @@ void MpvController::sendKey(const QString &key) {
 void MpvController::showOsdSkipPrompt() {
     sendCommand({"script-message", "skip-overlay-state", "1"});
     sendCommand({"keypress", "DOWN"});
+}
+
+void MpvController::showChannelOsd(const QVariantMap &options) {
+    if (!m_hasChannelOsdScript) {
+        qWarning("[MpvController] channel banner requested but the script is missing");
+        return;
+    }
+
+    //
+    m_pendingOsd = options;
+    qDebug("[MpvController] channel banner queued: %s",
+           qPrintable(options.value("number").toString()));
 }
 
 void MpvController::clearOsdPrompt() {
@@ -680,6 +735,12 @@ void MpvController::onIpcReadyRead() {
                 else
                     m_pendingContentAspect = val;
             }
+        } else if (name == "volume") {
+            const int v = qBound(0, int(qRound(val)), 100);
+            if (v != m_volume) {
+                m_volume = v;
+                emit volumeChanged(v);
+            }
         }
     }
 }
@@ -731,6 +792,13 @@ void MpvController::onProcessFinished() {
     } else {
         emit playbackEnded(pos, dur, reason);
     }
+}
+
+void MpvController::setVolume(int percent) {
+    const int v = qBound(0, percent, 100);
+    m_volume = v;
+    if (m_ipc && m_ipc->state() == QLocalSocket::ConnectedState)
+        sendCommand({"set_property", "volume", v});
 }
 
 void MpvController::sendCommand(const QJsonArray &args)
@@ -933,4 +1001,3 @@ bool MpvController::hasSmoothPlaybackTradeoff() const {
     // the toggle would be a no-op there and is hidden.
     return m_videoProfile == VideoProfile::Pi3;
 }
-

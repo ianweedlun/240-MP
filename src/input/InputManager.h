@@ -107,7 +107,8 @@ private slots:
 #endif
 
 private:
-    enum class Action { None, Up, Down, Left, Right, Select, Back, PlayPause };
+    enum class Action { None, Up, Down, Left, Right, Select, Back, PlayPause,
+                        ChannelUp, ChannelDown };
     DisplayHandoff *m_handoff = nullptr;   // non-owned, set by main.cpp
     RetroArchBackend *m_raBackend = nullptr; // non-owned, set by main.cpp
 
@@ -137,6 +138,9 @@ private:
     void updateHints();
     QString labelForButton(int button) const;
     static int qtKeyForAction(Action a);
+#ifdef Q_OS_LINUX
+    static int qtDigitForEvdevCode(int code);
+#endif
     static QString mpvKeyForAction(Action a);
     // Maps a HID media-key event to the canonical mpv key name mpv-media-keys.lua
     // binds, or an empty string for non-media keys.

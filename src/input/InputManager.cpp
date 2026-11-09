@@ -262,6 +262,8 @@ InputManager::Action InputManager::actionFromString(const QString &name, bool *o
     if (name == "select")     return Action::Select;
     if (name == "back")       return Action::Back;
     if (name == "play_pause" || name == "playpause") return Action::PlayPause;
+    if (name == "channel_up"   || name == "channelup")   return Action::ChannelUp;
+    if (name == "channel_down" || name == "channeldown") return Action::ChannelDown;
     if (name == "none")       return Action::None;
     *ok = false;
     return Action::None;
@@ -390,13 +392,24 @@ void InputManager::loadKeyRemap() {
     if (!m_appCore)
         return;
     static const struct { const char *name; Action action; } kRemapActions[] = {
-        { "up",     Action::Up },
-        { "down",   Action::Down },
-        { "left",   Action::Left },
-        { "right",  Action::Right },
-        { "select", Action::Select },
-        { "back",   Action::Back },
+        { "up",           Action::Up },
+        { "down",         Action::Down },
+        { "left",         Action::Left },
+        { "right",        Action::Right },
+        { "select",       Action::Select },
+        { "back",         Action::Back },
+        { "channel_up",   Action::ChannelUp },
+        { "channel_down", Action::ChannelDown },
     };
+
+#ifdef Q_OS_LINUX
+    // A remote that sends the standard channel codes works without being bound
+    // first. Seeded before the stored bindings so anything the viewer has set
+    // for those buttons still wins.
+    m_keyRemap[kEvdevKeyBase + KEY_CHANNELUP]   = Action::ChannelUp;
+    m_keyRemap[kEvdevKeyBase + KEY_CHANNELDOWN] = Action::ChannelDown;
+#endif
+
     for (const auto &entry : kRemapActions) {
         bool ok = false;
         const int qtKey = m_appCore->get_setting(QString(), QStringLiteral("remote_keymap.") + entry.name).toInt(&ok);
@@ -492,13 +505,26 @@ void InputManager::onConsumerControlReadable() {
         }
 
         const Action a = m_keyRemap.value(extendedId, Action::None);
-        if (a == Action::None)
+        if (a == Action::None) {
+            // A remote's number buttons are not actions to bind but the digits
+            // a keyboard would send, so they go to the window as those keys
+            // for the views that read them (the channel dial).
+            if (const int digit = qtDigitForEvdevCode(ev.code))
+                postKey(digit, ev.value == 1 ? QEvent::KeyPress : QEvent::KeyRelease, false);
             continue;
+        }
         if (ev.value == 1)
             beginPress(a);
         else
             releaseAction(a);
     }
+}
+
+int InputManager::qtDigitForEvdevCode(int code) {
+    if (code >= KEY_1 && code <= KEY_9) return Qt::Key_1 + (code - KEY_1);
+    if (code == KEY_0) return Qt::Key_0;
+    if (code >= KEY_NUMERIC_0 && code <= KEY_NUMERIC_9) return Qt::Key_0 + (code - KEY_NUMERIC_0);
+    return 0;
 }
 #endif
 
@@ -744,6 +770,8 @@ void InputManager::pollDebugKeyChannel()
         else if (cmd == QLatin1String("select") || cmd == QLatin1String("enter")) a = Action::Select;
         else if (cmd == QLatin1String("back") || cmd == QLatin1String("escape")) a = Action::Back;
         else if (cmd == QLatin1String("playpause") || cmd == QLatin1String("space")) a = Action::PlayPause;
+        else if (cmd == QLatin1String("channelup") || cmd == QLatin1String("channel_up")) a = Action::ChannelUp;
+        else if (cmd == QLatin1String("channeldown") || cmd == QLatin1String("channel_down")) a = Action::ChannelDown;
         if (a != Action::None)
             deliverPress(a, false);
     }
@@ -761,6 +789,8 @@ void InputManager::deliverPress(Action a, bool autoRepeat) {
         case Action::Select:return QStringLiteral("select");
         case Action::Back:  return QStringLiteral("back");
         case Action::PlayPause: return QStringLiteral("playpause");
+        case Action::ChannelUp: return QStringLiteral("channel_up");
+        case Action::ChannelDown: return QStringLiteral("channel_down");
         default: return QStringLiteral("none");
         }
     };
@@ -789,10 +819,13 @@ void InputManager::deliverPress(Action a, bool autoRepeat) {
     if (telemetryFirst && m_appCore)
         m_appCore->note_state("key", actionName(a) + (windowActive() ? " delivered" : " mpv-ipc"));
 #endif
-    if (windowActive())
+    // An action mpv has no equivalent for goes to the app even while mpv holds
+    // the screen, rather than being forwarded as an empty key and lost.
+    const QString mpvKey = mpvKeyForAction(a);
+    if (windowActive() || mpvKey.isEmpty())
         postKey(qtKeyForAction(a), QEvent::KeyPress, autoRepeat);
     else
-        emit mpvKeyRequested(mpvKeyForAction(a));
+        emit mpvKeyRequested(mpvKey);
 }
 
 void InputManager::onRepeatDelayElapsed() {
@@ -834,6 +867,8 @@ int InputManager::qtKeyForAction(Action a) {
     case Action::Select:    return Qt::Key_Return;
     case Action::Back:      return Qt::Key_Escape;
     case Action::PlayPause: return Qt::Key_Space;
+    case Action::ChannelUp:   return Qt::Key_ChannelUp;
+    case Action::ChannelDown: return Qt::Key_ChannelDown;
     case Action::None:      break;
     }
     return 0;
@@ -849,6 +884,10 @@ QString InputManager::mpvKeyForAction(Action a) {
     case Action::Select:    return QStringLiteral("ENTER");
     case Action::Back:      return QStringLiteral("ESC");
     case Action::PlayPause: return QStringLiteral("SPACE");
+    // mpv has no notion of a channel, so these have no key to forward. An
+    // empty name is what tells deliverPress to give them to the app instead.
+    case Action::ChannelUp:
+    case Action::ChannelDown: break;
     case Action::None:      break;
     }
     return QString();

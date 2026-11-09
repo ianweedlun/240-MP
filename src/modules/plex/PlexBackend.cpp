@@ -2,6 +2,7 @@
 #include "PlaybackDecision.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkRequest>
 #include <QNetworkReply>
@@ -801,6 +802,15 @@ QString PlexBackend::msToDisplay(int ms) {
     return QStringLiteral("%1MIN").arg(mins);
 }
 
+static QStringList plexTags(const QJsonObject &m, const char *key) {
+    QStringList out;
+    for (const QJsonValue &v : m[QLatin1String(key)].toArray()) {
+        const QString tag = v.toObject()["tag"].toString();
+        if (!tag.isEmpty()) out << tag;
+    }
+    return out;
+}
+
 QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
     return QVariantMap{
         {"ratingKey",              m["ratingKey"].toString()},
@@ -828,7 +838,29 @@ QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
         {"leafCount",              m["leafCount"].toInt()},
         {"viewedLeafCount",        m["viewedLeafCount"].toInt()},
         {"originallyAvailableAt",  m["originallyAvailableAt"].toString()},
+        {"genres",                 plexTags(m, "Genre")},
+        {"collections",            plexTags(m, "Collection")},
+        {"thumb",                  m["thumb"].toString()},
+        {"parentThumb",            m["parentThumb"].toString()},
+        {"grandparentThumb",       m["grandparentThumb"].toString()},
     };
+}
+
+QString PlexBackend::image_url(const QString &thumb, int width, int height) const {
+    const QString path = thumb.trimmed();
+    if (path.isEmpty()) return {};
+    const QString uri   = serverUrl();
+    const QString token = serverToken();
+    if (uri.isEmpty() || token.isEmpty()) return {};
+
+    QUrlQuery q;
+    q.addQueryItem("width",  QString::number(qBound(16, width,  1920)));
+    q.addQueryItem("height", QString::number(qBound(16, height, 1080)));
+    q.addQueryItem("minSize", QStringLiteral("1"));
+    q.addQueryItem("upscale", QStringLiteral("1"));
+    q.addQueryItem("url", path);
+    q.addQueryItem("X-Plex-Token", token);
+    return uri + QStringLiteral("/photo/:/transcode?") + q.query(QUrl::FullyEncoded);
 }
 
 void PlexBackend::flattenSeasons(const QVariantList &rawItems,
@@ -930,6 +962,16 @@ QVariantList PlexBackend::get_switchable_servers() {
     return list;
 }
 
+// A playback URL is worth logging -- it is the only way to tell afterwards
+// whether a title direct-played or was transcoded -- but it can carry a token,
+// so the token never reaches the journal.
+static QString loggableUrl(QString u) {
+    const int i = u.indexOf(QLatin1String("X-Plex-Token="));
+    if (i < 0) return u;
+    const int j = u.indexOf(QLatin1Char('&'), i);
+    return u.left(i + 13) + QStringLiteral("<redacted>") + (j < 0 ? QString() : u.mid(j));
+}
+
 void PlexBackend::build_stream_url(const QString &ratingKey,
                                    const QString &partKey,
                                    const QString &sessionId) {
@@ -943,7 +985,8 @@ void PlexBackend::build_stream_url(const QString &ratingKey,
                 + (partKey.contains('?') ? "&" : "?")
                 + "X-Plex-Client-Identifier="   + clientId()
                 + "&X-Plex-Session-Identifier=" + sessionId;
-    qDebug() << "[Plex] Playback: DIRECT PLAY";
+    qInfo("[Plex] playback DIRECT for %s -> %s",
+          qPrintable(ratingKey), qPrintable(loggableUrl(url)));
     emit streamUrlReady(url, token);
 }
 
@@ -1586,8 +1629,11 @@ void PlexBackend::load_collections(const QString &sectionId) {
         QVariantList items;
         for (const auto &mv : metadata) {
             QJsonObject m = mv.toObject();
+            // childCount so a picker can say how much is in it before you pick.
             items.append(QVariantMap{{"ratingKey",m["ratingKey"].toString()},
-                                     {"title",m["title"].toString().toUpper()},{"type","collection"}});
+                                     {"title",m["title"].toString().toUpper()},
+                                     {"childCount",m["childCount"].toInt()},
+                                     {"type","collection"}});
         }
         emit collectionsLoaded(items);
     });
@@ -1631,7 +1677,9 @@ void PlexBackend::load_playlists(const QString &sectionId) {
         for (const auto &mv : metadata) {
             QJsonObject m = mv.toObject();
             items.append(QVariantMap{{"ratingKey",m["ratingKey"].toString()},
-                                     {"title",m["title"].toString().toUpper()},{"type","playlist"}});
+                                     {"title",m["title"].toString().toUpper()},
+                                     {"leafCount",m["leafCount"].toInt()},
+                                     {"type","playlist"}});
         }
         emit playlistsLoaded(items);
     });
@@ -1915,7 +1963,7 @@ QVariantMap PlexBackend::buildItemDetail(const QJsonObject &meta) const {
             bool isImage = IMAGE_SUB_CODECS.contains(codec);
             QString subKey = s["key"].toString();
             QString subUrl = subKey.isEmpty() ? "" : uri + subKey;
-            subtitleStreams.append(QVariantMap{{"id",sid},{"displayTitle",title},{"language",lang},{"imageSubtitle",isImage},{"subUrl",subUrl}});
+            subtitleStreams.append(QVariantMap{{"id",sid},{"displayTitle",title},{"language",lang},{"imageSubtitle",isImage},{"subUrl",subUrl},{"forced",s["forced"].toBool()}});
             if (s["selected"].toBool() && selectedSubtitle == "0")
                 selectedSubtitle = sid;
         }
@@ -2531,16 +2579,11 @@ void PlexBackend::resolve_card_queue(const QString &ref) {
     });
 }
 
-void PlexBackend::request_transcode(const QString &ratingKey, const QString &partKey,
-                                    const QString &sessionId,
-                                    const QString &audioId, const QString &subtitleId,
-                                    int offsetMs) {
-    QString uri   = serverUrl();
-    QString token = serverToken();
-    QString quality = videoQuality();
-
-    qDebug() << "[Plex] Playback: TRANSCODE — full re-encode, quality cap:" << quality << "kbps";
-    QUrl url(uri + "/video/:/transcode/universal/start.m3u8");
+// The query the decision and the stream request share.
+static QUrlQuery transcodeQuery(const QString &ratingKey, const QString &sessionId,
+                                const QString &quality, const QString &clientId,
+                                const QString &audioId, const QString &subtitleId,
+                                int offsetMs) {
     QUrlQuery q;
     q.addQueryItem("hasMDE",      "1");
     q.addQueryItem("path",        "/library/metadata/" + ratingKey);
@@ -2559,7 +2602,7 @@ void PlexBackend::request_transcode(const QString &ratingKey, const QString &par
     // target codecs/containers. This is separate from the X-Plex-Platform header
     // (which identifies the calling application for auth/logging purposes).
     q.addQueryItem("X-Plex-Platform", "Chrome");
-    q.addQueryItem("X-Plex-Client-Identifier", clientId());
+    q.addQueryItem("X-Plex-Client-Identifier", clientId);
     if (offsetMs > 0)
         q.addQueryItem("offset", QString::number(offsetMs / 1000));
     if (!audioId.isEmpty())
@@ -2568,7 +2611,44 @@ void PlexBackend::request_transcode(const QString &ratingKey, const QString &par
         q.addQueryItem("subtitleStreamID", subtitleId);
         q.addQueryItem("subtitles", "burn");
     }
-    url.setQuery(q);
+    return q;
+}
+
+void PlexBackend::request_transcode(const QString &ratingKey, const QString &partKey,
+                                    const QString &sessionId,
+                                    const QString &audioId, const QString &subtitleId,
+                                    int offsetMs) {
+    const QString uri = serverUrl(), token = serverToken(), quality = videoQuality();
+    qInfo("[Plex] playback TRANSCODE for %s at offset %d s, cap %s kbps",
+          qPrintable(ratingKey), offsetMs / 1000, qPrintable(quality));
+
+    // hasMDE=1 promises the server the client consults the Media Decision
+    // Engine itself; skip it and the server reuses its last decision for this
+    // client, made before any subtitle was chosen. The stream is asked for
+    // whatever the decision returns -- a pre-flight must not cost the viewer
+    // the programme.
+    QUrl decide(uri + "/video/:/transcode/universal/decision");
+    decide.setQuery(transcodeQuery(ratingKey, sessionId, quality, clientId(),
+                                   audioId, subtitleId, offsetMs));
+    QNetworkRequest dreq = plexRequest(decide, token);
+    dreq.setRawHeader("X-Plex-Platform", "Chrome");
+    auto *decision = m_nam->get(dreq);
+    ignoreSslErrors(decision);
+    connect(decision, &QNetworkReply::finished, this,
+            [this, decision, ratingKey, partKey, sessionId, audioId, subtitleId, offsetMs]() {
+        decision->deleteLater();
+        startTranscode(ratingKey, partKey, sessionId, audioId, subtitleId, offsetMs);
+    });
+}
+
+void PlexBackend::startTranscode(const QString &ratingKey, const QString &partKey,
+                                 const QString &sessionId,
+                                 const QString &audioId, const QString &subtitleId,
+                                 int offsetMs) {
+    const QString uri = serverUrl(), token = serverToken(), quality = videoQuality();
+    QUrl url(uri + "/video/:/transcode/universal/start.m3u8");
+    url.setQuery(transcodeQuery(ratingKey, sessionId, quality, clientId(),
+                                audioId, subtitleId, offsetMs));
 
     // Build the request with Chrome as the platform in the header too, so it
     // matches the query param. Plex uses the Chrome profile for transcoding.
@@ -2604,7 +2684,7 @@ void PlexBackend::request_transcode(const QString &ratingKey, const QString &par
         } else {
             streamUrl = reply->url().toString();
         }
-        qDebug() << "[Plex] Transcode stream URL for mpv:" << streamUrl;
+        qInfo("[Plex] transcode stream for mpv: %s", qPrintable(loggableUrl(streamUrl)));
         emit streamUrlReady(streamUrl, token);
     });
 }
@@ -2633,7 +2713,10 @@ void PlexBackend::set_audio_stream(const QString &streamId, const QString &partI
     QUrl url(uri + "/library/parts/" + partId);
     QUrlQuery q; q.addQueryItem("audioStreamID", streamId); url.setQuery(q);
     auto *reply = plexPut(url, token);
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, partId]() {
+        reply->deleteLater();
+        emit audioStreamSet(partId);
+    });
 }
 
 void PlexBackend::set_subtitle_stream(const QString &streamId, const QString &partId) {
@@ -2641,7 +2724,10 @@ void PlexBackend::set_subtitle_stream(const QString &streamId, const QString &pa
     QUrl url(uri + "/library/parts/" + partId);
     QUrlQuery q; q.addQueryItem("subtitleStreamID", streamId); url.setQuery(q);
     auto *reply = plexPut(url, token);
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, partId]() {
+        reply->deleteLater();
+        emit subtitleStreamSet(partId);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2867,6 +2953,25 @@ void PlexBackend::update_live_timeline(const QString &state) {
     // Releasing the tuner ends this session; forget the key so a stray timer tick
     // can't re-ping a dead session.
     if (state == "stopped") m_liveTimelineKey.clear();
+}
+
+QString PlexBackend::video_quality() const {
+    return videoQuality();
+}
+
+void PlexBackend::stop_transcode(const QString &sessionId) {
+    if (sessionId.isEmpty()) return;
+    QString uri = serverUrl(), token = serverToken();
+    QUrl url(uri + "/video/:/transcode/universal/stop");
+    QUrlQuery q;
+    q.addQueryItem("session", sessionId);
+    q.addQueryItem("X-Plex-Client-Identifier", clientId());
+    url.setQuery(q);
+    auto *reply = plexGet(url, token);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, sessionId]() {
+        reply->deleteLater();
+        emit transcodeStopped(sessionId);
+    });
 }
 
 void PlexBackend::stop_live_session(const QString &sessionId) {
