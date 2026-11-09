@@ -867,8 +867,12 @@ int InputManager::qtKeyForAction(Action a) {
     case Action::Select:    return Qt::Key_Return;
     case Action::Back:      return Qt::Key_Escape;
     case Action::PlayPause: return Qt::Key_Space;
-    case Action::ChannelUp:   return Qt::Key_ChannelUp;
-    case Action::ChannelDown: return Qt::Key_ChannelDown;
+    // The QML Qt namespace only carries the classic key table — Qt.Key_ChannelUp
+    // is undefined in QML, so QML-side zap branches could never match it. Page
+    // keys are the guaranteed aliases every view handler already pairs with the
+    // channel constants.
+    case Action::ChannelUp:   return Qt::Key_PageUp;
+    case Action::ChannelDown: return Qt::Key_PageDown;
     case Action::None:      break;
     }
     return 0;
