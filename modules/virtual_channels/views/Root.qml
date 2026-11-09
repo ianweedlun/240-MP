@@ -27,6 +27,7 @@ FocusScope {
     function navigateTo(viewPath, params, fromState) {
         var resolved = Qt.resolvedUrl(viewPath)
         navStack.push({ source: internalLoader.source, params: currentParams, listState: fromState || {} })
+        appCore.note_state("nav-internal", "to=" + viewPath + " stack=" + navStack.length)
         currentParams = params || {}
         internalLoader.setSource(resolved, { "navParams": withModuleId(params) })
     }
@@ -35,16 +36,19 @@ FocusScope {
     // leaving the old one beneath: Back from any channel is the guide, not a
     // walk back through every channel the dial passed.
     function replaceWith(viewPath, params) {
+        appCore.note_state("nav-internal", "swap=" + viewPath + " channel=" + ((params && params.channelNumber) || "-"))
         currentParams = params || {}
         internalLoader.setSource(Qt.resolvedUrl(viewPath), { "navParams": withModuleId(params) })
     }
 
     function navigateBack() {
         if (navStack.length === 0) {
+            appCore.note_state("nav-internal", "top -> module-exit (goBack)")
             moduleRoot.goBack()
             return
         }
         var prev = navStack.pop()
+        appCore.note_state("nav-internal", "back=" + (prev.source || "(root)") + " stack=" + navStack.length)
         if (!prev.source || prev.source.toString() === "") {
             moduleRoot.goBack()
             return
