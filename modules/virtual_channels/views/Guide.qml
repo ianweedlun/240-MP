@@ -1,4 +1,5 @@
 import QtQuick
+import Components
 
 FocusScope {
     id: guideRoot
@@ -711,7 +712,7 @@ FocusScope {
         }
     }
 
-    ListView {
+    RowTrackingListView {
         id: channelRows
         x: guideRoot.edgeMargin
         y: header.y + header.height
