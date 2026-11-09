@@ -267,10 +267,35 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        autoScrollEnabled = toggleOn("guide.autoscroll", true)
-        autoScroll = autoScrollEnabled
-        var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
-        if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
+        // The consolidated single row. Old two-row configs still mean the same
+        // thing until the viewer uses the new one: read the new key first,
+        // fall back to the legacy pair.
+        var idling = appCore.get_setting(guideRoot.moduleId, "guide.idling")
+        var idlingSrc = "legacy"
+        if (idling !== undefined && String(idling) !== "") {
+            idlingSrc = "setting"
+            var opt = String(idling)
+            if (opt.indexOf("Holds") === 0) {
+                autoScrollEnabled = opt.indexOf("Never") < 0
+                autoScroll = autoScrollEnabled
+                resumeSeconds = autoScrollEnabled
+                               ? (opt.indexOf("1m") >= 0 ? 60
+                                  : (opt.indexOf("5m") >= 0 ? 300 : 30))
+                               : 0
+            } else {
+                autoScrollEnabled = true
+                autoScroll = true
+                resumeSeconds = 5
+            }
+        } else {
+            autoScrollEnabled = toggleOn("guide.autoscroll", true)
+            autoScroll = autoScrollEnabled
+            var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
+            if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
+        }
+        appCore.note_state("guide-idle",
+                           "auto=" + (autoScrollEnabled ? "on" : "off") +
+                           " resume=" + resumeSeconds + "s src=" + idlingSrc)
         var pv = appCore.get_setting(guideRoot.moduleId, "guide.preview")
         if (pv !== undefined && pv !== null && String(pv) !== "")
             previewMode = String(pv).toUpperCase()
