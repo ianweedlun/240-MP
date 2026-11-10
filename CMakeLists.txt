@@ -94,6 +94,10 @@ add_executable(240mp
     src/util/ExecPath.cpp
     src/util/DisplayHandoff.cpp
     src/util/FontconfigOverride.cpp
+    src/audio/NoopVolumeMixer.cpp
+    src/audio/PipeWireVolumeMixer.cpp
+    src/audio/ALSAVolumeMixer.cpp
+    src/audio/VolumeMixerFactory.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -288,6 +292,23 @@ if(BUILD_TESTS)
         target_compile_options(appcore-weather-proxy-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME appcore-weather-proxy COMMAND appcore-weather-proxy-tests)
+
+    # System-volume mixer abstraction: exercises the factory's backend
+    # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
+    # No real audio hardware needed — the factory picks a no-op on WSL/CI.
+    add_executable(volume-mixer-tests
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/tests/VolumeMixerTest.cpp)
+    set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(volume-mixer-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME volume-mixer COMMAND volume-mixer-tests)
 
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
