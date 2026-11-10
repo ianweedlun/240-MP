@@ -300,6 +300,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/tests/VirtualChannelsBackendTest.cpp
         src/modules/virtual_channels/tests/SubjectEngineTest.cpp
         src/modules/virtual_channels/tests/TVDBAuthTest.cpp
+        src/modules/virtual_channels/tests/TVDBNetworkResolverTest.cpp
         # Listed so AUTOMOC processes it: it declares a QObject but has no
         # same-named source file for AUTOMOC to pair it with.
         src/modules/virtual_channels/tests/FakeMediaServer.h
@@ -314,13 +315,14 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/MediaServerSource.cpp
         src/modules/virtual_channels/SubjectEngine.cpp
         src/modules/virtual_channels/TVDBAuth.cpp
+        src/modules/virtual_channels/TVDBNetworkResolver.cpp
         src/modules/virtual_channels/LocalLibrary.cpp
         src/modules/virtual_channels/VirtualChannelsBackend.cpp)
     # MediaServerSource and the fake backend it is tested against are both
     # QObjects, so this target needs moc even though the rest of the suite is
     # plain C++.
     set_target_properties(vchan-tests PROPERTIES AUTOMOC ON)
-    target_link_libraries(vchan-tests PRIVATE Qt6::Core)
+    target_link_libraries(vchan-tests PRIVATE Qt6::Core Qt6::Network)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vchan-tests PRIVATE -Wall -Wextra)
     endif()
