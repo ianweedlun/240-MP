@@ -299,6 +299,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/tests/LocalLibraryTest.cpp
         src/modules/virtual_channels/tests/VirtualChannelsBackendTest.cpp
         src/modules/virtual_channels/tests/SubjectEngineTest.cpp
+        src/modules/virtual_channels/tests/TVDBAuthTest.cpp
         # Listed so AUTOMOC processes it: it declares a QObject but has no
         # same-named source file for AUTOMOC to pair it with.
         src/modules/virtual_channels/tests/FakeMediaServer.h
@@ -312,6 +313,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/DurationProbe.cpp
         src/modules/virtual_channels/MediaServerSource.cpp
         src/modules/virtual_channels/SubjectEngine.cpp
+        src/modules/virtual_channels/TVDBAuth.cpp
         src/modules/virtual_channels/LocalLibrary.cpp
         src/modules/virtual_channels/VirtualChannelsBackend.cpp)
     # MediaServerSource and the fake backend it is tested against are both
