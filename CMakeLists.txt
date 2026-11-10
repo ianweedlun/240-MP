@@ -374,6 +374,25 @@ if(BUILD_VCHAN_TESTS)
     endif()
     enable_testing()
     add_test(NAME vchan-schedule COMMAND vchan-tests)
+
+    # Preset add-flow QML smoke test: loads PresetRecipe/PresetSubject offscreen
+    # with stubbed backends and asserts the recipe -> rows -> create+nav wiring
+    # that pure-logic ctest can't reach. Needs Quick+Qml (QML engine) and Gui
+    # (QGuiApplication); runs headless via the offscreen platform set in main().
+    add_executable(vchan-preset-smoke
+        src/tests/preset-smoke-test.cpp)
+    set_target_properties(vchan-preset-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(vchan-preset-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(vchan-preset-smoke PRIVATE src)
+    # Repo root so the test locates the module views and the shared Components/
+    # import path without hardcoding a machine path.
+    # Repo root as a C string literal. Use the same set()/\" pattern the
+    # APP_VERSION def uses — target_compile_definitions strips a bare \" passed
+    # inline, which would otherwise split the path into tokens at compile time.
+    set(MP240_REPO_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(vchan-preset-smoke PRIVATE ${MP240_REPO_ROOT_DEF})
+    add_test(NAME vchan-preset-smoke COMMAND vchan-preset-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
