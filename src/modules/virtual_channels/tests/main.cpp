@@ -12,6 +12,7 @@ int runMediaServerSourceTests();
 int runLocalLibraryTests();
 int runVirtualChannelsBackendTests();
 int runSubjectEngineTests();
+int runCatalogTests();
 int runTVDBAuthTests();
 int runTVDBNetworkResolverTests();
 
@@ -28,6 +29,7 @@ int main(int argc, char **argv) {
     runLocalLibraryTests();
     runVirtualChannelsBackendTests();
     runSubjectEngineTests();
+    runCatalogTests();
     runTVDBAuthTests();
     runTVDBNetworkResolverTests();
 

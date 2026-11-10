@@ -8,6 +8,8 @@
 #include <QNetworkAccessManager>
 #include <QVector>
 
+#include "Subject.h"
+
 namespace vchan {
 
 // Resolves a show to its TheTVDB network id via the v4 API:
@@ -25,6 +27,17 @@ public:
     explicit TVDBNetworkResolver(const QString &apiKey);
 
     QString networkIdFor(const MediaItem &item) const override;
+
+    // --- catalog listing (TheTVDB v4) ---
+    // Enumerate the subject values a preset recipe can be built from. These do
+    // a blocking GET (same QEventLoop pattern as searchSeries); the add-flow
+    // loads a catalog once on view open, so a short block is acceptable.
+    //   listGenres()      -> GET /genres
+    //   listNetworks()    -> GET /companies joined against /companies/types,
+    //                        kept only where the company type is "network".
+    // Both return an empty list if the apikey is missing or the call fails.
+    QVector<Subject> listGenres() const;
+    QVector<Subject> listNetworks() const;
 
     // --- testable pure logic ---
 
@@ -46,6 +59,10 @@ private:
     QString sessionToken() const;
     QVector<QJsonObject> searchSeries(const QString &title) const;
     QString resolveByTitle(const QString &title) const;
+
+    // GET a v4 path and return its response body object ({"data": ...}), or an
+    // empty object if the token is missing or the call failed.
+    QJsonObject fetch(const QString &path) const;
 };
 
 } // namespace vchan

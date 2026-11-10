@@ -20,6 +20,10 @@
 
 class QTimer;
 
+namespace vchan {
+class TVDBNetworkResolver; // forward: used as a pointer member only
+} // namespace vchan
+
 class VirtualChannelsBackend : public QObject {
     Q_OBJECT
 public:
@@ -194,6 +198,11 @@ public:
     Q_INVOKABLE QVariantMap logo_style_range(const QString &key) const;
 
     Q_INVOKABLE int create_channel(const QString &name);
+    // Build a preset channel: identity (name) is derived from the subject, the
+    // recipe is recorded under "preset" so the channel is recognisably a
+    // genre/network/collection channel. Returns the new channel number, or -1.
+    Q_INVOKABLE int create_preset_channel(int kind, const QString &id,
+                                          const QString &name);
 
     Q_INVOKABLE QVariantList channel_interstitials(int channelNumber);
     Q_INVOKABLE QVariantList media_folders(int maxDepth = 3);
@@ -247,6 +256,12 @@ public:
 
     Q_INVOKABLE QVariantList list_channels();
 
+    // Load the subject values for a preset recipe. `kind` is "genre",
+    // "network" or "collection": the first two come from TheTVDB (needs the
+    // apikey set), collections from the connected media server. Delivers the
+    // values via catalogReady; catalogFailed when the source is unavailable.
+    Q_INVOKABLE void load_catalog(const QString &kind);
+
     Q_INVOKABLE int guide_channel_number() const;
     Q_INVOKABLE int weather_channel_number() const;
     Q_INVOKABLE bool weather_channel_enabled() const;
@@ -270,6 +285,11 @@ signals:
 
     void actionStatus(const QString &message);
 
+    // Catalog of preset-recipe subject values, delivered after load_catalog.
+    // `kind` echoes the requested recipe; `options` is [{id, label}].
+    void catalogReady(const QString &kind, const QVariantList &options);
+    void catalogFailed(const QString &kind, const QString &message);
+
 public slots:
     void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
 
@@ -289,6 +309,11 @@ private slots:
     void onGenerationTick();
     void onUrlTimeout();
     void onPlexEnumTimeout();
+    // Bridges the media-server browse to the collection catalog: when a catalog
+    // load is pending, the browse result (or failure) is delivered as
+    // catalogReady/catalogFailed instead of to a source browser.
+    void onCatalogBrowseReady(const QString &, const QVariantList &);
+    void onCatalogBrowseFailed(const QString &, const QString &);
 
 private:
     QString m_appRoot;
@@ -302,7 +327,16 @@ private:
     QObject *m_jellyfin = nullptr;
     QObject *m_emby = nullptr;
 
+    // The TVDB catalog resolver, built lazily once an apikey is known. A preset
+    // genre/network channel enumerates its subject values from it.
+    vchan::TVDBNetworkResolver *m_resolver = nullptr;
+    // While a collection catalog is loading, this records what the caller asked
+    // for so onPlexCollectionsLoaded can deliver it back through catalogReady.
+    QString m_catalogPending;
+
     vchan::SlotSource channelSource(int channelNumber) const;
+    // Builds (once) and returns the TVDB resolver, or nullptr if no apikey.
+    vchan::TVDBNetworkResolver *resolver();
     static vchan::SlotSource sourceOf(const QJsonObject &channel);
     static bool    isMovieChannel(const QJsonObject &channel);
     static bool    usesDayPlan(const QJsonObject &channel);

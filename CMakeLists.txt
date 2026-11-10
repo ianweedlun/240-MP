@@ -87,6 +87,9 @@ add_executable(240mp
     src/modules/virtual_channels/DurationProbe.cpp
     src/modules/virtual_channels/MediaServerSource.cpp
     src/modules/virtual_channels/LocalLibrary.cpp
+    src/modules/virtual_channels/Catalog.cpp
+    src/modules/virtual_channels/TVDBAuth.cpp
+    src/modules/virtual_channels/TVDBNetworkResolver.cpp
     src/player/MpvController.cpp
     src/util/MpvBasicOptions.cpp
     src/util/YtDlpLocator.cpp
@@ -340,6 +343,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/tests/LocalLibraryTest.cpp
         src/modules/virtual_channels/tests/VirtualChannelsBackendTest.cpp
         src/modules/virtual_channels/tests/SubjectEngineTest.cpp
+        src/modules/virtual_channels/tests/CatalogTest.cpp
         src/modules/virtual_channels/tests/TVDBAuthTest.cpp
         src/modules/virtual_channels/tests/TVDBNetworkResolverTest.cpp
         # Listed so AUTOMOC processes it: it declares a QObject but has no
@@ -355,6 +359,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/DurationProbe.cpp
         src/modules/virtual_channels/MediaServerSource.cpp
         src/modules/virtual_channels/SubjectEngine.cpp
+        src/modules/virtual_channels/Catalog.cpp
         src/modules/virtual_channels/TVDBAuth.cpp
         src/modules/virtual_channels/TVDBNetworkResolver.cpp
         src/modules/virtual_channels/LocalLibrary.cpp

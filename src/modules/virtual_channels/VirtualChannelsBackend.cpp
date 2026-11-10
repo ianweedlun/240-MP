@@ -1,7 +1,10 @@
 #include "VirtualChannelsBackend.h"
 
+#include "Catalog.h"
 #include "ChannelTuner.h"
 #include "PathGuard.h"
+#include "TVDBAuth.h"
+#include "TVDBNetworkResolver.h"
 
 #include <QDateTime>
 #include <QTimeZone>
@@ -162,6 +165,13 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
             this, &VirtualChannelsBackend::onServerBrowseReady);
     connect(m_server, &MediaServerSource::browseFailed,
             this, &VirtualChannelsBackend::onServerBrowseFailed);
+
+    // A pending collection catalog rides the same browse signals a source
+    // browser uses; route them to the catalog when one is loading.
+    connect(this, &VirtualChannelsBackend::sourceBrowseReady,
+            this, &VirtualChannelsBackend::onCatalogBrowseReady);
+    connect(this, &VirtualChannelsBackend::sourceBrowseFailed,
+            this, &VirtualChannelsBackend::onCatalogBrowseFailed);
 
     for (QObject *b : { m_jellyfin, m_emby }) {
         if (!b) continue;
@@ -3919,6 +3929,110 @@ int VirtualChannelsBackend::create_channel(const QString &name) {
         return -1;
     }
     qDebug("[VirtualChannels] created channel %d \"%s\"", number, qPrintable(wanted));
+    return number;
+}
+
+// A subject list from TheTVDB becomes the [{id, label}] shape the QML picker
+// expects: id is the stable TheTVDB id, label is what the viewer reads.
+static QVariantList subjectsToOptions(const QVector<Subject> &subjects) {
+    QVariantList out;
+    out.reserve(subjects.size());
+    for (const Subject &s : subjects)
+        out.append(QVariantMap{{"id", s.id}, {"label", s.name}});
+    return out;
+}
+
+// The TVDB resolver is built lazily: it needs the stored apikey, which may not
+// exist yet. Returns nullptr (caller reports "apikey not set") rather than a
+// resolver that could never fetch.
+TVDBNetworkResolver *VirtualChannelsBackend::resolver() {
+    if (m_resolver) return m_resolver;
+    vchan::TVDBAuth auth(vchan::TVDBAuth::defaultPath(m_dataRoot));
+    const QString key = auth.apikey();
+    if (key.isEmpty()) return nullptr;
+    m_resolver = new vchan::TVDBNetworkResolver(key);
+    return m_resolver;
+}
+
+void VirtualChannelsBackend::load_catalog(const QString &kind) {
+    // Collections have no TheTVDB list endpoint; they come from the connected
+    // media server. Kick off the existing browse and let onCatalogBrowseReady
+    // deliver the result once it lands.
+    if (kind == QStringLiteral("collection")) {
+        if (!m_plex)      { emit catalogFailed(kind, "No media server connected"); return; }
+        if (browse_busy()){ emit catalogFailed(kind, "Media server is busy"); return; }
+        m_catalogPending = kind;
+        browse_plex_collections();
+        return;
+    }
+
+    TVDBNetworkResolver *res = resolver();
+    if (!res) { emit catalogFailed(kind, "TheTVDB apikey is not set"); return; }
+
+    QVector<Subject> subjects;
+    if (kind == QStringLiteral("genre"))      subjects = res->listGenres();
+    else if (kind == QStringLiteral("network")) subjects = res->listNetworks();
+    else { emit catalogFailed(kind, "Unknown recipe"); return; }
+
+    emit catalogReady(kind, subjectsToOptions(subjects));
+}
+
+void VirtualChannelsBackend::onCatalogBrowseReady(const QString &, const QVariantList &items) {
+    if (m_catalogPending.isEmpty()) return;
+    emit catalogReady(m_catalogPending, items);
+    m_catalogPending.clear();
+}
+
+void VirtualChannelsBackend::onCatalogBrowseFailed(const QString &, const QString &reason) {
+    if (m_catalogPending.isEmpty()) return;
+    emit catalogFailed(m_catalogPending, reason);
+    m_catalogPending.clear();
+}
+
+int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
+                                                  const QString &name) {
+    // The identity is auto-derived from the subject: a "by network" preset for
+    // AMC becomes the "AMC" channel, a "by genre" preset for Action becomes
+    // "Action". There is nothing for the viewer to name.
+    QString wanted = name.trimmed();
+    if (wanted.isEmpty())
+        wanted = QStringLiteral("Channel %1").arg(nextFreeChannelNumber());
+
+    const int number = nextFreeChannelNumber();
+    QFile::remove(scheduleFilePath(number));
+
+    QJsonObject ch;
+    ch["number"]        = number;
+    ch["name"]          = wanted;
+    ch["seed"]          = number;
+    ch["order"]         = QStringLiteral("broadcast");
+    ch["ads_per_break"] = 0;
+    // The recipe, so the channel is recognisably a preset and a future generator
+    // can build it from the subject (kind/id/name).
+    ch["preset"] = QJsonObject{{"kind", QString::number(kind)},
+                               {"id", id},
+                               {"name", name}};
+
+    const QString absRoot = QFileInfo(m_mediaRoot).canonicalFilePath();
+    if (!absRoot.isEmpty()) {
+        const QVector<QPair<const char *, const char *>> conventional = {
+            { "commercials", "interstitials/commercial" },
+            { "bumps",       "interstitials/bump" },
+            { "intros",      "interstitials/intro" },
+            { "outros",      "interstitials/outro" },
+        };
+        for (const auto &c : conventional)
+            if (QFileInfo::exists(absRoot + QLatin1Char('/') + QLatin1String(c.second)))
+                ch[QLatin1String(c.first)] = QJsonArray{ QLatin1String(c.second) };
+    }
+
+    QString err;
+    if (!appendChannel(ch, &err)) {
+        qWarning("[VirtualChannels] could not create preset channel: %s", qPrintable(err));
+        return -1;
+    }
+    qDebug("[VirtualChannels] created preset channel %d \"%s\" (kind=%d id=%s)",
+           number, qPrintable(wanted), kind, qPrintable(id));
     return number;
 }
 

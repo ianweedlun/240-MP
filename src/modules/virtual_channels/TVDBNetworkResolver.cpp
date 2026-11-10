@@ -1,5 +1,6 @@
 #include "TVDBNetworkResolver.h"
 
+#include "Catalog.h"
 #include "MediaServerSource.h"
 
 #include <QEventLoop>
@@ -142,6 +143,32 @@ QString TVDBNetworkResolver::parseNetworkId(const QJsonObject &series) {
         }
     }
     return {};
+}
+
+QJsonObject TVDBNetworkResolver::fetch(const QString &path) const {
+    const QString token = sessionToken();
+    if (token.isEmpty()) return {};
+
+    QNetworkRequest req(QUrl(kBaseURL + path));
+    req.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(token).toUtf8());
+
+    QEventLoop loop;
+    QNetworkReply *reply = m_nam.get(req);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    const QByteArray data = reply->readAll();
+    reply->deleteLater();
+    return QJsonDocument::fromJson(data).object();
+}
+
+QVector<Subject> TVDBNetworkResolver::listGenres() const {
+    return Catalog::parseGenres(fetch(QStringLiteral("/genres")));
+}
+
+QVector<Subject> TVDBNetworkResolver::listNetworks() const {
+    return Catalog::parseNetworks(fetch(QStringLiteral("/companies")),
+                                  fetch(QStringLiteral("/companies/types")));
 }
 
 } // namespace vchan

@@ -17,10 +17,17 @@ FocusScope {
     readonly property var listRows: {
         var r = []
         for (var i = 0; i < channels.length; i++) r.push(channels[i])
-        r.push({ addRow: true, number: "+", name: "Add Channel" })
+        r.push({ special: "add-channel", number: "+", name: "Add Channel" })
+        r.push({ special: "add-preset",  number: "★", name: "Add Preset Channel" })
         return r
     }
-    function isAddRow(i) { return i === channels.length }
+    // What the current row is: a channel, or one of the two add actions. The
+    // special rows carry no channel fields, only a `special` tag.
+    function rowKind(i) {
+        if (i < channels.length) return "channel"
+        return listRows[i].special || "channel"
+    }
+    function isAddRow(i) { return rowKind(i) !== "channel" }
 
     focus: true
 
@@ -101,7 +108,11 @@ FocusScope {
         } else if (event.key === Qt.Key_Right) {
             move(1)
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            if (isAddRow(channelList.currentIndex)) {
+            if (manageRoot.rowKind(channelList.currentIndex) === "add-preset") {
+                navigateTo("modules/virtual_channels/views/PresetRecipe.qml", {
+                    moduleId: manageRoot.moduleId
+                }, { currentIndex: channelList.currentIndex })
+            } else if (manageRoot.rowKind(channelList.currentIndex) === "add-channel") {
                 appCore.save_setting(moduleId, "create_buffer", "")
                 navigateTo("modules/virtual_channels/views/TextEntry.qml", {
                     moduleId: manageRoot.moduleId,
@@ -168,7 +179,7 @@ FocusScope {
             required property int index
             required property var modelData
             readonly property bool selected: index === channelList.currentIndex
-            readonly property bool isAdd: modelData.addRow === true
+            readonly property bool isAdd: modelData.special !== undefined
 
             Rectangle {
                 anchors.fill: parent

@@ -1224,6 +1224,32 @@ void testChannelLifecycle() {
     check(!stillThere, "the deleted channel is gone");
 }
 
+void testPresetChannelWritesTheRecord() {
+    section("Backend: a preset channel records its recipe and derives its name");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // kind 1 == Network (SubjectKind: Genre=0, Network=1, Collection=2).
+    const int made = b.create_preset_channel(1, "389", "AMC");
+    check(made > 0, "a preset channel is created");
+
+    const QJsonObject o = fx.read(made);
+    check(!o.isEmpty(), "the record exists");
+    checkStr(o.value(QStringLiteral("name")).toString(), "AMC",
+             "name auto-derived from the subject, not left blank");
+    const QJsonObject preset = o.value(QStringLiteral("preset")).toObject();
+    checkStr(preset.value(QStringLiteral("kind")).toString(), "1", "recipe kind recorded");
+    checkStr(preset.value(QStringLiteral("id")).toString(), "389", "subject id recorded");
+    checkStr(preset.value(QStringLiteral("name")).toString(), "AMC", "subject name recorded");
+
+    // A second preset takes the next free number and derives its own name.
+    const int made2 = b.create_preset_channel(0, "29", "Action"); // Genre
+    checkEq(made2, made + 1, "the next preset takes the next number");
+    checkStr(fx.read(made2).value(QStringLiteral("name")).toString(), "Action",
+             "the genre preset derives its name too");
+}
+
 
 // A Plex channel airing one programme right now, and the detail the fake
 // answers for it: an OFF pseudo-stream and however many real tracks.
@@ -1818,6 +1844,7 @@ int runVirtualChannelsBackendTests() {
     testInterstitialsAreCounted();
     testSourceSwitchAndPicks();
     testChannelLifecycle();
+    testPresetChannelWritesTheRecord();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
