@@ -138,7 +138,7 @@ FocusScope {
         if (type === "location_picker") {
             // The file is truth, not the saved value: conf-only edits show
             // too, and so do picker commits.
-            var line = weatherBackend.primaryLocationLine()
+            var line = appCore.weatherPrimaryLocationLine()
             return line !== "" ? line : "NOT SET"
         }
 

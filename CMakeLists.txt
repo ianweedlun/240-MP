@@ -269,6 +269,26 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-codes COMMAND weather-tests)
 
+    # AppCore -> weather module proxy (issue #53): app-level views load outside
+    # the weather module's QQml scope where the module-scope "weatherBackend"
+    # context property is null. The location reads are proxied through appCore,
+    # which holds every backend. Links AppCore + WeatherBackend and exercises
+    # the proxy directly (no QML engine, no network).
+    add_executable(appcore-weather-proxy-tests
+        src/AppCore.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/tests/AppCoreWeatherProxyTest.cpp)
+    set_target_properties(appcore-weather-proxy-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-weather-proxy-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-weather-proxy-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-weather-proxy-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-weather-proxy COMMAND appcore-weather-proxy-tests)
+
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
         src/modules/plex/tests/PlaybackDecisionTest.cpp)

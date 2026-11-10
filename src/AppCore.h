@@ -50,6 +50,13 @@ public:
     Q_INVOKABLE QString localIpAddress() const;
     Q_INVOKABLE QString startupModuleEntryPoint() const;
     Q_INVOKABLE QString get_module_auth_state(const QString &moduleId);
+    // Weather module's primary location line and coordinate-format check,
+    // proxied through AppCore so app-level views (ModuleSettings, LocationPicker)
+    // that load outside the weather module's QQml scope can read them: the
+    // module-scope "weatherBackend" context property is null there, which used
+    // to throw "Cannot read property 'primaryLocationLine' of null".
+    Q_INVOKABLE QString weatherPrimaryLocationLine() const;
+    Q_INVOKABLE bool weatherLooksLikeCoordinates(const QString &spec) const;
     // Enabled state of a module by id, resolved the same way the module list
     // resolves it (config override, else manifest default, else true). Unknown
     // ids are not enabled.

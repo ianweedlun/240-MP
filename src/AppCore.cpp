@@ -233,6 +233,27 @@ QVariant AppCore::get_setting(const QString &moduleId, const QString &key) {
     return target[key].toVariant();
 }
 
+QString AppCore::weatherPrimaryLocationLine() const {
+    // Proxy the weather module's primary location line for app-level views that
+    // load outside the module's QQml scope (where the "weatherBackend" context
+    // property is null). Reads the location file the same way the module does.
+    QObject *wb = m_backends.value(QStringLiteral("com.240mp.weather"));
+    if (!wb) return QString();
+    QString ret;
+    QMetaObject::invokeMethod(wb, "primaryLocationLine", Qt::DirectConnection,
+                              Q_RETURN_ARG(QString, ret));
+    return ret;
+}
+
+bool AppCore::weatherLooksLikeCoordinates(const QString &spec) const {
+    QObject *wb = m_backends.value(QStringLiteral("com.240mp.weather"));
+    if (!wb) return false;
+    bool ret = false;
+    QMetaObject::invokeMethod(wb, "looksLikeCoordinates", Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, ret), Q_ARG(QString, spec));
+    return ret;
+}
+
 void AppCore::save_setting(const QString &moduleId, const QString &key, const QVariant &value) {
     // The four basic mpv knobs write straight into ~/.config/mpv/mpv.conf — the
     // menu and the file are one surface, config.json stays out of their way.
