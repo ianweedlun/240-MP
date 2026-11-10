@@ -4,6 +4,7 @@
 // reads are proxied through appCore, which holds every backend in m_backends
 // and is available at app-level scope. These tests exercise that proxy directly.
 #include <QTest>
+#include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QFile>
 
@@ -71,5 +72,14 @@ private Q_SLOTS:
     }
 };
 
-QTEST_MAIN(AppCoreWeatherProxyTest)
+// Headless CI has no X server; QTEST_MAIN would build a QGuiApplication that
+// can't construct without a display. Set the offscreen platform before the app
+// is created, then run the test the way QTEST_MAIN would.
+int main(int argc, char **argv) {
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QGuiApplication app(argc, argv);
+    AppCoreWeatherProxyTest testobject;
+    return QTest::qExec(&testobject, argc, argv);
+}
+
 #include "AppCoreWeatherProxyTest.moc"
