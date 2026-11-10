@@ -36,7 +36,9 @@ QVector<Subject> Catalog::parseGenres(const QJsonObject &body) {
 
 QVector<Subject> Catalog::parseNetworks(const QJsonObject &companies,
                                         const QJsonObject &types) {
-    // companyTypeId -> companyTypeName, e.g. {1, "network"}, {2, "studio"}.
+    // companyTypeId -> companyTypeName, e.g. {1, "Network"}, {2, "Studio"}.
+    // The v4 API capitalises these ("Network"/"Studio"), so the match is
+    // case-insensitive — an exact "network" compare drops every real company.
     QHash<int, QString> typeNames;
     for (const QJsonValue &v : types.value(QStringLiteral("data")).toArray()) {
         const QJsonObject t = v.toObject();
@@ -48,7 +50,9 @@ QVector<Subject> Catalog::parseNetworks(const QJsonObject &companies,
     for (const QJsonValue &v : companies.value(QStringLiteral("data")).toArray()) {
         const QJsonObject c = v.toObject();
         const int typeId = c.value(QStringLiteral("primaryCompanyType")).toInt(-1);
-        if (typeNames.value(typeId) != QStringLiteral("network")) continue;
+        if (typeNames.value(typeId)
+                .compare(QStringLiteral("network"), Qt::CaseInsensitive) != 0)
+            continue;
 
         const QString name = c.value(QStringLiteral("name")).toString().trimmed();
         if (name.isEmpty()) continue;

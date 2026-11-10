@@ -1250,6 +1250,52 @@ void testPresetChannelWritesTheRecord() {
              "the genre preset derives its name too");
 }
 
+void testPresetChannelsWireTheirContent() {
+    section("Backend: a preset channel wires its subject's content, not an empty source");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // Collection (kind 2): the Plex collection is wired in, so the channel has
+    // content the moment it is created instead of landing on an empty source.
+    const int coll = b.create_preset_channel(2, "402", "Adult Swim");
+    check(coll > 0, "a collection preset channel is created");
+    const QJsonObject collRec = fx.read(coll);
+    checkStr(collRec.value(QStringLiteral("source")).toString(), "plex",
+             "the collection channel points at Plex");
+    const QJsonArray collItems =
+        collRec.value(QStringLiteral("plex")).toObject()
+            .value(QStringLiteral("collections")).toArray();
+    checkEq(collItems.size(), 1, "the collection is recorded in the Plex block");
+    checkStr(collItems.at(0).toString(), "Adult Swim",
+             "it is the exact subject the viewer picked");
+
+    // Genre (kind 0): the media-server genre filter is wired in the same way.
+    const int genre = b.create_preset_channel(0, "29", "Action");
+    check(genre > 0, "a genre preset channel is created");
+    const QJsonObject genreRec = fx.read(genre);
+    checkStr(genreRec.value(QStringLiteral("source")).toString(), "plex",
+             "the genre channel points at Plex");
+    const QJsonArray genreItems =
+        genreRec.value(QStringLiteral("plex")).toObject()
+            .value(QStringLiteral("genres")).toArray();
+    checkEq(genreItems.size(), 1, "the genre is recorded in the Plex block");
+    checkStr(genreItems.at(0).toString(), "Action",
+             "it is the exact subject the viewer picked");
+
+    // Network (kind 1): no server-side network filter exists, so nothing is
+    // wired here — the recipe under `preset` is what a TheTVDB-backed generator
+    // rebuilds from later. The channel still exists and is named for the subject.
+    const int net = b.create_preset_channel(1, "389", "AMC");
+    check(net > 0, "a network preset channel is created");
+    const QJsonObject netRec = fx.read(net);
+    check(!netRec.contains(QStringLiteral("plex")),
+          "network wires no source block (no server-side network filter)");
+    checkStr(netRec.value(QStringLiteral("preset")).toObject()
+                 .value(QStringLiteral("name")).toString(), "AMC",
+             "the recipe is recorded for the later generator");
+}
+
 
 // A Plex channel airing one programme right now, and the detail the fake
 // answers for it: an OFF pseudo-stream and however many real tracks.
@@ -1845,6 +1891,7 @@ int runVirtualChannelsBackendTests() {
     testSourceSwitchAndPicks();
     testChannelLifecycle();
     testPresetChannelWritesTheRecord();
+    testPresetChannelsWireTheirContent();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();

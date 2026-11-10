@@ -3,6 +3,7 @@
 #include "Catalog.h"
 #include "ChannelTuner.h"
 #include "PathGuard.h"
+#include "Subject.h"
 #include "TVDBAuth.h"
 #include "TVDBNetworkResolver.h"
 
@@ -4012,6 +4013,27 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     ch["preset"] = QJsonObject{{"kind", QString::number(kind)},
                                {"id", id},
                                {"name", name}};
+
+    // A preset selects its own content at creation time, so the channel airs the
+    // moment it is built instead of dropping the viewer on an empty source screen.
+    // The tuner reads these back at tune time (buildPoolJobs):
+    //   Collection -> browse the Plex collection on demand (instant, any size).
+    //   Genre      -> let the media server filter by that genre.
+    // Network has no server-side filter, so its shows are resolved later by a
+    // TheTVDB-backed generator (needs the stored apikey); the recipe is recorded
+    // under `preset` above for that generator to rebuild from.
+    if (kind == static_cast<int>(SubjectKind::Collection)
+     || kind == static_cast<int>(SubjectKind::Genre)) {
+        const bool isCollection =
+            kind == static_cast<int>(SubjectKind::Collection);
+        QJsonObject plex = ch.value(QLatin1String("plex")).toObject();
+        QJsonArray items;
+        items.append(wanted);
+        plex[isCollection ? QLatin1String("collections")
+                          : QLatin1String("genres")] = items;
+        ch[QLatin1String("plex")] = plex;
+        ch["source"] = QStringLiteral("plex");
+    }
 
     const QString absRoot = QFileInfo(m_mediaRoot).canonicalFilePath();
     if (!absRoot.isEmpty()) {

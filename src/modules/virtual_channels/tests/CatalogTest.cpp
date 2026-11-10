@@ -67,6 +67,26 @@ int runCatalogTests() {
         vtest::checkStr(out.at(1).name, "HBO", "HBO name");
     }
 
+    // --- parseNetworks: the v4 API capitalises the type ("Network"), so the
+    //     match must be case-insensitive or every real company is dropped ---
+    {
+        QJsonObject types;
+        QJsonArray tarr;
+        tarr.append(QJsonObject{{"companyTypeId", 1}, {"companyTypeName", "Network"}});
+        tarr.append(QJsonObject{{"companyTypeId", 2}, {"companyTypeName", "Studio"}});
+        types.insert("data", tarr);
+
+        QJsonObject companies;
+        QJsonArray carr;
+        carr.append(QJsonObject{{"id", 389}, {"primaryCompanyType", 1}, {"name", "AMC"}});
+        carr.append(QJsonObject{{"id", 627}, {"primaryCompanyType", 2}, {"name", "Marvel"}});
+        companies.insert("data", carr);
+
+        auto out = Catalog::parseNetworks(companies, types);
+        vtest::checkEq(out.size(), 1, "capital-N 'Network' still matches, studio dropped");
+        vtest::checkStr(out.at(0).id, "389", "AMC kept under real-world casing");
+    }
+
     // --- parseNetworks: empty catalog yields nothing, no crash ---
     {
         auto out = Catalog::parseNetworks(QJsonObject(), QJsonObject());
