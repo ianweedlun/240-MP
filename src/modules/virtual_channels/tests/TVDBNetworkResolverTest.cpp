@@ -78,5 +78,13 @@ int runTVDBNetworkResolverTests() {
                         "no network -> empty");
     }
 
+    // --- construction / destruction: RAII owns the QNAM (no parent double-free) ---
+    // Constructing with a key and destroying without issuing any network call
+    // exercises the full object lifecycle. If QNAM were parent-owned AND
+    // manually deleted, this would double-free.
+    {
+        TVDBNetworkResolver resolver("00000000-0000-0000-0000-000000000000");
+    }
+
     return 0;
 }

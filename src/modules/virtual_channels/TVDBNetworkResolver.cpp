@@ -15,13 +15,9 @@ namespace vchan {
 
 const QString TVDBNetworkResolver::kBaseURL = QStringLiteral("https://api4.thetvdb.com/v4");
 
-TVDBNetworkResolver::TVDBNetworkResolver(const QString &apiKey, QObject *parent)
+TVDBNetworkResolver::TVDBNetworkResolver(const QString &apiKey)
     : m_apiKey(apiKey)
-    , m_nam(new QNetworkAccessManager(parent)) {}
-
-TVDBNetworkResolver::~TVDBNetworkResolver() {
-    delete m_nam;
-}
+    , m_nam() {}
 
 QString TVDBNetworkResolver::networkIdFor(const MediaItem &item) const {
     const QString name = item.series.trimmed();
@@ -42,7 +38,7 @@ QString TVDBNetworkResolver::sessionToken() const {
     const QByteArray body = QStringLiteral("{\"apikey\":\"%1\"}").arg(m_apiKey).toUtf8();
 
     QEventLoop loop;
-    QNetworkReply *reply = m_nam->post(req, body);
+    QNetworkReply *reply = m_nam.post(req, body);
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
 
@@ -67,7 +63,7 @@ QVector<QJsonObject> TVDBNetworkResolver::searchSeries(const QString &title) con
     req.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(token).toUtf8());
 
     QEventLoop loop;
-    QNetworkReply *reply = m_nam->get(req);
+    QNetworkReply *reply = m_nam.get(req);
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
 
@@ -97,7 +93,7 @@ QString TVDBNetworkResolver::resolveByTitle(const QString &title) const {
     req.setRawHeader("Authorization", QStringLiteral("Bearer %1").arg(token).toUtf8());
 
     QEventLoop loop;
-    QNetworkReply *reply = m_nam->get(req);
+    QNetworkReply *reply = m_nam.get(req);
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
 

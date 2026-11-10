@@ -22,8 +22,7 @@ class TVDBNetworkResolver : public NetworkResolver {
 public:
     static const QString kBaseURL;
 
-    explicit TVDBNetworkResolver(const QString &apiKey, QObject *parent = nullptr);
-    ~TVDBNetworkResolver() override;
+    explicit TVDBNetworkResolver(const QString &apiKey);
 
     QString networkIdFor(const MediaItem &item) const override;
 
@@ -41,8 +40,8 @@ public:
 private:
     mutable QString m_token;
     mutable QHash<QString, QString> m_cache;
-    mutable QNetworkAccessManager *m_nam;
     QString m_apiKey;
+    mutable QNetworkAccessManager m_nam;
 
     QString sessionToken() const;
     QVector<QJsonObject> searchSeries(const QString &title) const;
