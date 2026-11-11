@@ -5639,11 +5639,25 @@ QVariantMap VirtualChannelsBackend::channel_source_config(int channelNumber) {
         else if (kind == QLatin1String("series")
                  || kind.isEmpty())              picked << name;
     }
+    // A preset genre channel keeps its recipe as the server-side filter in the
+    // block, not as entry rows — the hand-ticked genres are entries. Say both:
+    // the filter is what airs, and the screen must not answer NONE under a
+    // channel that named the genre when it was built.
+    for (const QJsonValue &v : plex.value(QLatin1String("genres")).toArray()) {
+        if (!v.isString()) continue;
+        const QString g = v.toString().trimmed();
+        if (g.isEmpty()) continue;
+        bool known = false;
+        for (const QString &e : genres)
+            if (e.toLower() == g.toLower()) { known = true; break; }
+        if (!known) genres << g;
+    }
     if (picked.isEmpty() && films.isEmpty() && genres.isEmpty())
         picked = listOf(plex, "match");
     out["match"]       = picked;
     out["films"]       = films;
     out["genres"]      = genres;
+    out["studios"]     = listOf(plex, "studios");
     out["collections"] = listOf(plex, "collections");
     out["playlists"]   = listOf(plex, "playlists");
 

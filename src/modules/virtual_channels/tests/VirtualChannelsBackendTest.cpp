@@ -1296,6 +1296,51 @@ void testPresetChannelsWireTheirContent() {
              "the recipe is recorded for the later generator");
 }
 
+void testPresetChannelsSurfaceInBuilder() {
+    section("Backend: channel_source_config surfaces the preset's content");
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // A collection preset: the subject rides into the config as the channel's
+    // collection, so the builder screen names it instead of answering NONE.
+    const int coll = b.create_preset_channel(2, "402", "Adult Swim");
+    check(coll > 0, "a collection preset channel is created");
+    const QVariantMap cc = b.channel_source_config(coll);
+    checkStr(cc.value(QStringLiteral("source")).toString(), "plex",
+             "the collection channel is on Plex");
+    check(cc.value(QStringLiteral("collections")).toStringList()
+              .contains(QStringLiteral("Adult Swim")),
+          "the wired collection surfaces in the builder config");
+    checkStr(cc.value(QStringLiteral("preset")).toString(), "Adult Swim",
+          "the recipe is named in the builder config");
+    checkEq(cc.value(QStringLiteral("presetOff")).toInt(), 0,
+            "nothing has been taken out of it yet");
+
+    // A genre preset: the recipe lives in the block as the server-side filter,
+    // not as entry rows — the hand-ticked genres are entries. The config says
+    // both, so the Genres row reads the filter and not an empty pool.
+    const int genre = b.create_preset_channel(0, "29", "Action");
+    check(genre > 0, "a genre preset channel is created");
+    const QVariantMap gc = b.channel_source_config(genre);
+    check(gc.value(QStringLiteral("genres")).toStringList()
+              .contains(QStringLiteral("Action")),
+          "the block's genre filter surfaces among the genres");
+    checkStr(gc.value(QStringLiteral("preset")).toString(), "Action",
+             "the recipe is named in the builder config");
+
+    // A network preset: no server-side filter exists, so at creation the
+    // channel carries only its recipe — the builder offers the seed row.
+    const int net = b.create_preset_channel(1, "389", "AMC");
+    check(net > 0, "a network preset channel is created");
+    const QVariantMap nc = b.channel_source_config(net);
+    check(nc.value(QStringLiteral("match")).toStringList().isEmpty(),
+          "a fresh network preset has no picks yet");
+    checkStr(nc.value(QStringLiteral("preset")).toString(), "AMC",
+             "the recipe alone is what the builder needs to seed from");
+    check(nc.value(QStringLiteral("studios")).toStringList().isEmpty(),
+          "network presets carry no studio filters");
+}
+
 
 // A Plex channel airing one programme right now, and the detail the fake
 // answers for it: an OFF pseudo-stream and however many real tracks.
@@ -1892,6 +1937,7 @@ int runVirtualChannelsBackendTests() {
     testChannelLifecycle();
     testPresetChannelWritesTheRecord();
     testPresetChannelsWireTheirContent();
+    testPresetChannelsSurfaceInBuilder();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
