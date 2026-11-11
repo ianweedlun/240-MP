@@ -212,7 +212,7 @@ ExecStart=${LAUNCHER}
 Restart=on-failure
 RestartSec=5s
 RestartPreventExitStatus=10 12
-ExecStopPre=+/usr/local/bin/240mp-mark
+ExecStop=+/usr/local/bin/240mp-mark
 ExecStopPost=+/usr/local/bin/240mp-stop
 StandardOutput=journal
 StandardError=journal
@@ -221,13 +221,15 @@ StandardError=journal
 WantedBy=multi-user.target
 UNIT
 
-    # ExecStopPre/ExecStopPost pair. %1 (the stop-command specifier) is ILLEGAL
+    # ExecStop/ExecStopPost pair. %1 (the stop-command specifier) is ILLEGAL
     # here — it only resolves on instantiated name@unit services; on 240mp.service
     # systemd fails to parse the whole unit ("Failed to resolve unit specifiers
-    # in %1: Invalid slot" → "has a bad unit file setting"), which is exactly the
-    # boot failure the owner hit. And EXIT_STATUS alone can't discriminate either:
+    # in %1: Invalid slot" -> "has a bad unit file setting"), which is exactly the
+    # boot failure the owner hit. (ExecStopPre does NOT exist as a systemd
+    # directive — unknown keys are silently ignored; the stop-phase hook is
+    # ExecStop, which fires ONLY on system-initiated stops.) And EXIT_STATUS alone can't discriminate either:
     # the app traps SIGTERM and exits 0, so a systemctl stop/restart/kill looks
-    # identical to an in-app quit. ExecStopPre runs ONLY on system-initiated
+    # identical to an in-app quit. ExecStop runs ONLY on system-initiated
     # stops, so 240mp-mark stamps /tmp/240mp-stop-marker; a fresh stamp (<=30s —
     # the app's clean teardown can take a while) means "system stop": Pi stays
     # powered. Otherwise the app's own exit code decides, as before:
@@ -240,8 +242,9 @@ UNIT
     # relaunches through the launcher, which applies the staged update before exec.
     sudo tee /usr/local/bin/240mp-mark > /dev/null << 'STOP_MARKER'
 #!/usr/bin/env bash
-# ExecStopPre: fires ONLY on system-initiated stop/restart/kill (never on an
+# ExecStop: fires ONLY on a system-initiated stop/restart/kill (never on an
 # app-driven exit). Stamps the epoch so 240mp-stop can discriminate.
+sync
 date +%s > /tmp/240mp-stop-marker
 STOP_MARKER
     sudo chmod +x /usr/local/bin/240mp-mark
