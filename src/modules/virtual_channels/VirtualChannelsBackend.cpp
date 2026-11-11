@@ -4028,6 +4028,8 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
 
 void VirtualChannelsBackend::onCatalogBrowseReady(const QString &, const QVariantList &items) {
     if (m_catalogPending.isEmpty()) return;
+    qInfo("[VirtualChannels] catalog browse ready: %d subjects for '%s' from the connected library",
+          items.size(), qPrintable(m_catalogPending));
     emit catalogReady(m_catalogPending, items);
     m_catalogPending.clear();
 }
@@ -4237,10 +4239,17 @@ void VirtualChannelsBackend::finishSeeding() {
 
     QJsonArray picks;
     QSet<QString> seen;
+    int harvestTried = 0, identityRefused = 0;
     for (const MediaItem &m : std::as_const(m_genDef.programmes)) {
         const QString name = movies ? m.title : (m.series.isEmpty() ? m.title : m.series);
         if (name.trimmed().isEmpty()) continue;
-        if (network && res && res->networkIdFor(m).trimmed() != wantedNetwork) continue;
+        ++harvestTried;
+        if (network && res) {
+            if (res->networkIdFor(m).trimmed() != wantedNetwork) {
+                ++identityRefused;
+                continue;
+            }
+        }
         const QString key = name.trimmed().toLower();
         if (seen.contains(key)) continue;
         seen.insert(key);
@@ -4251,6 +4260,9 @@ void VirtualChannelsBackend::finishSeeding() {
         e["preset"] = recipeKey;
         picks.append(e);
     }
+    qInfo("[VirtualChannels] seed harvest: %d tried, %d refused by network identity, %d unique picks"
+          " (network seeds pay one TheTVDB search per tried title, cached across seeds)",
+          harvestTried, identityRefused, seen.size());
 
     QJsonArray channels = readChannels();
     bool found = false;

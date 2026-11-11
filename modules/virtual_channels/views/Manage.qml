@@ -109,9 +109,12 @@ FocusScope {
             move(1)
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (manageRoot.rowKind(channelList.currentIndex) === "add-preset") {
+                // The preset flow carries its own identity through every hop: one
+                // [presetflow] trail in the journal for the whole add chain.
+                console.log("[presetflow] add-preset row engaged at index", channelList.currentIndex)
                 navigateTo("modules/virtual_channels/views/PresetRecipe.qml", {
-                    moduleId: manageRoot.moduleId
-                }, { currentIndex: channelList.currentIndex })
+                moduleId: manageRoot.moduleId
+            }, { currentIndex: channelList.currentIndex })
             } else if (manageRoot.rowKind(channelList.currentIndex) === "add-channel") {
                 appCore.save_setting(moduleId, "create_buffer", "")
                 navigateTo("modules/virtual_channels/views/TextEntry.qml", {

@@ -4,6 +4,7 @@
 #include "MediaServerSource.h"
 
 #include <QEventLoop>
+#include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -28,6 +29,10 @@ QString TVDBNetworkResolver::networkIdFor(const MediaItem &item) const {
 
     const QString netId = resolveByTitle(query);
     m_cache.insert(query, netId);
+    static int freshLookups = 0;
+    ++freshLookups;
+    qInfo("[VirtualChannels] tvdb search #%d '%s' -> '%s' (empty means no match or a rate-limit miss)",
+          freshLookups, qPrintable(query), qPrintable(netId));
     return netId;
 }
 

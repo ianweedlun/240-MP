@@ -66,6 +66,9 @@ FocusScope {
             if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
             r.push("rename")
             r.push("delete")
+            console.log("[presetflow] builder rows:", r.join(","),
+                        "preset:", cfg.preset !== undefined ? cfg.preset : "",
+                        "off:", countOf("presetOff"))
             return r
         }
 

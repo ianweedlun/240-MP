@@ -61,6 +61,8 @@ FocusScope {
         function onCatalogReady(kind, optionsList) {
             if (kind !== subjectRoot.catalogKind) return
             subjectRoot.busy = false
+            console.log("[presetflow] catalog ready:", subjectRoot.catalogKind,
+                        "rows:", optionsList.length)
             subjectRoot.rows = optionsList
             subjectRoot.emptyText = optionsList.length === 0
                 ? "No " + subjectRoot.subjectWord + "s available"
@@ -82,6 +84,7 @@ FocusScope {
                 }, {})
             } else {
                 // Nothing filled the channel, so nothing goes on the dial.
+                console.log("[presetflow] seed refused for channel", ch, "-", message)
                 virtualChannelsBackend.delete_channel(subjectRoot.seedChannel)
                 subjectRoot.seedChannel = -1
                 subjectRoot.status = message
@@ -112,6 +115,8 @@ FocusScope {
             if (n < 0) {
                 subjectRoot.emptyText = "Could not create the channel"
             } else {
+                console.log("[presetflow] subject activated:", subjectRoot.catalogKind,
+                            id, name, "-> channel", n)
                 subjectRoot.seedChannel = n
                 subjectRoot.seedName = name
                 subjectRoot.seeding = true
