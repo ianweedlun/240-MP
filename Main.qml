@@ -322,10 +322,28 @@ Window {
             ignoreUnknownSignals: true
 
             function onNavigateTo(path, params, listState) {
+                // A bare "View.qml" token is module-relative (the same convention
+                // Root.qml's bridge uses with Qt.resolvedUrl) — but only when the
+                // hop goes through that bridge. Views opened app-level (Settings'
+                // "Manage Channels" row loads Manage.qml directly) hand their
+                // navigateTo here, where a bare token resolves against the share
+                // root — file-not-found, grey screen (live Pi: editing a channel
+                // greyed out at "file:///opt/240mp/share/240mp/ChannelSources.qml").
+                // Resolve bare tokens against the live view's URL; tokens that
+                // already carry a directory ("views/", "modules/") stay as given.
+                // (Plain string math, not Qt.resolvedUrl: the two-arg call binds
+                // QtQuick's element/context overload and marshals the QUrl origin
+                // as QObject* — TypeError on every bare-token hop.)
+                var resolved = path
+                if (/^[A-Za-z0-9_]+\.qml$/.test(path)) {
+                    var src = appCore ? appCore.current_view_source() : ""
+                    if (src.length > 0)
+                        resolved = src.slice(0, src.lastIndexOf('/')) + '/' + path
+                }
                 root.appNavStack.push({ source: moduleLoader.source, params: root.appCurrentParams, listState: listState || {} })
                 root.appCurrentParams = params || {}
-                logState("navigate", "to=" + path + " stack=" + root.appNavStack.length + " listState=" + JSON.stringify(listState || {}))
-                moduleLoader.setSource(path, { "navParams": params || {} })
+                logState("navigate", "to=" + resolved + " stack=" + root.appNavStack.length + " listState=" + JSON.stringify(listState || {}))
+                moduleLoader.setSource(resolved, { "navParams": params || {} })
             }
 
             function onGoBack() {

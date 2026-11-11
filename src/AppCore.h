@@ -82,6 +82,7 @@ public:
     // "modules/com.240mp.retroarch/views/Games.qml"). Default-named
     // screenshots embed it: 240mp_screenshot_retroarch-Games_<ts>.png.
     Q_INVOKABLE void note_view(const QString &source);
+    Q_INVOKABLE QString current_view_source() const { return m_activeViewSource; }
 
     // Debug aid (portable): append a machine-readable screen-state line to
     // /tmp/240mp_state.log (epoch-time <event> <detail>). Called from Main.qml
