@@ -54,6 +54,9 @@ FocusScope {
             r.push("breaks")
             r.push("logo")
             r.push("rebuild")
+            // A preset channel can run its recipe again — after the viewer has
+            // taken shows out, that puts back what the library has added since.
+            if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
             r.push("rename")
             r.push("delete")
             return r
@@ -100,6 +103,9 @@ FocusScope {
         r.push("breaks")
         r.push("logo")
         r.push("rebuild")
+        // A preset channel can run its recipe again — after the viewer has
+        // taken shows out, that puts back what the library has added since.
+        if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
         r.push("rename")
         r.push("delete")
         return r
@@ -214,6 +220,9 @@ FocusScope {
         case "ads":          return "Per Break"
         case "breaks":       return "Breaks"
         case "rebuild":      return building ? "Building…" : "Build Channel"
+        case "seed":         return cfg.presetOff > 0
+                                   ? "Seed From Recipe · " + cfg.presetOff + " OFF"
+                                   : "Seed From Recipe"
         case "rename":       return "Rename"
         case "delete":       return sourcesRoot.armedToDelete ? "Delete — Press Again" : "Delete Channel"
         }
@@ -326,6 +335,9 @@ FocusScope {
         case "ads":         return "How many things play between programs, after the outro."
         case "breaks":      return "What plays between programs: intros, bumps, commercials and outros."
         case "rebuild":     return "Build the schedule so source changes actually air."
+        case "seed":       return "Run what built this channel again. Everything the library has for it now is added, and what you took out stays out — "
+                                   + (cfg.presetOff > 0 ? cfg.presetOff + " is switched off here."
+                                                       : "nothing is.")
         case "rename":      return "Change what this channel is called."
         case "delete":      return sourcesRoot.armedToDelete
                                    ? "Press again to remove this channel, or move away to keep it."
@@ -451,6 +463,14 @@ FocusScope {
             virtualChannelsBackend.regenerate(channelNumber)
             return
         }
+        if (row === "seed") {
+            // The recipe runs against the connected sources again; the picks
+            // land through onPresetSeeded, which reloads the counts here.
+            building = true
+            status = "Seeding…"
+            virtualChannelsBackend.seed_preset_channel(channelNumber)
+            return
+        }
         if (row === "source") { cycleSource(1); return }
         if (row === "logo") {
             navigateTo("modules/virtual_channels/views/LogoSettings.qml", {
@@ -520,6 +540,12 @@ FocusScope {
             if (ch !== sourcesRoot.channelNumber) return
             sourcesRoot.building = false
             sourcesRoot.status = (ok ? "Built: " : "Failed: ") + message
+            sourcesRoot.reload()
+        }
+        function onPresetSeeded(ch, ok, message) {
+            if (ch !== sourcesRoot.channelNumber) return
+            sourcesRoot.building = false
+            sourcesRoot.status = ok ? "Seeded: " + message : "Recipe found nothing: " + message
             sourcesRoot.reload()
         }
     }

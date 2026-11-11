@@ -2226,6 +2226,7 @@ VirtualChannelsBackend::keepEachProgrammeOnce(const QVector<MediaItem> &programm
 }
 
 void VirtualChannelsBackend::finishLocalGeneration() {
+    if (m_seedActive) { finishSeeding(); return; }
     {
         const QVector<MediaItem> once = keepEachProgrammeOnce(m_genDef.programmes);
         if (once.size() != m_genDef.programmes.size())
@@ -2278,6 +2279,18 @@ void VirtualChannelsBackend::finishLocalGeneration() {
 
 void VirtualChannelsBackend::generationEnded(int channelNumber, bool ok,
                                             const QString &message) {
+    if (m_seedActive) {
+        // A seed pass that found nothing answers through its own signal, and
+        // the channel stays put: the preset flow removes a channel it never
+        // got content for rather than parking an empty one on the dial.
+        m_seedActive = false;
+        m_genActive = false;
+        m_genChannel = -1;
+        if (m_genTimer) m_genTimer->stop();
+        m_genQueue.clear();
+        emit presetSeeded(channelNumber, false, message);
+        return;
+    }
     emit generationFinished(channelNumber, ok, message);
 
     if (m_rebuildTotal > 0) {
@@ -3991,7 +4004,8 @@ void VirtualChannelsBackend::onCatalogBrowseFailed(const QString &, const QStrin
 }
 
 int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
-                                                  const QString &name) {
+                                                  const QString &name,
+                                                  const QString &wants) {
     // The identity is auto-derived from the subject: a "by network" preset for
     // AMC becomes the "AMC" channel, a "by genre" preset for Action becomes
     // "Action". There is nothing for the viewer to name.
@@ -4008,8 +4022,13 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     ch["seed"]          = number;
     ch["order"]         = QStringLiteral("broadcast");
     ch["ads_per_break"] = 0;
-    // The recipe, so the channel is recognisably a preset and a future generator
-    // can build it from the subject (kind/id/name).
+    // The viewer's preset flow asks TV or movies, and the channel is built as
+    // one from the start: the recipe's content is looked for among shows or
+    // among films accordingly.
+    if (wants.trimmed().toLower() == QLatin1String("movies"))
+        ch["kind"] = QStringLiteral("movies");
+    // The recipe, so the channel is recognisably a preset and "Seed from
+    // recipe" can rebuild it from the subject (kind/id/name).
     ch["preset"] = QJsonObject{{"kind", QString::number(kind)},
                                {"id", id},
                                {"name", name}};
@@ -4056,6 +4075,208 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     qDebug("[VirtualChannels] created preset channel %d \"%s\" (kind=%d id=%s)",
            number, qPrintable(wanted), kind, qPrintable(id));
     return number;
+}
+
+// The seed pass: the recipe's content becomes the channel's picks, so the
+// builder opens with everything already ticked and the viewer's work is
+// removing what they don't want. It rides the generation machinery — same
+// enumeration, same busy state, same timeouts — with the recipe written into
+// EVERY connected source's block, so each server is asked and the union deduped
+// by title is what lands. The channel's own entries are set aside for the run
+// (a channel with entries would be read through the entry-pool path, which
+// ignores the recipe fields) and put back once the picks are in.
+void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
+    const QVariantMap raw = channelObject(channelNumber);
+    if (raw.isEmpty()) {
+        emit presetSeeded(channelNumber, false, QStringLiteral("No such channel"));
+        return;
+    }
+    const QJsonObject o = QJsonObject::fromVariantMap(raw);
+    const QJsonObject preset = o.value(QLatin1String("preset")).toObject();
+    if (preset.isEmpty()) {
+        emit presetSeeded(channelNumber, false,
+                          QStringLiteral("This channel has no recipe"));
+        return;
+    }
+    if (m_genActive) {
+        emit presetSeeded(channelNumber, false, QStringLiteral("Another channel is building"));
+        return;
+    }
+
+    m_seedActive = true;
+    m_seedRecipeKey = preset.value(QLatin1String("kind")).toString() + QLatin1Char(':')
+                    + preset.value(QLatin1String("id")).toString();
+    m_seedPriorProgrammes = o.value(QLatin1String("programmes")).toArray();
+
+    const QString subject = preset.value(QLatin1String("name")).toString().trimmed();
+    const QString field = preset.value(QLatin1String("kind")).toInt() == int(SubjectKind::Collection)
+                              ? QStringLiteral("collections")
+                              : QStringLiteral("genres");
+
+    QJsonArray channels = readChannels();
+    bool found = false;
+    for (int i = 0; i < channels.size(); ++i) {
+        QJsonObject c = channels[i].toObject();
+        if (c.value(QLatin1String("number")).toInt(-1) != channelNumber) continue;
+        c.remove(QLatin1String("programmes"));
+        // A network has no server-side filter: with nothing written the block
+        // reads as "everything", and the harvest keeps only the shows TheTVDB
+        // says belong to that network.
+        const bool network = preset.value(QLatin1String("kind")).toInt()
+                             == int(SubjectKind::Network);
+        for (const SlotSource src : { SlotSource::Plex, SlotSource::Jellyfin, SlotSource::Emby }) {
+            if (!network && !(src == SlotSource::Plex ? bool(m_plex)
+                             : m_server->available(src)))
+                continue;
+            QJsonObject block = c.value(sourceBlockName(src)).toObject();
+            if (network) { c.insert(sourceBlockName(src), block); continue; }
+            block[field] = QJsonArray{ subject };
+            c.insert(sourceBlockName(src), block);
+        }
+        channels[i] = c;
+        found = true;
+        break;
+    }
+    if (!found) {
+        m_seedActive = false;
+        emit presetSeeded(channelNumber, false, QStringLiteral("Could not start the seed"));
+        return;
+    }
+    if (!writeChannels(channels)) {
+        m_seedActive = false;
+        emit presetSeeded(channelNumber, false, QStringLiteral("Could not start the seed"));
+        return;
+    }
+
+    regenerate(channelNumber);
+}
+
+void VirtualChannelsBackend::finishSeeding() {
+    const int channelNumber = m_genChannel;
+    const QString recipeKey = m_seedRecipeKey;
+    m_seedActive = false;
+    m_genActive = false;
+    m_genChannel = -1;
+    if (m_genTimer) m_genTimer->stop();
+    m_genQueue.clear();
+
+    const QVariantMap raw = channelObject(channelNumber);
+    const QJsonObject o = raw.isEmpty() ? QJsonObject()
+                                         : QJsonObject::fromVariantMap(raw);
+    const QJsonObject preset = o.value(QLatin1String("preset")).toObject();
+    const bool movies = isMovieChannel(o);
+    const bool network = preset.value(QLatin1String("kind")).toInt()
+                         == int(SubjectKind::Network);
+
+    // The harvest: one entry per show (per film on a movie channel), in the
+    // order the sources answered. A network recipe keeps only what TheTVDB
+    // resolves to that network.
+    TVDBNetworkResolver *res = network ? resolver() : nullptr;
+    if (network && !res) {
+        emit presetSeeded(channelNumber, false,
+                          QStringLiteral("TheTVDB apikey is not set — a \"by network\" "
+                                         "preset cannot tell its shows apart"));
+        return;
+    }
+    const QString wantedNetwork = preset.value(QLatin1String("id")).toString().trimmed();
+
+    QJsonArray picks;
+    QSet<QString> seen;
+    for (const MediaItem &m : std::as_const(m_genDef.programmes)) {
+        const QString name = movies ? m.title : (m.series.isEmpty() ? m.title : m.series);
+        if (name.trimmed().isEmpty()) continue;
+        if (network && res && res->networkIdFor(m).trimmed() != wantedNetwork) continue;
+        const QString key = name.trimmed().toLower();
+        if (seen.contains(key)) continue;
+        seen.insert(key);
+        QJsonObject e;
+        e["name"]  = name.trimmed();
+        e["kind"]  = movies ? QStringLiteral("movie") : QStringLiteral("series");
+        e["src"]   = slotSourceToString(m.src);
+        e["preset"] = recipeKey;
+        picks.append(e);
+    }
+
+    QJsonArray channels = readChannels();
+    bool found = false;
+    for (int i = 0; i < channels.size(); ++i) {
+        QJsonObject c = channels[i].toObject();
+        if (c.value(QLatin1String("number")).toInt(-1) != channelNumber) continue;
+        // The recipe's block fields go out whether or not anything landed: a
+        // preset channel's shows are the entries, so the recipe never decides
+        // what airs on its own.
+        for (const SlotSource src : { SlotSource::Plex, SlotSource::Jellyfin, SlotSource::Emby }) {
+            const QString block = sourceBlockName(src);
+            if (!c.contains(block)) continue;
+            QJsonObject cfg = c.value(block).toObject();
+            cfg.remove(QStringLiteral("genres"));
+            cfg.remove(QStringLiteral("collections"));
+            if (cfg.isEmpty()) c.remove(block);
+            else               c.insert(block, cfg);
+        }
+        // Put the viewer's own entries back, keeping the ones that still match
+        // what the recipe resolves (their ids and bumpers survive), retiring
+        // this recipe's previous picks, and honouring what the viewer switched
+        // off by leaving it out of the new picks once they have removed it.
+        QJsonArray kept;
+        QSet<QString> onNames;
+        QJsonObject presetNow = preset;
+        QStringList off;
+        for (const QJsonValue &v : presetNow.value(QLatin1String("off")).toArray())
+            if (v.isString()) off << v.toString();
+        const bool hadPicks = !m_seedPriorProgrammes.isEmpty();
+        for (const QJsonValue &v : std::as_const(m_seedPriorProgrammes)) {
+            if (!v.isObject()) { kept.append(v); continue; }
+            const QJsonObject e = v.toObject();
+            const bool mine = e.value(QLatin1String("preset")).toString() == recipeKey;
+            if (mine) continue;                    // replaced by this run's picks
+            kept.append(e);
+            if (!e.value(QLatin1String("name")).toString().isEmpty())
+                onNames.insert(e.value(QLatin1String("name")).toString().toLower());
+        }
+        if (hadPicks) {
+            // An untick since the last seeding left a name off the entries and
+            // out of nothing else: remember it so the next seeding skips it.
+            for (const QJsonValue &v : std::as_const(m_seedPriorProgrammes)) {
+                if (!v.isObject()) continue;
+                const QJsonObject e = v.toObject();
+                if (e.value(QLatin1String("preset")).toString() != recipeKey) continue;
+                const QString n = e.value(QLatin1String("name")).toString().toLower();
+                if (!onNames.contains(n) && !off.contains(n)) off << n;
+            }
+        }
+        QJsonArray out = kept;
+        int added = 0;
+        for (const QJsonValue &v : std::as_const(picks)) {
+            const QJsonObject e = v.toObject();
+            const QString n = e.value(QLatin1String("name")).toString();
+            if (onNames.contains(n.toLower())) continue;      // viewer has it already
+            if (off.contains(n.toLower())) continue;          // viewer switched it off
+            out.append(e);
+            ++added;
+        }
+        if (out.isEmpty()) c.remove(QLatin1String("programmes"));
+        else               c.insert(QLatin1String("programmes"), out);
+        if (off.isEmpty()) presetNow.remove(QLatin1String("off"));
+        else               presetNow.insert(QLatin1String("off"), QJsonArray::fromStringList(off));
+        if (presetNow.isEmpty()) c.remove(QLatin1String("preset"));
+        else                     c.insert(QLatin1String("preset"), presetNow);
+        channels[i] = c;
+        found = true;
+
+        const int total = int(onNames.size()) + added;
+        qInfo("[VirtualChannels] channel %d seeded from its recipe: %d pick(s) on the dial",
+              channelNumber, total);
+        emit presetSeeded(channelNumber, total > 0,
+                          total > 0 ? QStringLiteral("%1 %2")
+                                        .arg(total)
+                                        .arg(movies ? (total == 1 ? "film" : "films")
+                                                    : (total == 1 ? "show" : "shows"))
+                                    : QStringLiteral("Nothing on your library for this recipe"));
+        break;
+    }
+    if (!found) emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
+    else if (!writeChannels(channels)) emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
 }
 
 QVariantList VirtualChannelsBackend::media_folders(int maxDepth) {
@@ -5383,6 +5604,11 @@ QVariantMap VirtualChannelsBackend::channel_source_config(int channelNumber) {
     out["supportsPlaylists"] = source_supports_playlists(slotSourceToString(src));
     out["usesEntryPools"] = usesEntryPools(o);
     out["kind"]        = isMovieChannel(o) ? QStringLiteral("movies") : QStringLiteral("tv");
+    // A preset channel says what built it, so the screen can offer to run that
+    // recipe again and keep faith with what the viewer took out of it.
+    const QJsonObject preset = o.value(QLatin1String("preset")).toObject();
+    out["preset"]      = preset.value(QLatin1String("name")).toString();
+    out["presetOff"]   = int(preset.value(QLatin1String("off")).toArray().size());
     out["schedule"]    = usesDayPlan(o) ? QStringLiteral("day_plan") : QStringLiteral("free");
     out["planCount"]   = int(readPlans(o).size());
     out["filmsFrom"]   = playsAPlaylist(o) ? QStringLiteral("playlist")
@@ -5538,6 +5764,32 @@ bool VirtualChannelsBackend::set_channel_list(int channelNumber, const QString &
             // The legacy array is retired rather than left to disagree. Only
             // the shows list ever had one.
             if (field == QLatin1String("match")) plex.remove(QLatin1String("match"));
+
+            // A preset channel keeps a memory of what the viewer switched off
+            // so "Seed from recipe" cannot quietly put it back. Ticking it
+            // again here is the viewer saying otherwise, so it forgets.
+            if (o.contains(QLatin1String("preset"))) {
+                QJsonObject presetNow = o.value(QLatin1String("preset")).toObject();
+                QJsonArray off = presetNow.value(QLatin1String("off")).toArray();
+                if (!off.isEmpty()) {
+                    QJsonArray keptOff;
+                    for (const QJsonValue &v : off) {
+                        if (!v.isString()) { keptOff.append(v); continue; }
+                        const QString n = v.toString().trimmed();
+                        bool reticked = false;
+                        for (const QString &w : values) {
+                            if (w.compare(n, Qt::CaseInsensitive) == 0) {
+                                reticked = true;
+                                break;
+                            }
+                        }
+                        if (!reticked) keptOff.append(v);
+                    }
+                    if (keptOff.isEmpty()) presetNow.remove(QLatin1String("off"));
+                    else                   presetNow.insert(QLatin1String("off"), keptOff);
+                    o.insert(QLatin1String("preset"), presetNow);
+                }
+            }
         } else {
             QJsonArray arr;
             for (const QString &v : values) if (!v.trimmed().isEmpty()) arr.append(v);

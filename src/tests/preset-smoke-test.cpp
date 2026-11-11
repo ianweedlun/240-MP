@@ -22,6 +22,8 @@ class StubBackend : public QObject {
     Q_OBJECT
 public:
     int createdKind = -1; QString createdId, createdName; int createdRet = 7;
+    QString createdWants;
+    int seededChannel = -1;
     Q_INVOKABLE QVariantList list_channels() { return {}; }
     Q_INVOKABLE void load_catalog(const QString &kind) {
         QVariantList rows;
@@ -29,12 +31,21 @@ public:
         QVariantMap b; b["id"] = "402"; b["label"] = "HBO"; rows.append(b);
         emit catalogReady(kind, rows);
     }
-    Q_INVOKABLE int create_preset_channel(int kind, const QString &id, const QString &name) {
-        createdKind = kind; createdId = id; createdName = name; return createdRet;
+    Q_INVOKABLE int create_preset_channel(int kind, const QString &id, const QString &name,
+                                          const QString &wants) {
+        createdKind = kind; createdId = id; createdName = name; createdWants = wants;
+        return createdRet;
+    }
+    // The real backend answers the seed asynchronously; here the answer lands
+    // on the call, which is the same signal path the view listens on.
+    Q_INVOKABLE void seed_preset_channel(int ch) {
+        seededChannel = ch;
+        emit presetSeeded(ch, true, QStringLiteral("5 shows"));
     }
 signals:
     void catalogReady(const QString &kind, const QVariantList &options);
     void catalogFailed(const QString &kind, const QString &reason);
+    void presetSeeded(int channelNumber, bool ok, const QString &message);
 };
 
 // ---- stub appCore: get_module_info + settings ----
@@ -136,6 +147,8 @@ int main(int argc, char **argv) {
             check(obj != nullptr, "PresetRecipe object created");
             QVariantList recipes = QQmlProperty::read(obj, "recipes").toList();
             check(recipes.size() == 3, "PresetRecipe exposes 3 recipe rows");
+            QVariantList openRows = QQmlProperty::read(obj, "rows").toList();
+            check(openRows.size() == 2, "PresetRecipe opens with the 2 kind rows");
             if (obj) delete obj;
         }
     }
@@ -151,6 +164,7 @@ int main(int argc, char **argv) {
         } else {
             ctx->setContextProperty("navParams", [] {
                 QVariantMap m; m["recipe"] = QString("genre");
+                m["wants"] = QString("tv");
                 return m;
             }());
             QObject *obj = comp.create();
@@ -181,10 +195,12 @@ int main(int argc, char **argv) {
             app.processEvents();
 
             check(backend.createdKind == 0 && backend.createdId == "389"
-                  && backend.createdName == "AMC",
-                  "activate calls create_preset_channel(0, 389, AMC)");
+                  && backend.createdName == "AMC" && backend.createdWants == "tv",
+                  "activate calls create_preset_channel(0, 389, AMC, tv)");
+            check(backend.seededChannel == backend.createdRet,
+                  "activate seeds the channel it just made");
             check(recorder.called && recorder.m_path.contains("ChannelSources"),
-                  "activate navigates to ChannelSources");
+                  "the seeded channel navigates to ChannelSources");
             if (obj) delete obj;
         }
     }

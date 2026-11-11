@@ -2,6 +2,7 @@
 #include <functional>
 #include <optional>
 #include <QHash>
+#include <QJsonArray>
 #include <QPair>
 #include <QSet>
 #include <QObject>
@@ -200,9 +201,22 @@ public:
     Q_INVOKABLE int create_channel(const QString &name);
     // Build a preset channel: identity (name) is derived from the subject, the
     // recipe is recorded under "preset" so the channel is recognisably a
-    // genre/network/collection channel. Returns the new channel number, or -1.
+    // genre/network/collection channel. `wants` says whether the channel airs
+    // shows or films ("tv" | "movies"). Returns the new channel number, or -1.
     Q_INVOKABLE int create_preset_channel(int kind, const QString &id,
-                                          const QString &name);
+                                          const QString &name,
+                                          const QString &wants = QStringLiteral("tv"));
+
+    // Stand the preset's content up: ask the connected sources for what the
+    // recipe names and write the picks into the channel's pools as concrete
+    // series/film entries, so the builder opens with everything already ticked
+    // and the viewer's work is removing what they don't want. Async: answers
+    // through presetSeeded. The recipe itself stays on the channel under
+    // "preset" so "Seed from recipe" can run it again after the viewer's
+    // removals (seed_preset_channel again) without the recipe deciding what
+    // airs by itself.
+    Q_INVOKABLE void seed_preset_channel(int channelNumber);
+    Q_INVOKABLE bool seed_active() const { return m_seedActive; }
 
     Q_INVOKABLE QVariantList channel_interstitials(int channelNumber);
     Q_INVOKABLE QVariantList media_folders(int maxDepth = 3);
@@ -289,6 +303,10 @@ signals:
     // `kind` echoes the requested recipe; `options` is [{id, label}].
     void catalogReady(const QString &kind, const QVariantList &options);
     void catalogFailed(const QString &kind, const QString &message);
+
+    // The seeding pass finished: ok says whether anything landed, and message
+    // counts the shows/films written (or says why nothing did).
+    void presetSeeded(int channelNumber, bool ok, const QString &message);
 
 public slots:
     void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
@@ -469,6 +487,15 @@ private:
     bool    m_genActive = false;
     int     m_genChannel = -1;
     vchan::ChannelDef m_genDef;
+    // A seeding pass shares the generation machinery (same enumeration, same
+    // busy state) and differs only in what happens when the items land: the
+    // picks are written into the channel's pools instead of laid onto a clock.
+    bool     m_seedActive = false;
+    QString  m_seedRecipeKey;      // "<kind id>:<subject id>" marks the entries
+    QJsonArray m_seedPriorProgrammes;   // the channel's own entries, put back
+                                        // once the picks land (the seed pass
+                                        // reads the recipe with them set aside)
+    void     finishSeeding();
     struct PendingItem { QString absPath; QString rel; vchan::SlotKind kind;
                          int apptIndex = -1;
                          int pack = -1;
