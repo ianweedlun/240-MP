@@ -68,7 +68,11 @@ FocusScope {
             r.push("delete")
             console.log("[presetflow] builder rows:", r.join(","),
                         "preset:", cfg.preset !== undefined ? cfg.preset : "",
-                        "off:", countOf("presetOff"))
+                        "off:", countOf("presetOff"),
+                        "ch:", channelNumber,
+                        "genres:", countOf("genres"), "studios:", countOf("studios"),
+                        "collections:", countOf("collections"),
+                        "cfgkeys:", Object.keys(cfg).length)
             return r
         }
 
