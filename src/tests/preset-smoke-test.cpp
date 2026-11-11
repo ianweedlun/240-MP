@@ -36,6 +36,29 @@ public:
         createdKind = kind; createdId = id; createdName = name; createdWants = wants;
         return createdRet;
     }
+    // Ch4-shaped config as the live Pi writes it: preset identity, picked
+    // films, no server block, no genre/studio fields.
+    Q_INVOKABLE QVariantMap channel_source_config(int) {
+        QVariantMap m;
+        m["source"] = QStringLiteral("plex");
+        m["kind"] = QStringLiteral("movies");
+        m["name"] = QStringLiteral("20th Century Fox");
+        QVariantList films; films << "ALIEN" << "BORAT";
+        m["films"] = films;
+        m["preset"] = QStringLiteral("20th Century Fox");
+        QVariantList avail; avail << QStringLiteral("plex");
+        m["available"] = avail;
+        m["supportsPlaylists"] = true;
+        return m;
+    }
+    Q_INVOKABLE QVariantList channel_bookings(int) { return {}; }
+    Q_INVOKABLE QVariantMap channel_interstitials(int) { return {}; }
+    Q_INVOKABLE QVariantList channel_plans(int) { return {}; }
+    Q_INVOKABLE QVariantMap channel_timing(int) {
+        QVariantMap m; m["gridMinutes"] = 0; m["adsPerBreak"] = 0;
+        m["order"] = QStringLiteral("broadcast"); return m;
+    }
+    Q_INVOKABLE bool set_channel_source(int, const QString &) { return false; }
     // The real backend answers the seed asynchronously; here the answer lands
     // on the call, which is the same signal path the view listens on.
     Q_INVOKABLE void seed_preset_channel(int ch) {
@@ -202,6 +225,44 @@ int main(int argc, char **argv) {
             check(recorder.called && recorder.m_path.contains("ChannelSources"),
                   "the seeded channel navigates to ChannelSources");
             if (obj) delete obj;
+        }
+    }
+
+    // ---- Test 4: ChannelSources instantiates; the hide rule keeps
+    // genre/collections/studio rows out of a studio-preset channel ----
+    {
+        const QUrl sourcesUrl = QUrl::fromLocalFile(
+            repoRoot + "/modules/virtual_channels/views/ChannelSources.qml");
+        ctx->setContextProperty("navParams", [] {
+            QVariantMap m; m["channelNumber"] = 4;
+            m["channelName"] = QStringLiteral("20th Century Fox");
+            m["moduleId"] = QStringLiteral("virtual_channels");
+            return m;
+        }());
+        QQmlComponent comp(&engine, sourcesUrl);
+        if (comp.status() == QQmlComponent::Error) {
+            for (auto &e : comp.errors())
+                std::printf("  ERR  ChannelSources: %s\n",
+                             e.description().toStdString().c_str());
+            check(false, "ChannelSources instantiates");
+        } else {
+            QObject *obj = comp.create();
+            check(obj != nullptr, "ChannelSources object created");
+            if (obj) {
+                app.processEvents();
+                // Drive the on-screen config reload, then read the row list.
+                QMetaObject::invokeMethod(obj, "reload");
+                app.processEvents();
+                QVariant rowsV = QQmlProperty::read(obj, "rows");
+                QStringList rows;
+                for (const QVariant &v : rowsV.toList()) rows << v.toString();
+                std::printf("STEP channel-sources rows: %s\n", rows.join(",").toUtf8().constData());
+                check(rows.contains("films"), "the preset channel lists its films");
+                check(rows.contains("seed"), "and the seed row");
+                check(!rows.contains("genres"), "no genre row on a studio preset");
+                check(!rows.contains("studios"), "no studio row either — the preset carries neither");
+                delete obj;
+            }
         }
     }
 
