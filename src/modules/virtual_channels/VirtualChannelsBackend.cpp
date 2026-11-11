@@ -2503,15 +2503,10 @@ void VirtualChannelsBackend::onPlexLibrariesLoaded(const QVariant &libraries) {
     if (m_pgStage == PlexStage::BrowseLibraries) {
         m_browseItems.clear();
         m_pgSections.clear();
-        const bool showsOnly  = (m_browseKind == QLatin1String("shows"));
-        const bool moviesOnly  = m_browseKind.startsWith(QLatin1String("movie"));
         for (const QVariant &v : libraries.toList()) {
             const QVariantMap m = v.toMap();
             const QString type = m.value("sectionType").toString();
-            const bool keep = showsOnly  ? (type == QLatin1String("show"))
-                            : moviesOnly ? (type == QLatin1String("movie"))
-                            : (type == QLatin1String("show") || type == QLatin1String("movie"));
-            if (!keep) continue;
+            if (!browseKeepsLibrary(m_browseKind, type)) continue;
             QString id = m.value("sectionId").toString();
             if (id.isEmpty()) id = m.value("key").toString();
             if (!id.isEmpty()) m_pgSections << id;
@@ -2529,6 +2524,7 @@ void VirtualChannelsBackend::onPlexLibrariesLoaded(const QVariant &libraries) {
             m_pgStage = PlexStage::BrowseMovies;
             QMetaObject::invokeMethod(m_plex, "load_library_all", Q_ARG(QString, sec));
         } else if (m_browseKind == QLatin1String("collections")
+                   || m_browseKind == QLatin1String("tvcollections")
                    || m_browseKind == QLatin1String("moviecollections")) {
             m_pgStage = PlexStage::BrowseCollections;
             QMetaObject::invokeMethod(m_plex, "load_collections", Q_ARG(QString, sec));
@@ -3823,6 +3819,20 @@ void VirtualChannelsBackend::browseStart(const QString &kind) {
     m_pgTimer->start();
 }
 
+// Pure keep rule for browse section enumeration: which Plex library type
+// feeds which browse kind. Unit-tested in VirtualChannelsBackendTest.cpp.
+bool VirtualChannelsBackend::browseKeepsLibrary(const QString &kind,
+                                                const QString &sectionType)
+{
+    const bool showsOnly  = (kind == QStringLiteral("shows")
+                             || kind == QStringLiteral("tvcollections"));
+    const bool moviesOnly = kind.startsWith(QLatin1String("movie"));
+    if (showsOnly)  return sectionType == QLatin1String("show");
+    if (moviesOnly) return sectionType == QLatin1String("movie");
+    return sectionType == QLatin1String("show")
+        || sectionType == QLatin1String("movie");
+}
+
 void VirtualChannelsBackend::browseFail(const QString &reason) {
     const QString kind = m_browseKind;
     m_browseKind.clear();
@@ -4005,11 +4015,16 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
     // Collections have no TheTVDB list endpoint; they come from the connected
     // media server. Kick off the existing browse and let onCatalogBrowseReady
     // deliver the result once it lands.
-    if (kind == QStringLiteral("collection")) {
+    if (kind == QStringLiteral("collection")
+        || kind == QStringLiteral("tvcollections")
+        || kind == QStringLiteral("moviecollections")) {
         if (!m_plex)      { emit catalogFailed(kind, "No media server connected"); return; }
         if (browse_busy()){ emit catalogFailed(kind, "Media server is busy"); return; }
         m_catalogPending = kind;
-        browse_plex_collections();
+        // "collection" stays the legacy union; the preset flows ask for the
+        // type-specific kinds and those walk only that library type.
+        browse_plex_collections(kind == QLatin1String("collection")
+                                    ? QStringLiteral("collections") : kind);
         return;
     }
 
@@ -5342,7 +5357,7 @@ void VirtualChannelsBackend::browse_from(const QString &source, const QString &k
     if (src == SlotSource::Plex) {
         if (kind == QLatin1String("shows"))            browse_plex_shows();
         else if (kind.startsWith(QLatin1String("movie"))) browse_plex_movies(kind);
-        else if (kind == QLatin1String("collections")) browse_plex_collections();
+        else if (kind == QLatin1String("collections")) browse_plex_collections(QStringLiteral("collections"));
         else if (kind == QLatin1String("playlists"))   browse_plex_playlists();
         else if (kind == QLatin1String("seasons"))     browse_plex_seasons(parentKey);
         else                                           browse_plex_episodes(parentKey);
@@ -5640,11 +5655,11 @@ void VirtualChannelsBackend::browse_plex_movies(const QString &kind) {
     QMetaObject::invokeMethod(m_plex, "load_libraries");
 }
 
-void VirtualChannelsBackend::browse_plex_collections() {
-    if (!m_plex)       { emit sourceBrowseFailed("collections", "Plex unavailable"); return; }
-    if (browse_busy()) { emit sourceBrowseFailed("collections", "Plex is busy"); return; }
+void VirtualChannelsBackend::browse_plex_collections(const QString &kind) {
+    if (!m_plex)       { emit sourceBrowseFailed(kind, "Plex unavailable"); return; }
+    if (browse_busy()) { emit sourceBrowseFailed(kind, "Plex is busy"); return; }
     m_pgSections.clear();
-    browseStart(QStringLiteral("collections"));
+    browseStart(kind);
     m_pgStage = PlexStage::BrowseLibraries;
     QMetaObject::invokeMethod(m_plex, "load_libraries");
 }

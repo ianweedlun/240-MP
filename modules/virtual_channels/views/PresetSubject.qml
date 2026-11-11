@@ -34,7 +34,15 @@ FocusScope {
         : subjectRoot.recipe === "collection" ? 2 : 0
     readonly property bool studioMovie:
         subjectRoot.recipe === "network" && subjectRoot.wants === "movies"
-    readonly property string catalogKind: studioMovie ? "studio" : recipe
+    // The collection catalog is wants-aware: enumerating both libraries was
+    // showing every collection under every collection preset. The browse
+    // kinds below keep only the matching Plex library type; the legacy
+    // "collections" union stays for the source browser, which still wants both.
+    readonly property string catalogKind:
+        studioMovie ? "studio"
+        : subjectRoot.recipe === "collection"
+            ? (subjectRoot.wants === "movies" ? "moviecollections" : "tvcollections")
+            : recipe
     readonly property string subjectWord:
         studioMovie ? "Studio"
         : recipe.charAt(0).toUpperCase() + recipe.slice(1)

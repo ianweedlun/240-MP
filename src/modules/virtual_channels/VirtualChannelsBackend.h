@@ -287,6 +287,14 @@ public:
     // values via catalogReady; catalogFailed when the source is unavailable.
     Q_INVOKABLE void load_catalog(const QString &kind);
 
+    // Pure keep rule for browse section enumeration (unit-testable, static):
+    // which Plex library type feeds which browse kind. TV-side kinds ("shows",
+    // "tvcollections") walk show libraries only, movie-side kinds (anything
+    // starting "movie") walk movie libraries only, and the legacy "collections"
+    // union takes both.
+    static bool browseKeepsLibrary(const QString &browseKind,
+                                   const QString &sectionType);
+
     Q_INVOKABLE int guide_channel_number() const;
     Q_INVOKABLE int weather_channel_number() const;
     Q_INVOKABLE int manage_channel_number() const;
@@ -443,7 +451,9 @@ private:
 
     void browse_plex_shows();
     void browse_plex_movies(const QString &kind);
-    void browse_plex_collections();
+    // kind names the browse ("collections" unions both libraries;
+    // "tvcollections"/"moviecollections" walk only the matching type).
+    void browse_plex_collections(const QString &kind);
     void browse_plex_playlists();
     void browse_plex_seasons(const QString &showRatingKey);
     void browse_plex_episodes(const QString &seasonRatingKey);

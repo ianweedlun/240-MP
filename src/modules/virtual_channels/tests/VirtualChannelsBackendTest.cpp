@@ -2105,5 +2105,26 @@ int runVirtualChannelsBackendTests() {
                            .value(QStringLiteral("kind")).toInt(), 1,
                        "number kind survives toInt unchanged");
     }
+
+    // --- browse section keep rule: tv/movie collections are separated at
+    //     the library walk, not after the fact (the Collections-preset bug) ---
+    {
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("tvcollections", "show"), true,
+                       "tvcollections keeps show libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("tvcollections", "movie"), false,
+                       "tvcollections refuses movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviecollections", "movie"), true,
+                       "moviecollections keeps movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviecollections", "show"), false,
+                       "moviecollections refuses show libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("collections", "show"), true,
+                       "legacy collections unions shows");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("collections", "movie"), true,
+                       "legacy collections unions movies");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("shows", "movie"), false,
+                       "shows never walk movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviestudios", "movie"), true,
+                       "movie-side kinds keep movie libraries");
+    }
     return 0;
 }
