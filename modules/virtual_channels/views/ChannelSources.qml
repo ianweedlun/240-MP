@@ -71,8 +71,7 @@ FocusScope {
                         "off:", countOf("presetOff"),
                         "ch:", channelNumber,
                         "genres:", countOf("genres"), "studios:", countOf("studios"),
-                        "collections:", countOf("collections"),
-                        "cfgkeys:", Object.keys(cfg).length)
+                        "collections:", countOf("collections"))
             return r
         }
 
