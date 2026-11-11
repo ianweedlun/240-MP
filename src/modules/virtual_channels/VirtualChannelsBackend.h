@@ -281,6 +281,7 @@ public:
 
     Q_INVOKABLE int guide_channel_number() const;
     Q_INVOKABLE int weather_channel_number() const;
+    Q_INVOKABLE int manage_channel_number() const;
     Q_INVOKABLE bool weather_channel_enabled() const;
     Q_INVOKABLE bool rename_channel(int number, const QString &name);
     Q_INVOKABLE bool move_channel(int number, int direction);

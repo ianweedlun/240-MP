@@ -1884,6 +1884,14 @@ void testSpecialNumbersNeverCollide() {
         checkEq(b.weather_channel_number(), 1, "and the weather, which shared nothing, is not touched");
     }
     {
+        // The manage slot carries no setting yet, so it sits at the end of the
+        // dial order rather than colliding with any live number.
+        Fixture fm;
+        fm.writeMany({ localChannel(0), localChannel(2) });
+        VirtualChannelsBackend b(fm.data(), fm.data());
+        checkEq(b.manage_channel_number(), 99, "no setting written yet, the manage slot is at the end of the order");
+    }
+    {
         // Guide and weather on the one number: the weather gives way.
         Fixture fw;
         fw.write(localChannel(5));

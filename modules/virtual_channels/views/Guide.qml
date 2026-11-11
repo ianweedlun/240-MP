@@ -217,6 +217,7 @@ FocusScope {
     focus: true
 
     readonly property string weatherView: "WeatherChannel.qml"
+    readonly property string manageView: "Manage.qml"
 
     function refresh() {
         nowMs = virtualChannelsBackend.now_ms()
@@ -239,6 +240,14 @@ FocusScope {
                        blocks: [{ startMs: fromMs, durMs: spanMs,
                                   title: "Local Forecast", series: "",
                                   ep: "", onNow: true }] })
+        // The dial's own editor row: pressing Return on it walks into the
+        // channel manager, where channels get built, reordered and added.
+        all.push({ number: virtualChannelsBackend.manage_channel_number(),
+                   name: "Manage Channels", isSpecial: true,
+                   viewPath: manageView,
+                   blocks: [{ startMs: fromMs, durMs: spanMs,
+                              title: "Edit The Dial", series: "",
+                              ep: "", onNow: true }] })
         all.sort(function(a, b) { return a.number - b.number })
         rows = all
     }

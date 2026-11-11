@@ -3648,6 +3648,16 @@ int VirtualChannelsBackend::weather_channel_number() const {
     return ok ? n : 1;
 }
 
+// The dial's Manage row is a utility slot, not a broadcast: it carries the
+// channel editor instead of a schedule, and sits at the end of the order
+// until a viewer moves it.
+int VirtualChannelsBackend::manage_channel_number() const {
+    const QVariant v = settingValue(QStringLiteral("channels.manage_number"));
+    bool ok = false;
+    const int n = v.toString().toInt(&ok);
+    return ok ? n : 99;
+}
+
 bool VirtualChannelsBackend::weather_channel_enabled() const {
     const QVariant v = settingValue(QStringLiteral("channels.weather"));
     if (!v.isValid()) return false;
