@@ -546,6 +546,11 @@ QVariantMap JellyfinBackend::formatItem(const QJsonObject &item) const {
     QVariantList genres;
     for (const QJsonValue &v : item["Genres"].toArray())
         genres.append(v.toVariant());
+    // Jellyfin sends Studios as an array on movies — the movie studio picker
+    // and the "by studio" seed filter both read this.
+    QVariantList studios;
+    for (const QJsonValue &v : item["Studios"].toArray())
+        studios.append(v.toVariant());
 
     QVariantMap map;
     map["itemId"]          = item["Id"].toString();
@@ -562,6 +567,7 @@ QVariantMap JellyfinBackend::formatItem(const QJsonObject &item) const {
     map["releaseDate"]    = releaseDate.isEmpty() ? premiereDate : releaseDate;
     map["year"]            = item["ProductionYear"].toVariant();
     map["genres"]          = genres;
+    map["studios"]         = studios;
     map["duration"]        = item["RunTimeTicks"].toDouble() / 10000.0;
     map["viewOffset"]      = userData["PlaybackPositionTicks"].toDouble() / 10000.0;
     map["played"]          = userData["Played"].toBool();
@@ -662,7 +668,7 @@ void JellyfinBackend::load_items(const QString &parentId, const QString &include
     // Browse rows only need title/year/overview/played state. Skip the heavy
     // per-item MediaSources/MediaStreams here (now that the list is unbounded) —
     // Item.qml re-fetches full detail via load_item_detail when an item is opened.
-    q.addQueryItem("fields", "Overview,Genres,UserData,SortName");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,SortName");
     if (!includeTypes.isEmpty())
         q.addQueryItem("includeItemTypes", includeTypes);
     if (!sortBy.isEmpty()) {
@@ -698,7 +704,7 @@ void JellyfinBackend::load_item_detail(const QString &itemId) {
 
     QUrl url(m_serverUrl + "/Users/" + m_userId + "/Items/" + itemId);
     QUrlQuery q;
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     url.setQuery(q);
 
     auto *reply = jellyfinGet(url);
@@ -726,7 +732,7 @@ void JellyfinBackend::load_children(const QString &itemId) {
     q.addQueryItem("recursive", "false");
     q.addQueryItem("includeItemTypes", "Season,Episode");
     q.addQueryItem("limit", "500");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -763,7 +769,7 @@ void JellyfinBackend::load_boxset_children(const QString &parentId) {
     QUrlQuery q;
     q.addQueryItem("parentId", parentId);
     q.addQueryItem("recursive", "false");
-    q.addQueryItem("fields", "Overview,Genres,UserData,ChildCount,ReleaseDate,PremiereDate,SortName");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,ChildCount,ReleaseDate,PremiereDate,SortName");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -798,7 +804,7 @@ void JellyfinBackend::load_folder_children(const QString &parentId) {
     QUrlQuery q;
     q.addQueryItem("parentId", parentId);
     q.addQueryItem("recursive", "false");
-    q.addQueryItem("fields", "Overview,Genres,UserData,ChildCount,SortName");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,ChildCount,SortName");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -868,7 +874,7 @@ void JellyfinBackend::load_episodes(const QString &seriesId, const QString &seas
     QUrlQuery q;
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("seasonId", seasonId);
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     q.addQueryItem("limit", "500");
     q.addQueryItem("sortBy", "AiredEpisodeOrder");
@@ -900,7 +906,7 @@ void JellyfinBackend::load_continue_watching() {
     QUrl url(m_serverUrl + "/Users/" + m_userId + "/Items/Resume");
     QUrlQuery q;
     q.addQueryItem("limit", "20");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     url.setQuery(q);
 
     auto *reply = jellyfinGet(url);
@@ -929,7 +935,7 @@ void JellyfinBackend::load_up_next() {
     QUrlQuery q;
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("limit", "20");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     url.setQuery(q);
 
@@ -961,7 +967,7 @@ void JellyfinBackend::load_series_next_up(const QString &seriesId) {
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("seriesId", seriesId);
     q.addQueryItem("limit", "1");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     url.setQuery(q);
 
@@ -1264,7 +1270,7 @@ void JellyfinBackend::load_next_episode(const QString &currentItemId) {
         QUrl epUrl(m_serverUrl + "/Shows/" + seriesId + "/Episodes");
         QUrlQuery epQ;
         epQ.addQueryItem("userId", m_userId);
-        epQ.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+        epQ.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
         epQ.addQueryItem("enableUserData", "true");
         epQ.addQueryItem("limit", "500");
         epQ.addQueryItem("sortBy", "AiredEpisodeOrder");

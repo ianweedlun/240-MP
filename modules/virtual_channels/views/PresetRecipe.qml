@@ -63,7 +63,12 @@ FocusScope {
         }
         var w = row.substring(7)
         for (var j = 0; j < recipes.length; j++)
-            if (recipes[j].value === w) return recipes[j].label
+            if (recipes[j].value === w)
+                // The same recipe slot asks a different question per kind: a
+                // movie channel has no networks on its films — it means the
+                // studios the servers carry.
+                return (w === "network" && recipeRoot.wants === "movies")
+                           ? "By Studio" : recipes[j].label
         return ""
     }
 

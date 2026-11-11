@@ -935,6 +935,71 @@ void testServerBlockGathers() {
     }
 }
 
+// What the seed pass wrote into the source block has to come back when the
+// tuner reads the channel: a seeded genre or studio lives ONLY in the block
+// (the pool is set aside for the run), and a block whose filter is never read
+// asks for nothing — which used to read back as the whole library.
+void testSeededRecipeReadsBack() {
+    section("Backend: a block filter reads back as a filter");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+    vchan::ChannelDef def;
+
+    QJsonObject ch;
+    ch["number"] = 3;
+    ch["source"] = QStringLiteral("plex");
+    ch["kind"]   = QStringLiteral("movies");
+    QJsonObject plex;
+    plex["genres"] = QJsonArray{ QStringLiteral("Action") };
+    plex["studios"] = QJsonArray{ QStringLiteral("Paramount") };
+    ch["plex"] = plex;
+
+    const QVector<VirtualChannelsBackend::PoolJob> jobs = b.readPools(ch, def);
+    checkEq(jobs.size(), 1, "the block becomes one job");
+    const VirtualChannelsBackend::PoolJob &job = jobs.value(0);
+    check(job.pool == vchan::SlotKind::Programme, "a programme job");
+    check(job.src == vchan::SlotSource::Plex, "asked of Plex");
+    checkEq(job.genres.size(), 1, "carrying the genre the recipe named");
+    checkStr(job.genres.value(0), QStringLiteral("Action"), "by its name");
+    checkEq(job.studios.size(), 1, "carrying the studio the recipe named");
+    checkStr(job.studios.value(0), QStringLiteral("Paramount"), "by its name");
+    check(job.match.isEmpty() && job.titles.isEmpty(),
+          "the recipe lives in the filter lists, not in a picked show list");
+
+    // The same block beside a pool that holds entries — the studio and genre
+    // filters still air; only `match` is the legacy read that stays out.
+    QJsonObject withEntries = ch;
+    QJsonArray programmes;
+    {
+        QJsonObject e;
+        e["name"] = QStringLiteral("Top Gun");
+        e["kind"] = QStringLiteral("movie");
+        e["src"]  = QStringLiteral("plex");
+        programmes.append(e);
+    }
+    withEntries["programmes"] = programmes;
+    const QVector<VirtualChannelsBackend::PoolJob> jobs2 = b.readPools(withEntries, def);
+    bool carried = false;
+    for (const VirtualChannelsBackend::PoolJob &j : jobs2)
+        if (j.studios.size() == 1 && j.src == vchan::SlotSource::Plex)
+            carried = true;
+    check(carried, "the studio filter reads back beside entries too");
+
+    // The harvest's own gate: a studio match is case-blind, and a film whose
+    // studio does not match is kept out.
+    VirtualChannelsBackend::PoolJob gate;
+    gate.studios << QStringLiteral("Paramount");
+    check(VirtualChannelsBackend::bookingWants(gate, "TOP GUN",
+                                               { QStringLiteral("Action") },
+                                               { QStringLiteral("paramount") }),
+          "the studio string matches whatever the case");
+    check(!VirtualChannelsBackend::bookingWants(gate, "DIE HARD",
+                                                { QStringLiteral("Action") },
+                                                { QStringLiteral("fox") }),
+          "a film from another studio is kept out");
+}
+
 void testPlansRoundTrip() {
     section("Backend: plans survive being read out and handed back");
 
@@ -1339,6 +1404,19 @@ void testPresetChannelsSurfaceInBuilder() {
              "the recipe alone is what the builder needs to seed from");
     check(nc.value(QStringLiteral("studios")).toStringList().isEmpty(),
           "network presets carry no studio filters");
+
+    // The same ask on a movie channel means studio: Plex carries the string on
+    // films, so the recipe rides straight into the block — no resolver needed.
+    const int studio = b.create_preset_channel(1, "77", "Paramount", "movies");
+    check(studio > 0, "a studio preset channel is created");
+    const QVariantMap sc = b.channel_source_config(studio);
+    checkStr(sc.value(QStringLiteral("source")).toString(), "plex",
+             "the studio channel is on Plex");
+    check(sc.value(QStringLiteral("studios")).toStringList()
+              .contains(QStringLiteral("Paramount")),
+          "the studio filter surfaces in the builder config");
+    checkStr(sc.value(QStringLiteral("preset")).toString(), "Paramount",
+             "the recipe is named in the builder config");
 }
 
 
@@ -1938,6 +2016,7 @@ int runVirtualChannelsBackendTests() {
     testPresetChannelWritesTheRecord();
     testPresetChannelsWireTheirContent();
     testPresetChannelsSurfaceInBuilder();
+    testSeededRecipeReadsBack();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();

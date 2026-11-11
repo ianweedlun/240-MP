@@ -811,6 +811,14 @@ static QStringList plexTags(const QJsonObject &m, const char *key) {
     return out;
 }
 
+static QStringList plexStudios(const QJsonObject &m) {
+    // Plex carries the producing studio as a plain attribute on movie rows.
+    QStringList out;
+    const QString attr = m[QLatin1String("Studio")].toString().trimmed();
+    if (!attr.isEmpty()) out << attr;
+    return out;
+}
+
 QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
     return QVariantMap{
         {"ratingKey",              m["ratingKey"].toString()},
@@ -839,6 +847,7 @@ QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
         {"viewedLeafCount",        m["viewedLeafCount"].toInt()},
         {"originallyAvailableAt",  m["originallyAvailableAt"].toString()},
         {"genres",                 plexTags(m, "Genre")},
+        {"studios",                plexStudios(m)},
         {"collections",            plexTags(m, "Collection")},
         {"thumb",                  m["thumb"].toString()},
         {"parentThumb",            m["parentThumb"].toString()},

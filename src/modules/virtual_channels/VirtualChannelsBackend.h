@@ -130,6 +130,9 @@ public:
         QString library;
         QStringList titles;
         QStringList genres;
+        // Movie channels ask "by studio": the studio strings the servers
+        // carry (Plex Studio attribute, Jellyfin Studios, Emby Studio).
+        QStringList studios;
         QStringList collections;
         QStringList playlists;
         bool anyFilm = true;
@@ -408,8 +411,13 @@ private:
     QStringList m_pgSeasons;
     QVector<vchan::MediaItem> m_pgEpisodes;
 
+    // Public: the same gate the harvest applies, so a test can ask the gate
+    // directly beside the readPools tests.
+public:
     static bool bookingWants(const PoolJob &job, const QString &title,
-                             const QStringList &genres = QStringList());
+                             const QStringList &genres = QStringList(),
+                             const QStringList &studios = QStringList());
+private:
     void appendToPool(const PoolJob &job, const QVector<vchan::MediaItem> &items);
     static QVector<QPair<vchan::SlotKind, const char *>> poolFields();
     QVector<PoolJob> m_pgApptJobs;

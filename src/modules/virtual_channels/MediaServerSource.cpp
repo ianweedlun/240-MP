@@ -268,7 +268,8 @@ void MediaServerSource::genNext() {
     }
 
     const bool named = !m_req.match.isEmpty() || !m_req.titles.isEmpty()
-                       || !m_req.genres.isEmpty() || !m_req.showIds.isEmpty();
+                       || !m_req.genres.isEmpty() || !m_req.showIds.isEmpty()
+                       || !m_req.studios.isEmpty();
     const bool takesAll = m_req.collections.isEmpty()
                           && (!wantsFilms(m_req.wants) || m_req.anyFilm);
     const bool wantsLibraryItems = named || takesAll;
@@ -345,12 +346,14 @@ bool MediaServerSource::browse(SlotSource src, const QString &kind, const QStrin
     }
     if (kind != QLatin1String("shows") && kind != QLatin1String("collections")
         && kind != QLatin1String("movies") && kind != QLatin1String("moviegenres")
+        && kind != QLatin1String("moviestudios")
         && kind != QLatin1String("moviecollections")) {
         reset();
         return false;
     }
     m_req.wants = (kind == QLatin1String("movies")
                    || kind == QLatin1String("moviegenres")
+                   || kind == QLatin1String("moviestudios")
                    || kind == QLatin1String("moviecollections"))
                   ? Request::Wants::Films : Request::Wants::Episodes;
     if (kind == QLatin1String("collections") || kind == QLatin1String("moviecollections"))
@@ -369,6 +372,12 @@ void MediaServerSource::finishBrowse() {
                        b.toMap().value(QStringLiteral("label")).toString(),
                        Qt::CaseInsensitive) < 0;
         });
+    } else if (kind == QLatin1String("moviestudios")) {
+        std::sort(items.begin(), items.end(), [](const QVariant &a, const QVariant &b) {
+            return a.toMap().value(QStringLiteral("label")).toString().compare(
+                       b.toMap().value(QStringLiteral("label")).toString(),
+                       Qt::CaseInsensitive) < 0;
+        });
     }
     reset();
     emit browseReady(kind, items);
@@ -382,7 +391,8 @@ void MediaServerSource::browseNextLibrary() {
     if (m_browseKind == QLatin1String("shows")) {
         m_stage = Stage::BrowseSeries; type = kSeries;
     } else if (m_browseKind == QLatin1String("movies")
-               || m_browseKind == QLatin1String("moviegenres")) {
+               || m_browseKind == QLatin1String("moviegenres")
+               || m_browseKind == QLatin1String("moviestudios")) {
         m_stage = Stage::BrowseMovies; type = kMovie;
     } else {
         m_stage = Stage::BrowseCollections;
@@ -441,11 +451,15 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
             } else if (wantsFilms(m_req.wants)) {
                 if (type != QLatin1String("movie")) continue;
                 if (!m_req.titles.isEmpty() || !m_req.genres.isEmpty()
-                    || !m_req.match.isEmpty()) {
+                    || !m_req.match.isEmpty() || !m_req.studios.isEmpty()) {
                     bool wanted = listContainsCI(m_req.titles, mi.title);
                     if (!wanted) {
                         for (const QString &g : m.value(QStringLiteral("genres")).toStringList())
                             if (listContainsCI(m_req.genres, g)) { wanted = true; break; }
+                    }
+                    if (!wanted) {
+                        for (const QString &s : m.value(QStringLiteral("studios")).toStringList())
+                            if (listContainsCI(m_req.studios, s)) { wanted = true; break; }
                     }
                     if (!wanted) {
                         for (const QString &needle : m_req.match)
@@ -496,14 +510,16 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
     }
     case Stage::BrowseMovies: {
         const bool wantGenres = (m_browseKind == QLatin1String("moviegenres"));
+        const bool wantStudios = (m_browseKind == QLatin1String("moviestudios"));
         for (const QVariant &v : list) {
             if (m_browseItems.size() >= kMaxServerItems) break;
             const QVariantMap m = v.toMap();
             if (m.value(QStringLiteral("type")).toString() != QLatin1String("movie")) continue;
 
             QStringList values;
-            if (wantGenres) values = m.value(QStringLiteral("genres")).toStringList();
-            else            values << m.value(QStringLiteral("title")).toString();
+            if (wantStudios)     values = m.value(QStringLiteral("studios")).toStringList();
+            else if (wantGenres) values = m.value(QStringLiteral("genres")).toStringList();
+            else                 values << m.value(QStringLiteral("title")).toString();
 
             for (const QString &value : std::as_const(values)) {
                 if (value.isEmpty() || m_seenIds.contains(value)) continue;

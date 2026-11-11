@@ -459,6 +459,43 @@ int runMediaServerSourceTests() {
         }
     }
 
+    section("media server: films by studio");
+    {
+        FakeMediaServer fake;
+        fake.libraries = QVariantList{
+            FakeMediaServer::library("mv1", "MOVIES", "movies"),
+        };
+        fake.itemsFor["mv1|Movie"] = QVariantList{
+            FakeMediaServer::movie("s1", "TOP GUN", 6600000.0,
+                                   { QStringLiteral("Action") },
+                                   { QStringLiteral("Paramount") }),
+            FakeMediaServer::movie("s2", "DIE HARD", 6600000.0,
+                                   { QStringLiteral("Action") },
+                                   { QStringLiteral("Fox") }),
+        };
+
+        MediaServerSource src;
+        src.setBackend(SlotSource::Jellyfin, &fake);
+        {
+            Result r; r.attach(&src);
+            check(src.browse(SlotSource::Jellyfin, "moviestudios", ""),
+                  "studio browse starts");
+            checkEq(r.browseItems.size(), 2, "each studio offered once");
+            checkStr(r.browseItems.first().toMap().value("label").toString(),
+                     QStringLiteral("Fox"), "studios come back sorted");
+        }
+        {
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src      = SlotSource::Jellyfin;
+            req.wants    = MediaServerSource::Request::Wants::Films;
+            req.studios  = QStringList{ QStringLiteral("paramount") };
+            check(src.enumerate(req), "studio enumeration starts");
+            checkEq(r.items.size(), 1, "only the film carrying that studio");
+            checkStr(r.items.first().ref, QStringLiteral("s1"), "and it is the right one");
+        }
+    }
+
     section("media server: a break takes whatever the pool holds");
     {
         FakeMediaServer fake;

@@ -71,6 +71,7 @@ FocusScope {
                                       : kind === "playlists"    ? "playlists"
                                       : kind === "movies"       ? "films"
                                       : kind === "moviegenres"  ? "genres"
+                                      : kind === "moviestudios" ? "studios"
                                       : "match"
     readonly property bool canDescend: kind === "shows" || kind === "seasons"
 

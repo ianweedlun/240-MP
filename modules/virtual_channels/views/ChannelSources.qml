@@ -45,6 +45,10 @@ FocusScope {
                     r.push("films")
                     r.push("genres")
                     r.push("collections")
+                    // Studios exist only where films were built from them —
+                    // a TV channel never has the row, a movie studio channel
+                    // always shows it.
+                    if (countOf("studios") > 0) r.push("studios")
                 }
             }
             // Shows left behind by a channel that used to be a TV one. Shown so
@@ -211,6 +215,7 @@ FocusScope {
         case "genres":       return sourcesRoot.genreWord
         case "series":       return "Series"
         case "collections":  return "Collections"
+        case "studios":      return "Studios"
         case "playlists":    return "Playlists"
         case "slots":        return "Movie Slots"
         case "logo":         return "Logo"
@@ -244,6 +249,12 @@ FocusScope {
             if (g === 0) return "NONE"
             return g === 1 ? String((cfg.genres || [])[0]).toUpperCase()
                            : g + " " + sourcesRoot.genreWord.toUpperCase()
+        }
+        case "studios": {
+            var st = countOf("studios")
+            if (st === 0) return "NONE"
+            return st === 1 ? String((cfg.studios || [])[0]).toUpperCase()
+                            : st + " STUDIOS"
         }
         case "series": {
             var n = countOf("match")
@@ -305,6 +316,7 @@ FocusScope {
         // playlist arrives whole and cannot.
         case "series":      return "Shows picked one by one. Open one to switch off seasons or episodes you don't want."
         case "collections": return "A group kept on " + server + ", added whole — everything in it airs, even shows not ticked in Series."
+        case "studios":     return "Every film on " + server + " that these studios made — pick one, and the library fills itself with its films."
         case "playlists":   return "A list kept on " + server + ", added whole. Change it there and this channel follows on its next rebuild."
         case "slots":       return "Movies at fixed times, each drawing on its own set of movies."
         case "kind":        return sourcesRoot.isMovies
@@ -503,6 +515,7 @@ FocusScope {
             kind: row === "series" ? "shows"
                 : row === "films"  ? "movies"
                 : row === "genres" ? "moviegenres"
+                : row === "studios" ? "moviestudios"
                                    : row,
             title: sourcesRoot.channelName
         }, { currentIndex: sourcesRoot.current })

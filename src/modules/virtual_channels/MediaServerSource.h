@@ -26,9 +26,11 @@ public:
         // The picked series' ItemIds, where the picker stored them. A series
         // matched by id survives being renamed on the server.
         QStringList   showIds;
-        QStringList   titles;
-        QStringList   genres;
-        QStringList   collections;
+        QStringList titles;
+        QStringList genres;
+        // Movie filters: the studio strings each server carries per film.
+        QStringList studios;
+        QStringList collections;
         QSet<QString> excludeSeasons;
         QSet<QString> excludeEpisodes;
         enum class Wants { Episodes, Films, Anything };

@@ -26,10 +26,18 @@ FocusScope {
     signal goBack()
 
     // The integer kind create_preset_channel expects (SubjectKind order:
-    // Genre=0, Network=1, Collection=2).
+    // Genre=0, Network=1, Collection=2). A movie "network" is a STUDIO — same
+    // kind integer, mode-decided interpretation — but its catalog comes from a
+    // different source, so the catalog ask below keys on "studio".
     readonly property int recipeKind:
         subjectRoot.recipe === "network" ? 1
         : subjectRoot.recipe === "collection" ? 2 : 0
+    readonly property bool studioMovie:
+        subjectRoot.recipe === "network" && subjectRoot.wants === "movies"
+    readonly property string catalogKind: studioMovie ? "studio" : recipe
+    readonly property string subjectWord:
+        studioMovie ? "Studio"
+        : recipe.charAt(0).toUpperCase() + recipe.slice(1)
 
     property var rows: []
     property string emptyText: "Loading …"
@@ -42,9 +50,8 @@ FocusScope {
     property string status: ""
 
     Component.onCompleted: {
-        var word = subjectRoot.recipe
-        subjectRoot.emptyText = "Loading " + word + "s …"
-        virtualChannelsBackend.load_catalog(subjectRoot.recipe)
+        subjectRoot.emptyText = "Loading " + subjectWord.toLowerCase() + "s …"
+        virtualChannelsBackend.load_catalog(subjectRoot.catalogKind)
     }
 
     // The backend delivers the catalog asynchronously (collections ride a
@@ -52,15 +59,15 @@ FocusScope {
     Connections {
         target: virtualChannelsBackend
         function onCatalogReady(kind, optionsList) {
-            if (kind !== subjectRoot.recipe) return
+            if (kind !== subjectRoot.catalogKind) return
             subjectRoot.busy = false
             subjectRoot.rows = optionsList
             subjectRoot.emptyText = optionsList.length === 0
-                ? "No " + subjectRoot.recipe + "s available"
+                ? "No " + subjectRoot.subjectWord + "s available"
                 : ""
         }
         function onCatalogFailed(kind, reason) {
-            if (kind !== subjectRoot.recipe) return
+            if (kind !== subjectRoot.catalogKind) return
             subjectRoot.busy = false
             subjectRoot.emptyText = reason
         }
@@ -89,8 +96,7 @@ FocusScope {
         anchors.fill: parent
         focus: true
         iconSource: subjectRoot.moduleIcon
-        title: "Choose " + String(subjectRoot.recipe).charAt(0).toUpperCase()
-               + String(subjectRoot.recipe).slice(1)
+        title: "Choose " + subjectRoot.subjectWord
         rows: subjectRoot.rows
         busy: subjectRoot.busy || subjectRoot.seeding
         status: subjectRoot.status

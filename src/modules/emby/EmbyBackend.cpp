@@ -686,6 +686,14 @@ QVariantMap EmbyBackend::formatItem(const QJsonObject &item) const {
     QVariantList genres;
     for (const QJsonValue &v : item["Genres"].toArray())
         genres.append(v.toVariant());
+    // Emby carries studios as an array on newer servers and a bare string on
+    // older ones; read either, so the studio picker and seed filter work on
+    // both generations.
+    QVariantList studios;
+    for (const QJsonValue &v : item["Studios"].toArray())
+        studios.append(v.toVariant());
+    if (studios.isEmpty() && !item["Studio"].toString().isEmpty())
+        studios << item["Studio"].toString();
 
     QVariantMap map;
     map["itemId"]          = item["Id"].toString();
@@ -702,6 +710,7 @@ QVariantMap EmbyBackend::formatItem(const QJsonObject &item) const {
     map["releaseDate"]    = releaseDate.isEmpty() ? premiereDate : releaseDate;
     map["year"]            = item["ProductionYear"].toVariant();
     map["genres"]          = genres;
+    map["studios"]         = studios;
     map["duration"]        = item["RunTimeTicks"].toDouble() / 10000.0;
     map["viewOffset"]      = userData["PlaybackPositionTicks"].toDouble() / 10000.0;
     map["played"]          = userData["Played"].toBool();
@@ -814,7 +823,7 @@ void EmbyBackend::load_items(const QString &parentId, const QString &includeType
     // Browse rows only need title/year/overview/played state. Skip the heavy
     // per-item MediaSources/MediaStreams here (now that the list is unbounded) —
     // Item.qml re-fetches full detail via load_item_detail when an item is opened.
-    q.addQueryItem("fields", "Overview,Genres,UserData,SortName");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,SortName");
     if (!includeTypes.isEmpty())
         q.addQueryItem("includeItemTypes", includeTypes);
     if (!sortBy.isEmpty()) {
@@ -850,7 +859,7 @@ void EmbyBackend::load_item_detail(const QString &itemId) {
 
     QUrl url(m_serverUrl + "/Users/" + m_userId + "/Items/" + itemId);
     QUrlQuery q;
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     url.setQuery(q);
 
     auto *reply = embyGet(url);
@@ -878,7 +887,7 @@ void EmbyBackend::load_children(const QString &itemId) {
     q.addQueryItem("recursive", "false");
     q.addQueryItem("includeItemTypes", "Season,Episode");
     q.addQueryItem("limit", "500");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -915,7 +924,7 @@ void EmbyBackend::load_boxset_children(const QString &parentId) {
     QUrlQuery q;
     q.addQueryItem("parentId", parentId);
     q.addQueryItem("recursive", "false");
-    q.addQueryItem("fields", "Overview,Genres,UserData,ChildCount,ReleaseDate,PremiereDate");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,ChildCount,ReleaseDate,PremiereDate");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -950,7 +959,7 @@ void EmbyBackend::load_folder_children(const QString &parentId) {
     QUrlQuery q;
     q.addQueryItem("parentId", parentId);
     q.addQueryItem("recursive", "false");
-    q.addQueryItem("fields", "Overview,Genres,UserData,ChildCount,SortName");
+    q.addQueryItem("fields", "Overview,Genres,Studios,UserData,ChildCount,SortName");
     q.addQueryItem("sortBy", "SortName");
     q.addQueryItem("sortOrder", "Ascending");
     url.setQuery(q);
@@ -1020,7 +1029,7 @@ void EmbyBackend::load_episodes(const QString &seriesId, const QString &seasonId
     QUrlQuery q;
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("seasonId", seasonId);
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     q.addQueryItem("limit", "500");
     // No sortBy: Emby accepts the param but has no aired-order sort value, and
@@ -1055,7 +1064,7 @@ void EmbyBackend::load_continue_watching() {
     QUrlQuery q;
     q.addQueryItem("mediaTypes", "Video");   // required on Emby — see load_libraries
     q.addQueryItem("limit", "20");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     url.setQuery(q);
 
     auto *reply = embyGet(url);
@@ -1084,7 +1093,7 @@ void EmbyBackend::load_up_next() {
     QUrlQuery q;
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("limit", "20");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     url.setQuery(q);
 
@@ -1116,7 +1125,7 @@ void EmbyBackend::load_series_next_up(const QString &seriesId) {
     q.addQueryItem("userId", m_userId);
     q.addQueryItem("seriesId", seriesId);
     q.addQueryItem("limit", "1");
-    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+    q.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
     q.addQueryItem("enableUserData", "true");
     url.setQuery(q);
 
@@ -1522,7 +1531,7 @@ void EmbyBackend::load_next_episode(const QString &currentItemId) {
         QUrl epUrl(m_serverUrl + "/Shows/" + seriesId + "/Episodes");
         QUrlQuery epQ;
         epQ.addQueryItem("userId", m_userId);
-        epQ.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,UserData");
+        epQ.addQueryItem("fields", "MediaSources,MediaStreams,Overview,Genres,Studios,UserData");
         epQ.addQueryItem("enableUserData", "true");
         epQ.addQueryItem("limit", "500");
         epUrl.setQuery(epQ);
