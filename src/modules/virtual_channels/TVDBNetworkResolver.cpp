@@ -6,6 +6,7 @@
 #include <QEventLoop>
 #include <QDebug>
 #include <QJsonArray>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -114,18 +115,16 @@ int TVDBNetworkResolver::bestMatchIndex(const QVector<QJsonObject> &results,
                                         const QString &query) {
     const QString q = query.toLower();
     int best = -1;
-    int bestScore = -1;
-    for (int i = 0; i < results.size(); ++i) {
-        const QString name = results.at(i).value(QStringLiteral("name")).toString().toLower();
-        if (name.isEmpty()) continue;
-        int score = 0;
-        if (name == q) {
-            score = 100;
-        } else if (name.contains(q) || q.contains(name)) {
-            score = 50;
-        } else {
-            score = 0; // fall through; keep the first non-empty as a last resort
-        }
+    int bestScore = 0;   // a hit that scores zero matches NOTHING: adopting
+    for (int i = 0; i < results.size(); ++i) {   // result[0] made every show
+        const QString name = results.at(i).value(QStringLiteral("name")).toString().toLower();  // missing from TheTVDB claim
+        if (name.isEmpty()) continue;            // the first search hit's
+        int score = 0;                           // network identity — the
+        if (name == q) {                         // ABC channel harvested
+            score = 100;                         // his whole library because
+        } else if (name.contains(q) || q.contains(name)) {  // Private Snafu resolved to
+            score = 50;                          // network id 5 and nothing
+        }                                      // else ever refused
         if (score > bestScore) {
             bestScore = score;
             best = i;
@@ -165,6 +164,27 @@ QJsonObject TVDBNetworkResolver::fetch(const QString &path) const {
     const QByteArray data = reply->readAll();
     reply->deleteLater();
     return QJsonDocument::fromJson(data).object();
+}
+
+// --- persistent cache ---
+void TVDBNetworkResolver::loadCache(const QString &path) {
+    m_cachePath = path;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return;   // absent cache = cold start
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    for (auto it = root.constBegin(); it != root.constEnd(); ++it)
+        if (it.value().isString()) m_cache.insert(it.key(), it.value().toString());
+}
+
+void TVDBNetworkResolver::saveCache() const {
+    if (m_cachePath.isEmpty()) return;
+    QFile f(m_cachePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+    QJsonObject root;
+    for (auto it = m_cache.constBegin(); it != m_cache.constEnd(); ++it)
+        root.insert(it.key(), it.value());
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    f.close();
 }
 
 QVector<Subject> TVDBNetworkResolver::listGenres() const {

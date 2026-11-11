@@ -42,7 +42,12 @@ public:
     // --- testable pure logic ---
 
     // Index of the search result whose name best matches the query:
-    //   exact (case-insensitive) > substring > otherwise the first result.
+    //   exact (case-insensitive) > substring; NO match -> -1.
+    // Adopting an unrelated first hit is a bug, not a convenience: a show
+    // missing from TheTVDB would inherit some other show's network identity,
+    // and a whole-channel recipe built that way thought every show in the
+    // library belonged to its network (the ABC channel adopted Private Snafu
+    // and harvested the entire library).
     // Returns -1 if there are no results.
     static int bestMatchIndex(const QVector<QJsonObject> &results, const QString &query);
 
@@ -50,9 +55,18 @@ public:
     // originalNetwork. Returns an empty string if neither is present.
     static QString parseNetworkId(const QJsonObject &series);
 
+    // --- persistent title -> network-id cache (JSON object file) ---
+    // The dial's lookups are stable across boots: loadCache fills m_cache and
+    // records the path; saveCache writes the whole map back there (called at
+    // seed end). Absent/unreadable file = silent cold start. Seeds never
+    // re-pay TheTVDB for titles a previous session already resolved.
+    void loadCache(const QString &path);
+    void saveCache() const;
+
 private:
     mutable QString m_token;
     mutable QHash<QString, QString> m_cache;
+    mutable QString m_cachePath;   // set by loadCache; saveCache writes back
     QString m_apiKey;
     mutable QNetworkAccessManager m_nam;
 

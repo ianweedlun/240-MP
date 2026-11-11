@@ -1,8 +1,9 @@
 #include "TestHarness.h"
 #include "../TVDBNetworkResolver.h"
-
 #include <QJsonObject>
 #include <QVector>
+#include <QFile>
+#include <QJsonDocument>
 
 using namespace vchan;
 
@@ -55,6 +56,48 @@ int runTVDBNetworkResolverTests() {
     {
         vtest::checkEq(TVDBNetworkResolver::bestMatchIndex({}, ""), -1,
                        "no results -> -1");
+    }
+
+    // --- bestMatchIndex: unrelated hits are NOT adopted ---
+    // The old fallback returned result[0] whatever the score: every show
+    // missing from TheTVDB inherited an unrelated show's network identity,
+    // so a whole-library harvest with 0 refuses made the ABC preset air
+    // everything (Private Snafu resolved to network id 5).
+    {
+        QVector<QJsonObject> hits;
+        hits.append(series("Private Snafu", "111"));
+        hits.append(series("The Banana Stand", "222"));
+        vtest::checkEq(TVDBNetworkResolver::bestMatchIndex(hits, "Futurama"),
+                       -1, "no real match -> -1 (first hit not adopted)");
+    }
+
+    // --- persistent cache: file -> map -> file, no network ---
+    // Seeds re-open channels every boot; lookups already paid must persist
+    // (loadCache on an absent file = silent cold start; a cache hit answers
+    // without the wire — the bogus key would fail login if a call ran).
+    {
+        const QString p = QStringLiteral("tvdb-cache-test.json");
+        {
+            QFile f(p);
+            QJsonObject seed; seed.insert("Firefly", "15");
+            if (f.open(QIODevice::WriteOnly))
+                f.write(QJsonDocument(seed).toJson(QJsonDocument::Compact));
+            else vtest::checkEq(f.open(QIODevice::WriteOnly), true, "cache fixture writable");
+        }
+        TVDBNetworkResolver r2("00000000-0000-0000-0000-000000000000");
+        r2.loadCache(p);
+        {
+            MediaItem m; m.series = "Firefly";
+            vtest::checkStr(r2.networkIdFor(m), "15",
+                            "cache hit answers without the network");
+        }
+        r2.saveCache();
+        TVDBNetworkResolver r3("00000000-0000-0000-0000-000000000000");
+        r3.loadCache(p);
+        {
+            MediaItem m; m.series = "Firefly";
+            vtest::checkStr(r3.networkIdFor(m), "15", "saved cache round-trips");
+        }
     }
 
     // --- parseNetworkId: latestNetwork ---
