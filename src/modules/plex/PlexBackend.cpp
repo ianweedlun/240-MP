@@ -812,10 +812,24 @@ static QStringList plexTags(const QJsonObject &m, const char *key) {
 }
 
 static QStringList plexStudios(const QJsonObject &m) {
-    // Plex carries the producing studio as a plain attribute on movie rows.
+    // Plex library rows carry the producing studio as a bare lowercase string
+    // attribute ("studio": "Orion-Nova Productions"); older Drive-style rows
+    // may use a capitalized "Studio" or a [{tag}] array. Read any of them.
     QStringList out;
-    const QString attr = m[QLatin1String("Studio")].toString().trimmed();
-    if (!attr.isEmpty()) out << attr;
+    auto push = [&out](const QString &s) {
+        const QString t = s.trimmed();
+        if (!t.isEmpty() && !out.contains(t)) out << t;
+    };
+    auto read = [&](const QJsonValue &v) {
+        if (v.isString()) { push(v.toString()); return; }
+        if (!v.isArray()) return;
+        for (const QJsonValue &e : v.toArray()) {
+            if (e.isString()) push(e.toString());
+            else if (e.isObject()) push(e.toObject().value(QLatin1String("tag")).toString());
+        }
+    };
+    read(m[QLatin1String("studio")]);
+    read(m[QLatin1String("Studio")]);
     return out;
 }
 

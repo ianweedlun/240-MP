@@ -551,6 +551,8 @@ QVariantMap JellyfinBackend::formatItem(const QJsonObject &item) const {
     QVariantList studios;
     for (const QJsonValue &v : item["Studios"].toArray())
         studios.append(v.toVariant());
+    if (studios.isEmpty() && !item["Studio"].toString().isEmpty())
+        studios << item["Studio"].toString();
 
     QVariantMap map;
     map["itemId"]          = item["Id"].toString();
