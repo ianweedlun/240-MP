@@ -998,6 +998,45 @@ void testSeededRecipeReadsBack() {
                                                 { QStringLiteral("Action") },
                                                 { QStringLiteral("fox") }),
           "a film from another studio is kept out");
+
+    // The shape the CRT actually writes when a studio preset seeds: no server
+    // block at all, identity only in the preset object. The builder screen
+    // hides genre and studio rows — channel_source_config must agree by
+    // reporting neither field, or the hide rule and the counts drift apart.
+    Fixture fx2;
+    QJsonObject seededOnly;
+    seededOnly["number"] = 4;
+    seededOnly["source"] = QStringLiteral("plex");
+    seededOnly["kind"] = QStringLiteral("movies");
+    seededOnly["name"] = QStringLiteral("20th Century Fox");
+    QJsonObject preset;
+    preset["id"] = QStringLiteral("20th Century Fox");
+    preset["name"] = QStringLiteral("20th Century Fox");
+    preset["kind"] = QStringLiteral("1");
+    seededOnly["preset"] = preset;
+    QJsonArray entries;
+    for (const char *film : {"ALIEN", "BORAT"}) {
+        QJsonObject e;
+        e["name"] = QString::fromLatin1(film);
+        e["kind"] = QStringLiteral("movie");
+        e["src"] = QStringLiteral("plex");
+        e["preset"] = QStringLiteral("1:20th Century Fox");
+        entries.append(e);
+    }
+    seededOnly["programmes"] = entries;
+    fx2.write(seededOnly);
+    VirtualChannelsBackend c(fx2.data(), fx2.data());
+
+    const QVariantMap cfg = c.channel_source_config(4);
+    check(cfg.contains(QStringLiteral("preset")), "the preset identity rides into the config");
+    checkEq(cfg.value(QStringLiteral("genres")).toStringList().size(), 0,
+            "no genre field for a studio preset channel");
+    checkEq(cfg.value(QStringLiteral("studios")).toStringList().size(), 0,
+            "no studio field either — the block never landed on disk");
+    checkEq(cfg.value(QStringLiteral("films")).toStringList().size(), 2,
+            "the seeded picks are what air");
+    checkEq(cfg.value(QStringLiteral("match")).toStringList().size(), 0,
+            "and none of them read as legacy matches");
 }
 
 void testPlansRoundTrip() {
