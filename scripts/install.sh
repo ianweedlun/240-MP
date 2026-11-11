@@ -212,7 +212,7 @@ ExecStart=${LAUNCHER}
 Restart=on-failure
 RestartSec=5s
 RestartPreventExitStatus=10 12
-ExecStopPost=+/usr/local/bin/240mp-stop
+ExecStopPost=+/usr/local/bin/240mp-stop %1
 StandardOutput=journal
 StandardError=journal
 
@@ -231,8 +231,13 @@ UNIT
     # through the launcher, which applies the staged update before exec.
     sudo tee /usr/local/bin/240mp-stop > /dev/null << 'STOP_HELPER'
 #!/usr/bin/env bash
-# Called by 240mp.service ExecStopPost. systemd sets $EXIT_STATUS to the app's exit code.
-if [ "${EXIT_STATUS:-}" = "10" ]; then
+# Called by 240mp.service ExecStopPost. systemd sets $EXIT_STATUS to the app's
+# exit code; the unit passes %1 ($1) = the stop command (stop|restart|kill,
+# empty on an app-driven exit). A dev/agent restart or kill must NOT power the
+# Pi off — only an explicit stop or an app exit code decides the shutdown path.
+if [ "$1" = "restart" ] || [ "$1" = "kill" ]; then
+    echo "[240mp-stop] restart/kill handler: Pi stays powered"
+elif [ "${EXIT_STATUS:-}" = "10" ]; then
     systemctl start 240mp-terminal.service
 elif [ "${EXIT_STATUS:-}" = "11" ]; then
     :   # in-app update restart — Restart=on-failure brings the app back up
