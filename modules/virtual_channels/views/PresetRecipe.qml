@@ -90,14 +90,14 @@ FocusScope {
                 // Same screen, one question down: the kind rides in as a nav
                 // param, so the reloaded view knows what it is already on.
                 console.log("[presetflow] kind asked:", row.substring(5))
-                recipeRoot.navigateTo("modules/virtual_channels/views/PresetRecipe.qml", {
+                recipeRoot.navigateTo("PresetRecipe.qml", {
                     moduleId: recipeRoot.moduleId,
                     wants: row.substring(5)
                 }, {})
                 return
             }
             console.log("[presetflow] recipe picked:", row.substring(7), "wants:", recipeRoot.wants)
-            recipeRoot.navigateTo("modules/virtual_channels/views/PresetSubject.qml", {
+            recipeRoot.navigateTo("PresetSubject.qml", {
                 moduleId: recipeRoot.moduleId,
                 wants: recipeRoot.wants,
                 recipe: row.substring(7)

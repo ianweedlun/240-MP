@@ -137,7 +137,7 @@ FocusScope {
         if (rows[i] === "logo") {
             var params = { moduleId: logoRoot.moduleId, settingKey: "logo.file" }
             if (perChannel) { params.channelNumber = channelNumber; params.title = heading }
-            navigateTo("modules/virtual_channels/views/LogoPicker.qml", params,
+            navigateTo("LogoPicker.qml", params,
                        { currentIndex: logoRoot.current })
         } else if (rows[i] === "defaults") {
             status = virtualChannelsBackend.clear_channel_logo_style(channelNumber)
@@ -146,7 +146,7 @@ FocusScope {
         } else if (rows[i] === "preview") {
             var p = { moduleId: logoRoot.moduleId }
             if (perChannel) p.channelNumber = channelNumber
-            navigateTo("modules/virtual_channels/views/LogoPreview.qml", p,
+            navigateTo("LogoPreview.qml", p,
                        { currentIndex: logoRoot.current })
         }
     }

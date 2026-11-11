@@ -77,7 +77,7 @@ FocusScope {
             if (ch !== subjectRoot.seedChannel) return
             subjectRoot.seeding = false
             if (ok) {
-                subjectRoot.navigateTo("modules/virtual_channels/views/ChannelSources.qml", {
+                subjectRoot.navigateTo("ChannelSources.qml", {
                     moduleId:      subjectRoot.moduleId,
                     channelNumber: subjectRoot.seedChannel,
                     channelName:   subjectRoot.seedName

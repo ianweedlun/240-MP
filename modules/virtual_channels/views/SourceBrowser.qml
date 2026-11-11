@@ -518,7 +518,7 @@ FocusScope {
 
     function descend(item) {
         if (!canDescend) return
-        navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+        navigateTo("SourceBrowser.qml", {
             moduleId:      browserRoot.moduleId,
             channelNumber: browserRoot.channelNumber,
             kind: browserRoot.kind === "shows" ? "seasons" : "episodes",

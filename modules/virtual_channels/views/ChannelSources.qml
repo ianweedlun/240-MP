@@ -448,7 +448,7 @@ FocusScope {
                 }
                 reload()
             }
-            navigateTo("modules/virtual_channels/views/PlanEdit.qml", {
+            navigateTo("PlanEdit.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName,
@@ -459,7 +459,7 @@ FocusScope {
 
         if (row === "rename") {
             appCore.save_setting(moduleId, "rename_buffer", "")
-            navigateTo("modules/virtual_channels/views/TextEntry.qml", {
+            navigateTo("TextEntry.qml", {
                 moduleId: sourcesRoot.moduleId,
                 settingKey: "rename_buffer",
                 title: "Name Channel " + sourcesRoot.channelNumber,
@@ -495,7 +495,7 @@ FocusScope {
         }
         if (row === "source") { cycleSource(1); return }
         if (row === "logo") {
-            navigateTo("modules/virtual_channels/views/LogoSettings.qml", {
+            navigateTo("LogoSettings.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 title: sourcesRoot.channelName
@@ -503,7 +503,7 @@ FocusScope {
             return
         }
         if (row === "breaks") {
-            navigateTo("modules/virtual_channels/views/Interstitials.qml", {
+            navigateTo("Interstitials.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName
@@ -511,7 +511,7 @@ FocusScope {
             return
         }
         if (row === "slots") {
-            navigateTo("modules/virtual_channels/views/Bookings.qml", {
+            navigateTo("Bookings.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName
@@ -519,7 +519,7 @@ FocusScope {
             return
         }
 
-        navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+        navigateTo("SourceBrowser.qml", {
             moduleId:      sourcesRoot.moduleId,
             channelNumber: sourcesRoot.channelNumber,
             kind: row === "series" ? "shows"

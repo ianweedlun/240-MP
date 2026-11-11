@@ -112,12 +112,12 @@ FocusScope {
                 // The preset flow carries its own identity through every hop: one
                 // [presetflow] trail in the journal for the whole add chain.
                 console.log("[presetflow] add-preset row engaged at index", channelList.currentIndex)
-                navigateTo("modules/virtual_channels/views/PresetRecipe.qml", {
+                navigateTo("PresetRecipe.qml", {
                 moduleId: manageRoot.moduleId
             }, { currentIndex: channelList.currentIndex })
             } else if (manageRoot.rowKind(channelList.currentIndex) === "add-channel") {
                 appCore.save_setting(moduleId, "create_buffer", "")
-                navigateTo("modules/virtual_channels/views/TextEntry.qml", {
+                navigateTo("TextEntry.qml", {
                     moduleId: manageRoot.moduleId,
                     settingKey: "create_buffer",
                     title: "Name The New Channel",
@@ -129,7 +129,7 @@ FocusScope {
                 } else if (isBuiltIn(c)) {
                     status = "Built-in — use " + root.hints.change + " to move it"
                 } else {
-                    navigateTo("modules/virtual_channels/views/ChannelSources.qml", {
+                    navigateTo("ChannelSources.qml", {
                         moduleId:      manageRoot.moduleId,
                         channelNumber: c.number,
                         channelName: c.name

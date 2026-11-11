@@ -154,7 +154,7 @@ FocusScope {
 
     function open(i) {
         if (rows[i] === "channel") {
-            navigateTo("modules/virtual_channels/views/PoolEditor.qml", {
+            navigateTo("PoolEditor.qml", {
                 moduleId:      levelsRoot.moduleId,
                 channelNumber: levelsRoot.channelNumber,
                 channelName:   levelsRoot.channelName,
@@ -167,7 +167,7 @@ FocusScope {
         var e = shows[idx]
         if (!e) return
         if (levelsRoot.onBlocks) {
-            navigateTo("modules/virtual_channels/views/SourceIdents.qml", {
+            navigateTo("SourceIdents.qml", {
                 moduleId:      levelsRoot.moduleId,
                 channelNumber: levelsRoot.channelNumber,
                 channelName:   levelsRoot.channelName,
@@ -180,7 +180,7 @@ FocusScope {
         }
         if (ownFolders(e).length === 0) {
             appCore.save_setting(levelsRoot.moduleId, "pool_buffer", "")
-            navigateTo("modules/virtual_channels/views/SourcePick.qml", {
+            navigateTo("SourcePick.qml", {
                 moduleId:   levelsRoot.moduleId,
                 source:     "local",
                 settingKey: "pool_buffer",
@@ -190,7 +190,7 @@ FocusScope {
             }, { currentIndex: levelsRoot.current, pickFor: idx })
             return
         }
-        navigateTo("modules/virtual_channels/views/SourceIdents.qml", {
+        navigateTo("SourceIdents.qml", {
             moduleId:      levelsRoot.moduleId,
             channelNumber: levelsRoot.channelNumber,
             channelName:   levelsRoot.channelName,
