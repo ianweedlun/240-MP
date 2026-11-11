@@ -1343,7 +1343,8 @@ void testPresetChannelWritesTheRecord() {
     checkStr(o.value(QStringLiteral("name")).toString(), "AMC",
              "name auto-derived from the subject, not left blank");
     const QJsonObject preset = o.value(QStringLiteral("preset")).toObject();
-    checkStr(preset.value(QStringLiteral("kind")).toString(), "1", "recipe kind recorded");
+    checkEq(VirtualChannelsBackend::presetKindOf(preset), 1,
+            "recipe kind recorded (number; presetKindOf reads it)");
     checkStr(preset.value(QStringLiteral("id")).toString(), "389", "subject id recorded");
     checkStr(preset.value(QStringLiteral("name")).toString(), "AMC", "subject name recorded");
 
@@ -2082,5 +2083,27 @@ int runVirtualChannelsBackendTests() {
     testPreviewNeverWrites();
     testChannelLogoStyle();
     testSpecialNumbersNeverCollide();
+
+    vtest::section("Preset kind type contract");
+    // QJsonValue::toInt() on a JSON *string* returns 0: presets used to store
+    // kind as "1"/"2" strings, so Network/Collection channels re-typed to
+    // Genre on every reload — identity filter skipped, bogus genre block
+    // written (ABC aired the whole library; A24 studio got 2 picks).
+    // presetKindOf reads BOTH generations, so legacy channels on disk stay
+    // valid until their next seeding rewrites the number.
+    {
+        const QJsonObject fresh{{"kind", 2}, {"id", "SCOOBY-DOO"}};
+        const QJsonObject legacy{{"kind", QStringLiteral("2")},
+                                 {"id", "SCOOBY-DOO"}};
+        vtest::checkEq(VirtualChannelsBackend::presetKindOf(fresh), 2,
+                       "number kind reads");
+        vtest::checkEq(VirtualChannelsBackend::presetKindOf(legacy), 2,
+                       "legacy string kind reads");
+        vtest::checkEq(legacy.value(QStringLiteral("kind")).toInt(), 0,
+                       "the trap: raw toInt on string kind == 0 (Genre)");
+        vtest::checkEq(QJsonObject{{"kind", 1}}
+                           .value(QStringLiteral("kind")).toInt(), 1,
+                       "number kind survives toInt unchanged");
+    }
     return 0;
 }

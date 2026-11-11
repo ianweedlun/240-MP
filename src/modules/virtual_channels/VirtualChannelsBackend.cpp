@@ -3995,6 +3995,9 @@ TVDBNetworkResolver *VirtualChannelsBackend::resolver() {
     const QString key = auth.apikey();
     if (key.isEmpty()) return nullptr;
     m_resolver = new vchan::TVDBNetworkResolver(key);
+    // Persist lookups across boots (the "database of relevant results"): a
+    // seed must never re-pay TheTVDB for titles a previous session resolved.
+    m_resolver->loadCache(m_dataRoot + QStringLiteral("/tvdb-network-cache.json"));
     return m_resolver;
 }
 
@@ -4076,7 +4079,13 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
         ch["kind"] = QStringLiteral("movies");
     // The recipe, so the channel is recognisably a preset and "Seed from
     // recipe" can rebuild it from the subject (kind/id/name).
-    ch["preset"] = QJsonObject{{"kind", QString::number(kind)},
+    // kind is a JSON NUMBER. It used to be QString::number(kind): QJsonValue
+    // ::toInt() on a JSON STRING returns 0, so every Network (kind "1") and
+    // Collection (kind "2") preset read back as Genre on the next reload
+    // — the identity filter never ran, a bogus genres block rode into the
+    // server blocks, and ABC harvested all 21,615 items into 259 picks.
+    // Read it back with presetKindOf(), which also accepts legacy strings.
+    ch["preset"] = QJsonObject{{"kind", kind},
                                {"id", id},
                                {"name", name}};
 
@@ -4160,12 +4169,16 @@ void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
     }
 
     m_seedActive = true;
-    m_seedRecipeKey = preset.value(QLatin1String("kind")).toString() + QLatin1Char(':')
+    // kind read via presetKindOf: channels written before the number fix
+    // carry it as the string "1"; the recipe key must match those entries'
+    // stored "1:5" or re-seeding a legacy channel would orphan its own
+    // picks instead of replacing them.
+    m_seedRecipeKey = QString::number(presetKindOf(preset)) + QLatin1Char(':')
                     + preset.value(QLatin1String("id")).toString();
     m_seedPriorProgrammes = o.value(QLatin1String("programmes")).toArray();
 
     const QString subject = preset.value(QLatin1String("name")).toString().trimmed();
-    const int presetKind = preset.value(QLatin1String("kind")).toInt();
+    const int presetKind = presetKindOf(preset);
     // A movie channel built "by network" means STUDIO: every server carries
     // studio strings on its films (Plex's Studio attribute, Jellyfin's Studios,
     // Emby's Studio), so the recipe rides into the blocks as a server-side
@@ -4232,8 +4245,8 @@ void VirtualChannelsBackend::finishSeeding() {
     const bool movies = isMovieChannel(o);
     // TV networks alone need the resolver; a movie "network" is a studio and
     // was already filtered server-side by the block's studios.
-    const bool network = preset.value(QLatin1String("kind")).toInt()
-                            == int(SubjectKind::Network) && !movies;
+    const bool network = presetKindOf(preset)
+                         == int(SubjectKind::Network) && !movies;
 
     // The harvest: one entry per show (per film on a movie channel), in the
     // order the sources answered. A network recipe keeps only what TheTVDB
@@ -4273,6 +4286,7 @@ void VirtualChannelsBackend::finishSeeding() {
     qInfo("[VirtualChannels] seed harvest: %d tried, %d refused by network identity, %d unique picks"
           " (network seeds pay one TheTVDB search per tried title, cached across seeds)",
           harvestTried, identityRefused, seen.size());
+    if (res) res->saveCache();   // lookups paid this seed persist to disk
 
     QJsonArray channels = readChannels();
     bool found = false;
@@ -4302,7 +4316,6 @@ void VirtualChannelsBackend::finishSeeding() {
         QStringList off;
         for (const QJsonValue &v : presetNow.value(QLatin1String("off")).toArray())
             if (v.isString()) off << v.toString();
-        const bool hadPicks = !m_seedPriorProgrammes.isEmpty();
         for (const QJsonValue &v : std::as_const(m_seedPriorProgrammes)) {
             if (!v.isObject()) { kept.append(v); continue; }
             const QJsonObject e = v.toObject();
@@ -4312,17 +4325,13 @@ void VirtualChannelsBackend::finishSeeding() {
             if (!e.value(QLatin1String("name")).toString().isEmpty())
                 onNames.insert(e.value(QLatin1String("name")).toString().toLower());
         }
-        if (hadPicks) {
-            // An untick since the last seeding left a name off the entries and
-            // out of nothing else: remember it so the next seeding skips it.
-            for (const QJsonValue &v : std::as_const(m_seedPriorProgrammes)) {
-                if (!v.isObject()) continue;
-                const QJsonObject e = v.toObject();
-                if (e.value(QLatin1String("preset")).toString() != recipeKey) continue;
-                const QString n = e.value(QLatin1String("name")).toString().toLower();
-                if (!onNames.contains(n) && !off.contains(n)) off << n;
-            }
-        }
+        // NO untick-inference pass here. The old one (hadPicks) scanned THIS
+        // recipe's prior picks — which the loop above just removed, so every
+        // one of them looked "un-ticked" — and pushed the whole pick set into
+        // off. Any re-seed of a preset channel therefore zeroed it: Horror
+        // seeded 61, the edit-session re-seed landed 0. The UI remembers
+        // un-ticks authoritatively in preset.off (read above: toggle
+        // remembers, re-tick forgets); honour that alone.
         QJsonArray out = kept;
         int added = 0;
         for (const QJsonValue &v : std::as_const(picks)) {
@@ -5259,6 +5268,17 @@ bool VirtualChannelsBackend::set_channel_schedule(int channelNumber, const QStri
 bool VirtualChannelsBackend::isMovieChannel(const QJsonObject &channel) {
     return channel.value(QLatin1String("kind")).toString().trimmed().toLower()
            == QLatin1String("movies");
+}
+
+// Preset recipe kind as stored. Channels written before the type fix carry it
+// as a JSON STRING ("1"), newer ones as a number — and QJsonValue::toInt() on
+// a string is 0, which re-typed every Network/Collection preset into Genre on
+// the next reload: the identity filter never ran and a bogus genres block
+// rode into the server blocks (ABC harvested 21,615 items into 259 picks of
+// the WHOLE library). Read kind with this, never a bare toInt().
+int VirtualChannelsBackend::presetKindOf(const QJsonObject &preset) {
+    const QJsonValue k = preset.value(QLatin1String("kind"));
+    return k.isString() ? k.toString().trimmed().toInt() : k.toInt();
 }
 
 // A selection is the default: a channel that has never been told otherwise

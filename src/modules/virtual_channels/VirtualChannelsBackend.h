@@ -210,6 +210,14 @@ public:
                                           const QString &name,
                                           const QString &wants = QStringLiteral("tv"));
 
+    // Preset recipe kind as stored: channels written before the type fix carry
+    // it as a JSON STRING ("1") and newer ones as a number — QJsonValue::toInt()
+    // on a string is 0, which re-typed every Network/Collection preset into
+    // Genre on reload (identity filter skipped, bogus server block written;
+    // the ABC preset aired all 21,615 library items). Always read preset kind
+    // through this, never a bare toInt().
+    static int presetKindOf(const QJsonObject &preset);
+
     // Stand the preset's content up: ask the connected sources for what the
     // recipe names and write the picks into the channel's pools as concrete
     // series/film entries, so the builder opens with everything already ticked
