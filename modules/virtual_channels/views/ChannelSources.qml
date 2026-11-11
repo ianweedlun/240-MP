@@ -43,11 +43,14 @@ FocusScope {
                     if (cfg.supportsPlaylists) r.push("playlists")
                 } else {
                     r.push("films")
-                    r.push("genres")
-                    r.push("collections")
-                    // Studios exist only where films were built from them —
-                    // a TV channel never has the row, a movie studio channel
-                    // always shows it.
+                    // A preset channel gets its content from its recipe — rows
+                    // for fields it does not carry would be rows offering the
+                    // viewer to hand-build beside a flow that already built.
+                    // Hand-built channels keep the rows: that is how they get
+                    // ticked.
+                    const presetHere = cfg.preset !== "" && cfg.preset !== undefined
+                    if (!presetHere || countOf("genres") > 0) r.push("genres")
+                    if (!presetHere || countOf("collections") > 0) r.push("collections")
                     if (countOf("studios") > 0) r.push("studios")
                 }
             }
@@ -92,7 +95,11 @@ FocusScope {
                 // -- from being a film channel once -- they air, so they are shown.
                 if (countOf("films") > 0)  r.push("films")
                 if (countOf("genres") > 0) r.push("genres")
-                r.push("collections")
+                // Same hide as the movie side: a preset channel that does not
+                // carry collections has no collections row.
+                if (cfg.preset === "" || cfg.preset === undefined
+                    || countOf("collections") > 0)
+                    r.push("collections")
                 if (cfg.supportsPlaylists) r.push("playlists")
             }
             // Blocks say when everything airs, so booking a film to a time and
