@@ -483,6 +483,11 @@ FocusScope {
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             var i = channelRows.currentIndex
+            // During the crawl the ListView model is rows.length * copies, so the
+            // highlight index can sit past the row count. A stray value like that
+            // can outlive the crawl and land on the real row with the same
+            // residue; wrap it before the guard below would otherwise reject it.
+            if (guideRoot.rows.length > 0) i %= guideRoot.rows.length
             if (!guideRoot.autoScroll && i >= 0 && i < guideRoot.rows.length) {
                 var row = guideRoot.rows[i]
                 guideRoot.stopPreview()
