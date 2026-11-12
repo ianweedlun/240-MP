@@ -2174,6 +2174,77 @@ void testPlexTvGenreSeedFiltersShows() {
              "the matching Horror show is in the channel");
 }
 
+void testPresetChannelDefaultsToInterleaved() {
+    section("Backend: preset channel defaults to interleaved so all shows air");
+
+    FakePlexServer plex;
+    plex.libraries = {
+        QVariantMap{{"sectionId", "1"}, {"sectionType", "show"}, {"title", "TV Shows"}},
+    };
+    plex.libraryItems.insert(QStringLiteral("1"), {
+        QVariantMap{{"ratingKey", "10"}, {"type", "show"}, {"title", "PRIVATE SNAFU"},
+                    {"genres", QStringList{"Comedy"}}},
+        QVariantMap{{"ratingKey", "30"}, {"type", "show"}, {"title", "CHEERS"},
+                    {"genres", QStringList{"Comedy"}}},
+    });
+    plex.childrenByKey.insert(QStringLiteral("10"), {
+        QVariantMap{{"ratingKey", "101"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("101"), {
+        QVariantMap{{"ratingKey", "1001"}, {"type", "episode"}, {"title", "Spies"},
+                    {"grandparentTitle", "Private Snafu"}, {"parentIndex", 1}, {"index", 1},
+                    {"originallyAvailableAt", "1943-01-01"}, {"duration", 240000}},
+        QVariantMap{{"ratingKey", "1002"}, {"type", "episode"}, {"title", "Gripes"},
+                    {"grandparentTitle", "Private Snafu"}, {"parentIndex", 1}, {"index", 2},
+                    {"originallyAvailableAt", "1943-07-01"}, {"duration", 240000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("30"), {
+        QVariantMap{{"ratingKey", "301"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("301"), {
+        QVariantMap{{"ratingKey", "3001"}, {"type", "episode"}, {"title", "Give Me a Ring Sometime"},
+                    {"grandparentTitle", "Cheers"}, {"parentIndex", 1}, {"index", 1},
+                    {"originallyAvailableAt", "1982-09-30"}, {"duration", 1380000}}
+    });
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const int ch = b.create_preset_channel(0, QStringLiteral("Comedy"),
+                                           QStringLiteral("Comedy"), QStringLiteral("tv"));
+    check(ch >= 0, "preset channel created");
+    checkStr(fx.read(ch).value(QStringLiteral("order")).toString(),
+             QStringLiteral("interleaved"),
+             "preset channel defaults to interleaved order");
+
+    bool seeded = false, seedOk = false;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == ch) { seeded = true; seedOk = s; }
+                     });
+    b.seed_preset_channel(ch);
+    for (int i = 0; i < 40 && !seeded; ++i) spin(10);
+    check(seeded && seedOk, "Comedy TV genre seed completed");
+
+    bool built = false, buildOk = false;
+    QObject::connect(&b, &VirtualChannelsBackend::generationFinished, &b,
+                     [&](int num, bool ok, const QString &) {
+                         if (num == ch) { built = true; buildOk = ok; }
+                     });
+    b.regenerate(ch);
+    for (int i = 0; i < 60 && !built; ++i) spin(10);
+    check(built && buildOk, "Comedy TV genre channel built");
+
+    QFile sf(fx.data() + "/channels/schedule/" + QString::number(ch) + ".json");
+    check(sf.open(QIODevice::ReadOnly), "schedule file exists");
+    const QJsonObject sched = QJsonDocument::fromJson(sf.readAll()).object();
+    const QJsonArray slotsArr = sched.value(QStringLiteral("slots")).toArray();
+    QSet<QString> seriesInFirstTwo;
+    for (int i = 0; i < qMin(2, slotsArr.size()); ++i)
+        seriesInFirstTwo.insert(slotsArr[i].toObject().value(QStringLiteral("series")).toString());
+    checkEq(seriesInFirstTwo.size(), 2,
+            "first two slots interleave both Private Snafu and Cheers instead of oldest-only");
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -2205,6 +2276,7 @@ int runVirtualChannelsBackendTests() {
     testSeededRecipeReadsBack();
     testGenreRecipeWantsByChannelKind();
     testPlexTvGenreSeedFiltersShows();
+    testPresetChannelDefaultsToInterleaved();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();

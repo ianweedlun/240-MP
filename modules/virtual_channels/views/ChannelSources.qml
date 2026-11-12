@@ -35,10 +35,11 @@ FocusScope {
             // Local files have no playlists, genres or collections: a film is a
             // file under movies/. Offering those rows would be offering a
             // server's furniture to a folder.
+            const presetHere = cfg.preset !== "" && cfg.preset !== undefined
             if (cfg.source === "local") {
                 r.push("films")
             } else {
-                r.push("filmsfrom")
+                if (!presetHere || fromPlaylist) r.push("filmsfrom")
                 if (fromPlaylist) {
                     if (cfg.supportsPlaylists) r.push("playlists")
                 } else {
@@ -48,7 +49,6 @@ FocusScope {
                     // viewer to hand-build beside a flow that already built.
                     // Hand-built channels keep the rows: that is how they get
                     // ticked.
-                    const presetHere = cfg.preset !== "" && cfg.preset !== undefined
                     if (!presetHere || countOf("genres") > 0) r.push("genres")
                     if (!presetHere || countOf("collections") > 0) r.push("collections")
                     if (countOf("studios") > 0) r.push("studios")
@@ -85,15 +85,9 @@ FocusScope {
         // bumpers, so the pools are not read at all -- offering them here would
         // be a second place to say what airs, and the quieter of the two would
         // be the one that lied.
+        const presetHere = cfg.preset !== "" && cfg.preset !== undefined
         if (!onADayPlan) {
             if (cfg.source === "local") {
-                // Local files are a library like any other source: the two things a
-                // media folder can hold, straight off this screen. There is no
-                // intermediate list, and no offer to add from a server the channel
-                // is not sourced from.
-                // Films are not a pool: they are booked into Movie Slots, which is
-                // the row below. A flat list of films would air them as ordinary
-                // programmes and duplicate that mechanism.
                 r.push("series")
             } else if (cfg.source !== undefined) {
                 r.push("series")
@@ -103,14 +97,16 @@ FocusScope {
                 if (countOf("genres") > 0) r.push("genres")
                 // Same hide as the movie side: a preset channel that does not
                 // carry collections has no collections row.
-                if (cfg.preset === "" || cfg.preset === undefined
-                    || countOf("collections") > 0)
+                if (!presetHere || countOf("collections") > 0)
                     r.push("collections")
-                if (cfg.supportsPlaylists) r.push("playlists")
+                if (cfg.supportsPlaylists && (!presetHere || countOf("playlists") > 0))
+                    r.push("playlists")
             }
             // Blocks say when everything airs, so booking a film to a time and
-            // choosing an order are both the plan's to decide.
-            r.push("slots")
+            // choosing an order are both the plan's to decide. Hide Movie Slots
+            // on TV presets unless slots already exist.
+            if (!presetHere || sourcesRoot.slotCount > 0)
+                r.push("slots")
             r.push("order")
         }
         // How much plays between programmes is only this row's to say when
@@ -363,9 +359,9 @@ FocusScope {
         case "ads":         return "How many things play between programs, after the outro."
         case "breaks":      return "What plays between programs: intros, bumps, commercials and outros."
         case "rebuild":     return "Build the schedule so source changes actually air."
-        case "seed":       return "Run what built this channel again. Everything the library has for it now is added, and what you took out stays out — "
-                                   + (cfg.presetOff > 0 ? cfg.presetOff + " is switched off here."
-                                                       : "nothing is.")
+        case "seed":       return "Refresh this channel's pool from its recipe to add new library matches. Already seeded on creation; anything you removed stays out — "
+                                  + (cfg.presetOff > 0 ? cfg.presetOff + " is switched off here."
+                                                      : "nothing is.")
         case "rename":      return "Change what this channel is called."
         case "delete":      return sourcesRoot.armedToDelete
                                    ? "Press again to remove this channel, or move away to keep it."
@@ -556,6 +552,9 @@ FocusScope {
         var restore = navListState.currentIndex
         applyPendingRename()
         reload()
+        if (navParams.seedSummary && status === "")
+            status = "Seeded " + navParams.seedSummary + " — open "
+                     + (isMovies ? "Films" : "Series") + " to adjust, then Build Channel"
         if (restore !== undefined) current = Math.min(restore, rowCount - 1)
     }
 

@@ -88,7 +88,8 @@ FocusScope {
                 subjectRoot.navigateTo("ChannelSources.qml", {
                     moduleId:      subjectRoot.moduleId,
                     channelNumber: subjectRoot.seedChannel,
-                    channelName:   subjectRoot.seedName
+                    channelName:   subjectRoot.seedName,
+                    seedSummary:   message
                 }, {})
             } else {
                 // Nothing filled the channel, so nothing goes on the dial.

@@ -4367,7 +4367,9 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     ch["number"]        = number;
     ch["name"]          = wanted;
     ch["seed"]          = number;
-    ch["order"]         = QStringLiteral("broadcast");
+    // Multi-show preset channels interleave series so each show gets a turn;
+    // broadcast order would let the single oldest show monopolize the horizon.
+    ch["order"]         = QStringLiteral("interleaved");
     ch["ads_per_break"] = 0;
     // The viewer's preset flow asks TV or movies, and the channel is built as
     // one from the start: the recipe's content is looked for among shows or
