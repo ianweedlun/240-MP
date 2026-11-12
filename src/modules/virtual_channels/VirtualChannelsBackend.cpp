@@ -219,11 +219,15 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
     m_genTimer->setInterval(0);
     connect(m_genTimer, &QTimer::timeout, this, &VirtualChannelsBackend::onGenerationTick);
 
-    // The presence walks page a whole library at a time, so their watchdog is
-    // looser than a single request's.
+    // The presence walks page a whole library at a time, so this watchdog is
+    // a backstop for a hung source, not a per-page budget: the source layer's
+    // own per-request watchdog already catches a stalled page request
+    // (requestTimeout hands the failure and the walk finishes short). Fifteen
+    // minutes of total silence means the source never answers at all — the
+    // batch comes back empty and that source's rows keep standing.
     m_walkTimer = new QTimer(this);
     m_walkTimer->setSingleShot(true);
-    m_walkTimer->setInterval(3 * kServerTimeoutMs);
+    m_walkTimer->setInterval(15 * 60 * 1000);
     connect(m_walkTimer, &QTimer::timeout, this, [this] {
         if (!m_presenceWalkActive) return;
         onPresenceReady(QString(), {}, {});
