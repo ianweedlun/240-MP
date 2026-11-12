@@ -632,6 +632,34 @@ int runMediaServerSourceTests() {
                     askedForShows = true;
             check(askedForShows,
                   "a genre scan asks for the show rows beside the episodes");
+
+            // Torture: match and genre ride the same OR road — both roads air
+            // their own shows and neither poisons the other.
+            {
+                FakeMediaServer fake2;
+                fake2.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+                fake2.itemsFor["tv1|Series,Episode"] = QVariantList{
+                    QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                                {"title", "Cartoon Classics"},
+                                {"genres", QVariantList{ QStringLiteral("Comedy") }}},
+                    QVariantMap{{"itemId", "s2"}, {"type", "series"},
+                                {"title", "Case Files"},
+                                {"genres", QVariantList{ QStringLiteral("Documentary") }}},
+                    FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                    FakeMediaServer::episode("e9", "s2", "Case Files", 1, 1, 60000),
+                };
+                MediaServerSource src2;
+                src2.setBackend(SlotSource::Jellyfin, &fake2);
+                Result r2; r2.attach(&src2);
+                MediaServerSource::Request req2;
+                req2.src    = SlotSource::Jellyfin;
+                req2.match  = QStringList{ QStringLiteral("Case Files") };
+                req2.genres = QStringList{ QStringLiteral("comedy") };
+                check(src2.enumerate(req2), "starts");
+                check(r2.finished && !r2.failed, "completes");
+                checkEq(r2.items.size(), 2,
+                        "match road AND genre road both contribute — OR, not AND");
+            }
         }
     }
 
