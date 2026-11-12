@@ -32,8 +32,12 @@ void TVDBNetworkResolver::noteNetworkCatalog(const QVector<Subject> &networks) {
     for (const Subject &s : networks) {
         // A network's catalog row carries both halves of the join: the name
         // the shelves use and the id TheTVDB answers with. Feeding both
-        // directions keeps either lookup a single hash hit.
-        m_networkIds.insert(s.name.toLower(), s.id);
+        // directions keeps either lookup a single hash hit. A listing can
+        // carry the same network name twice (two ids, one label — the
+        // umbrella companies do this); first row wins so the join is
+        // deterministic regardless of the server's listing order.
+        if (!m_networkIds.contains(s.name.toLower()))
+            m_networkIds.insert(s.name.toLower(), s.id);
         m_reverseNetworks.insert(s.id, s.name);
     }
 }

@@ -174,6 +174,32 @@ int runTVDBNetworkResolverTests() {
                                               QStringLiteral("networks")).size(), 1,
                                "while the fresh row reads back");
             }
+            {
+                // The join is keyed by NAME (shelves speak names, TheTVDB
+                // answers ids), so the catalog listing answers for the
+                // walked show. A listing that carries the same label twice
+                // — two ids, one umbrella company — is first-wins, not
+                // listing-order luck: the walked network must keep the first
+                // row's id even when a later row says otherwise.
+                QVector<Subject> dup(2);
+                dup[0].kind = SubjectKind::Network; dup[0].id = QStringLiteral("2109");
+                dup[0].name = QStringLiteral("Cargo Media");
+                dup[1].kind = SubjectKind::Network; dup[1].id = QStringLiteral("9999");
+                dup[1].name = QStringLiteral("Cargo Media");
+                QVector<vchan::LibraryRecord> walked(1);
+                vchan::LibraryRecord &w = walked.first();
+                w.src = QStringLiteral("Jellyfin"); w.channel = QStringLiteral("tv");
+                w.title = QStringLiteral("Dupped Show");
+                w.networks = QStringList{ QStringLiteral("Cargo Media") };
+                w.updatedMs = 3;
+                vtest::check(db.replaceAll(walked), "the walked show is indexed");
+                TVDBNetworkResolver joiner("00000000-0000-0000-0000-000000000000");
+                joiner.useIndex(&db);
+                joiner.noteNetworkCatalog(dup);
+                MediaItem m; m.series = QStringLiteral("Dupped Show");
+                vtest::checkStr(joiner.networkIdFor(m), QStringLiteral("2109"),
+                                "a duplicated label joins first-wins");
+            }
         }
         db.close();
         QFile::remove(dbPath);
