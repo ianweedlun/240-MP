@@ -166,6 +166,27 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
             this, &VirtualChannelsBackend::onServerBrowseReady);
     connect(m_server, &MediaServerSource::browseFailed,
             this, &VirtualChannelsBackend::onServerBrowseFailed);
+    connect(m_server, &MediaServerSource::presenceReady,
+            this, &VirtualChannelsBackend::onPresenceReady);
+
+    // The launch walk for the library index: the shelves are the source of
+    // truth for what the add-flow may offer, so the walks start with the app.
+    // The index file opens here (not on first question) so a walk can merge
+    // into whatever an earlier launch left behind.
+    if (!m_libraryDb.open(dataRoot + QStringLiteral("/library.db")))
+        qInfo("[VirtualChannels] library index unavailable this run — "
+              "the add-flow keeps its catalog path");
+    if (libraryWalkEnabled()) {
+        using S = vchan::SlotSource;
+        for (S src : { S::Plex, S::Jellyfin, S::Emby }) {
+            if (!m_server->available(src)) continue;
+            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("tv") };
+            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("movies") };
+        }
+        QTimer::singleShot(kPresenceWalkDelayMs, this, [this] {
+            startNextPresenceWalk();
+        });
+    }
 
     // A pending collection catalog rides the same browse signals a source
     // browser uses; route them to the catalog when one is loading.
@@ -197,6 +218,16 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
     m_genTimer = new QTimer(this);
     m_genTimer->setInterval(0);
     connect(m_genTimer, &QTimer::timeout, this, &VirtualChannelsBackend::onGenerationTick);
+
+    // The presence walks page a whole library at a time, so their watchdog is
+    // looser than a single request's.
+    m_walkTimer = new QTimer(this);
+    m_walkTimer->setSingleShot(true);
+    m_walkTimer->setInterval(3 * kServerTimeoutMs);
+    connect(m_walkTimer, &QTimer::timeout, this, [this] {
+        if (!m_presenceWalkActive) return;
+        onPresenceReady(QString(), {}, {});
+    });
 
     repairSpecialNumbers();
     QTimer::singleShot(kStartupSweepDelayMs, this, [this] { top_up_schedules(); });
@@ -3393,6 +3424,85 @@ void VirtualChannelsBackend::onServerBrowseFailed(const QString &kind, const QSt
     emit sourceBrowseFailed(kind, reason);
 }
 
+// ---- the library index walk --------------------------------------------------
+// One queued walk per configured source per side of the dial. The walks share
+// the source layer (single-flight), so they queue behind each other; an answer
+// that never arrives is caught by the watchdog and handed an empty batch, which
+// leaves that source's rows at their last known lineup.
+void VirtualChannelsBackend::startNextPresenceWalk() {
+    if (m_presenceQueue.isEmpty()) {
+        m_presenceWalkActive = false;
+        return;
+    }
+    const QPair<vchan::SlotSource, QString> job = m_presenceQueue.takeFirst();
+    m_presenceWalkActive = true;
+    const bool started = m_server->presence(job.first, QStringList(), job.second);
+    if (started) {
+        m_walkTimer->start();
+        return;
+    }
+    // Not free to start now (another job owns the source): try again shortly
+    // rather than dropping the walk.
+    QTimer::singleShot(2000, this, [this] { startNextPresenceWalk(); });
+}
+
+void VirtualChannelsBackend::onPresenceReady(const QString &provider,
+                                             const QVector<vchan::LibraryRecord> &records,
+                                             const QVariantList &collectionRows) {
+    m_walkTimer->stop();
+    if (records.isEmpty() && collectionRows.isEmpty()) {
+        // Nothing in hand: the source was unreachable or its walk failed. The
+        // index keeps what it had; saying so is the whole report.
+        if (!provider.isEmpty())
+            qWarning("[VirtualChannels] presence walk for %s brought nothing back — its rows keep the last known lineup",
+                     qPrintable(provider));
+        startNextPresenceWalk();
+        return;
+    }
+    QString why;
+    if (!m_libraryDb.mergeAndRebuild(records, &why) && !why.isEmpty())
+        qWarning("[VirtualChannels] index rejected the walk's rows: %s", qPrintable(why));
+    if (!m_libraryDb.applyPresenceRows(collectionRows, &why) && !why.isEmpty())
+        qWarning("[VirtualChannels] index rejected the walk's collection rows: %s", qPrintable(why));
+    startNextPresenceWalk();
+}
+
+// The walk is the module's own setting: the shelves are what the add-flow
+// offers from, but a viewer who turns it off keeps the catalog path and pays
+// no listing cost at launch. Anything but the word off means walk.
+bool VirtualChannelsBackend::libraryWalkEnabled() const {
+    QFile f(m_dataRoot + QStringLiteral("/config.json"));
+    if (!f.open(QIODevice::ReadOnly))
+        return true;
+    const QJsonObject modules = QJsonDocument::fromJson(f.readAll()).object()
+                                    .value(QLatin1String("modules")).toObject();
+    const QString mode = modules.value(QLatin1String(kModuleId)).toObject()
+                             .value(QLatin1String("library_walk")).toString();
+    return mode.trimmed() != QStringLiteral("off");
+}
+
+// What the shelves can actually air, in the shape the add-flow's option rows
+// want: most present first, each row carrying its count. An index that has
+// never been walked reads empty and the UI keeps the catalog list — presence
+// only replaces a guess once the walk has sworn it knows.
+QVariantList VirtualChannelsBackend::library_presence(const QString &subjectKind,
+                                                      const QString &channel,
+                                                      int limit) const {
+    return m_libraryDb.presence(subjectKind, channel, limit);
+}
+
+// The count behind one option row, so a dial can say what a category would
+// actually fill.
+int VirtualChannelsBackend::library_count_for(const QString &subjectKind,
+                                              const QString &value,
+                                              const QString &channel) const {
+    return m_libraryDb.countFor(subjectKind, value, channel);
+}
+
+bool VirtualChannelsBackend::library_index_known() const {
+    return !m_libraryDb.isEmpty();
+}
+
 void VirtualChannelsBackend::rebuild_all() {
     if (m_genActive || m_rebuildTotal > 0) {
         emit actionStatus(QStringLiteral("A rebuild is already running"));
@@ -4019,10 +4129,68 @@ TVDBNetworkResolver *VirtualChannelsBackend::resolver() {
     // Persist lookups across boots (the "database of relevant results"): a
     // seed must never re-pay TheTVDB for titles a previous session resolved.
     m_resolver->loadCache(m_dataRoot + QStringLiteral("/tvdb-network-cache.json"));
+    // The presence index answers an even bigger share: a show the shelves
+    // already named a network for never pays TheTVDB at all, cold or warm.
+    m_resolver->useIndex(&m_libraryDb);
     return m_resolver;
 }
 
 void VirtualChannelsBackend::load_catalog(const QString &kind) {
+    // The shelves answer first when a walk has run. Presence is not a guess
+    // wrapped in the old path — it replaces a list the catalog cannot prove,
+    // and the count per row is what lets a dial prefer a rich category.
+    // A fresh app (never walked) and a viewer who turned the walk off keep
+    // the catalog path below, byte for byte.
+    // Collections and studios were always the library's own answer; the walk
+    // makes that answer cheap (no browse at all) and adds the counts.
+    if (libraryWalkEnabled() && !m_libraryDb.isEmpty()) {
+        // A network preset still needs TheTVDB's id to seed the channel, so
+        // the network kind joins presence onto the one listing it pays — what
+        // it stops paying is a search per title at seed time, and the
+        // resolver's index join does that per show instead.
+        const bool networkKind = (kind == QLatin1String("network"));
+        const bool genreKind = (kind == QLatin1String("genre"));
+        const bool collectionKind = (kind == QLatin1String("moviecollections")
+                                     || kind == QLatin1String("tvcollections"));
+        const bool studioKind = (kind == QLatin1String("studio"));
+        if (networkKind || genreKind || collectionKind || studioKind) {
+            const QString subjectKind = networkKind ? QStringLiteral("network")
+                                  : (studioKind ? QStringLiteral("studio")
+                                                : (collectionKind ? QStringLiteral("collection")
+                                                                  : QStringLiteral("genre")));
+            const QString chan = (kind == QLatin1String("genre")
+                                  || kind == QLatin1String("network")
+                                  || kind == QLatin1String("tvcollections"))
+                                     ? QStringLiteral("tv") : QStringLiteral("movies");
+            QVariantList rows = m_libraryDb.presence(subjectKind, chan, 60);
+            if (networkKind && !rows.isEmpty()) {
+                TVDBNetworkResolver *res = resolver();
+                if (res) {
+                    const QVector<Subject> listing = res->listNetworks();
+                    res->noteNetworkCatalog(listing);
+                    QHash<QString, QString> ids;
+                    for (const Subject &s : listing) ids.insert(s.name.toLower(), s.id);
+                    QVariantList joined;
+                    for (const QVariant &row : rows) {
+                        QVariantMap m = row.toMap();
+                        const QString id = ids.value(
+                            m.value(QStringLiteral("id")).toString().toLower());
+                        if (id.isEmpty()) continue;  // the shelves name it, TheTVDB cannot seed it
+                        m.insert(QStringLiteral("id"), id);
+                        joined.append(m);
+                    }
+                    if (!joined.isEmpty()) {
+                        emit catalogReady(kind, joined);
+                        return;
+                    }
+                }
+            } else if (!rows.isEmpty()) {
+                emit catalogReady(kind, rows);
+                return;
+            }
+        }
+    }
+
     // Collections have no TheTVDB list endpoint; they come from the connected
     // media server. Kick off the existing browse and let onCatalogBrowseReady
     // deliver the result once it lands.
@@ -4059,7 +4227,13 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
 
     QVector<Subject> subjects;
     if (kind == QStringLiteral("genre"))      subjects = res->listGenres();
-    else if (kind == QStringLiteral("network")) subjects = res->listNetworks();
+    else if (kind == QStringLiteral("network")) {
+        subjects = res->listNetworks();
+        // The network listing is the only place a network's name meets its
+        // id. Handing it to the resolver makes the join free for every
+        // later network question, including the ones behind the walks.
+        res->noteNetworkCatalog(subjects);
+    }
     else { emit catalogFailed(kind, "Unknown recipe"); return; }
 
     emit catalogReady(kind, subjectsToOptions(subjects));

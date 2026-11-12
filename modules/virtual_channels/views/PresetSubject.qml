@@ -113,7 +113,15 @@ FocusScope {
         status: subjectRoot.status
         emptyText: subjectRoot.emptyText
         labelFor: function(i) { return String(subjectRoot.rows[i].label) }
-        valueFor: function(i) { return "" }
+        // When the shelves answered (a walk ran), every row carries how many
+        // titles actually carry it — a dial can prefer a rich category instead
+        // of guessing from an alphabetic catalog list. A catalog row without
+        // a count stays blank: blank never claims "zero".
+        valueFor: function(i) {
+            var c = subjectRoot.rows[i].count
+            if (c === undefined || c === null || c <= 0) return ""
+            return String(c) + " " + (subjectRoot.wants === "movies" ? "titles" : "shows")
+        }
         onActivate: function(i) {
             if (subjectRoot.seeding) return
             var id   = String(subjectRoot.rows[i].id)
