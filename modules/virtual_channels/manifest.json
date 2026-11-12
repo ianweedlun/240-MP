@@ -92,6 +92,7 @@
       "label": "Guide Music",
       "type": "toggle",
       "default": "OFF",
+      "requires_module": "com.240mp.weather",
       "description": "Play the Weather module's music over the guide. Needs its Music setting on."
     }
   ]
