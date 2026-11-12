@@ -3494,22 +3494,27 @@ void VirtualChannelsBackend::startNextPresenceWalk() {
                                                                          : QStringLiteral("Emby");
     if (++m_presenceRetries > 5) {
         // Auth never landed for this source this launch (Plex waiting for a
-        // PIN is the common case): dropping the job is honest — standing rows
-        // stay standing and the next launch walks again from the top.
-        m_presenceQueue.removeAt(0);
-        m_presenceWalkStarted.insert(srcName + QStringLiteral("/") + job.second);
-        qWarning("[VirtualChannels] presence walk skipped for %s/%s this launch — "
+        // PIN is the common case): the WHOLE source drops, both sides —
+        // the second side burning its own fresh budget was ten seconds of
+        // doomed paging requests per dark module every boot. Standing rows
+        // stay standing; the next launch walks again from the top.
+        m_presenceQueue.removeIf([src = job.first](const QPair<vchan::SlotSource, QString> &pending) {
+            return pending.first == src;
+        });
+        m_presenceWalkStarted.insert(srcName + QStringLiteral("/tv"));
+        m_presenceWalkStarted.insert(srcName + QStringLiteral("/movies"));
+        qWarning("[VirtualChannels] presence walk skipped for %s this launch — "
                  "the source never reached auth; its rows keep the last known lineup",
-                 qPrintable(srcName), qPrintable(job.second));
+                 qPrintable(srcName));
         if (!m_presenceQueue.isEmpty())
-            QTimer::singleShot(2000, this, [this] { startNextPresenceWalk(); });
+            QTimer::singleShot(5000, this, [this] { startNextPresenceWalk(); });
         return;
     }
     m_presenceWalkActive = false;
     qInfo("[VirtualChannels] presence walk retry for %s/%s — source %s left standing "
           "(the index keeps its last-known lineup)",
           qPrintable(srcName), qPrintable(job.second), qPrintable(srcName));
-    QTimer::singleShot(2000, this, [this] { startNextPresenceWalk(); });
+    QTimer::singleShot(5000, this, [this] { startNextPresenceWalk(); });
 }
 
 void VirtualChannelsBackend::onPresenceReady(const QString &provider,
