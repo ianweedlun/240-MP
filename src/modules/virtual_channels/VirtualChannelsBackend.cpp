@@ -3464,10 +3464,23 @@ void VirtualChannelsBackend::startNextPresenceWalk() {
     // Not free to start now (another job owns the source): the job is put back
     // at the head and tried again shortly, never dropped.
     m_presenceQueue.insert(m_presenceQueue.begin(), job);
-    m_presenceWalkActive = false;
     const QString srcName = (job.first == vchan::SlotSource::Plex)       ? QStringLiteral("Plex")
                           : (job.first == vchan::SlotSource::Jellyfin)   ? QStringLiteral("Jellyfin")
                                                                          : QStringLiteral("Emby");
+    if (++m_presenceRetries > 5) {
+        // Auth never landed this launch (Plex waiting for a PIN is the common
+        // case): dropping the job is honest — the index keeps standing rows
+        // and the next launch walks again from the top.
+        m_presenceQueue.removeAt(0);
+        m_presenceRetries = 0;
+        qWarning("[VirtualChannels] presence walk skipped for %s/%s this launch — "
+                 "the source never reached auth; its rows keep the last known lineup",
+                 qPrintable(srcName), qPrintable(job.second));
+        if (!m_presenceQueue.isEmpty())
+            QTimer::singleShot(2000, this, [this] { startNextPresenceWalk(); });
+        return;
+    }
+    m_presenceWalkActive = false;
     qInfo("[VirtualChannels] presence walk retry for %s/%s — source %s left standing "
           "(the index keeps its last-known lineup)",
           qPrintable(srcName), qPrintable(job.second), qPrintable(srcName));
@@ -3490,7 +3503,11 @@ void VirtualChannelsBackend::onPresenceReady(const QString &provider,
     QString why;
     if (!m_libraryDb.mergeAndRebuild(records, &why) && !why.isEmpty())
         qWarning("[VirtualChannels] index rejected the walk's rows: %s", qPrintable(why));
-    if (!m_libraryDb.applyPresenceRows(collectionRows, &why) && !why.isEmpty())
+    if (!records.isEmpty())
+        qInfo("[VirtualChannels] library index rebuilt: %d rows merged for %s",
+              records.size(), qPrintable(provider));
+    if (!collectionRows.isEmpty()
+        && !m_libraryDb.applyPresenceRows(collectionRows, &why) && !why.isEmpty())
         qWarning("[VirtualChannels] index rejected the walk's collection rows: %s", qPrintable(why));
     startNextPresenceWalk();
 }

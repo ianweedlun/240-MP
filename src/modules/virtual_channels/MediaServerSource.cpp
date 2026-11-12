@@ -413,6 +413,25 @@ bool MediaServerSource::presence(SlotSource src, const QStringList &libraries,
     if (side != QLatin1String("tv") && side != QLatin1String("movies")) return false;
     QObject *b = backend(src);
     if (!b) return false;
+    // The dial does not walk through a handshake: a backend that has not
+    // authenticated yet would answer with an empty library, and an empty
+    // answer merged into the index would wipe everything the dial knows.
+    // has_auth() is the backend's own truth (Jellyfin/Emby carry it; Plex's
+    // token path is gated where its own browse pays, so Plex has no such
+    // method and its walks stay as they are — the retry loop keeps its
+    // jobs until auth lands).
+    // The dial does not walk through a handshake: a backend that has not
+    // authenticated yet answers with an empty library, and an empty answer
+    // merged into the index would wipe everything the dial knows. get_auth_state()
+    // is the trio's uniform truth ("authed"; Plex also says "none"/"needs_user"
+    // while its boot handshake is in flight) — a source that is not authed
+    // simply keeps its walk jobs queued until the state lands.
+    {
+        QString authState;
+        const bool answered = QMetaObject::invokeMethod(b, "get_auth_state", &authState);
+        if (answered && authState != QLatin1String("authed"))
+            return false;   // auth still in flight — the job retries, it does not walk dark
+    }
 
     reset();
     m_active = b;
