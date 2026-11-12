@@ -3430,19 +3430,35 @@ void VirtualChannelsBackend::onServerBrowseFailed(const QString &kind, const QSt
 // that never arrives is caught by the watchdog and handed an empty batch, which
 // leaves that source's rows at their last known lineup.
 void VirtualChannelsBackend::seedPresenceWalks() {
-    if (!m_presenceQueue.isEmpty()) return;   // already seeded (retry ticks)
+    // Offered every tick, not once: backends construct asynchronously, so a
+    // single seed at one moment can drop a source that would auth moments
+    // later (the Pi proved it — Plex absent from the 4s seed, its device
+    // handshake lands after). Sources whose walk already ran stay out.
+    if (m_presenceWalkStarted.size() >= 6) return;   // all three sources, both sides
     using S = vchan::SlotSource;
     for (S src : { S::Plex, S::Jellyfin, S::Emby }) {
-        if (!m_server->available(src)) continue;
-        m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("tv") };
-        m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("movies") };
+        const QString name = (src == S::Plex) ? QStringLiteral("Plex")
+                           : (src == S::Jellyfin) ? QStringLiteral("Jellyfin")
+                                                  : QStringLiteral("Emby");
+        bool queued = false;
+        for (const auto &job : m_presenceQueue)
+            if (job.first == src) { queued = true; break; }
+        if (queued) continue;
+        if (m_presenceWalkStarted.contains(name + QStringLiteral("/tv"))
+            && m_presenceWalkStarted.contains(name + QStringLiteral("/movies")))
+            continue;   // both sides walked or dropped this launch
+        if (!m_server->available(src)) continue;   // auth gate inside presence()
+        const bool tvDone = m_presenceWalkStarted.contains(name + QStringLiteral("/tv"));
+        const bool mvDone = m_presenceWalkStarted.contains(name + QStringLiteral("/movies"));
+        if (!tvDone)
+            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("tv") };
+        if (!mvDone)
+            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("movies") };
     }
-    if (m_presenceQueue.isEmpty())
-        qInfo("[VirtualChannels] no media server connected at walk time — "
-              "the index keeps whatever an earlier launch left standing");
 }
 
 void VirtualChannelsBackend::startNextPresenceWalk() {
+    seedPresenceWalks();
     if (m_presenceQueue.isEmpty()) {
         m_presenceWalkActive = false;
         return;
@@ -3458,21 +3474,30 @@ void VirtualChannelsBackend::startNextPresenceWalk() {
     m_presenceWalkActive = true;
     const bool started = m_server->presence(job.first, QStringList(), job.second);
     if (started) {
+        const QString name = (job.first == vchan::SlotSource::Plex)       ? QStringLiteral("Plex")
+                           : (job.first == vchan::SlotSource::Jellyfin)   ? QStringLiteral("Jellyfin")
+                                                                          : QStringLiteral("Emby");
+        m_presenceWalkStarted.insert(name + QStringLiteral("/") + job.second);
         m_walkTimer->start();
         return;
     }
-    // Not free to start now (another job owns the source): the job is put back
-    // at the head and tried again shortly, never dropped.
+    // Not free to start now (auth still in flight, or another job owns the
+    // source): the head job gets its own bounded budget — five tries for
+    // THIS job, never a budget shared with the job behind it.
+    if (m_presenceRetriedJob != job) {
+        m_presenceRetriedJob = job;
+        m_presenceRetries = 0;
+    }
     m_presenceQueue.insert(m_presenceQueue.begin(), job);
     const QString srcName = (job.first == vchan::SlotSource::Plex)       ? QStringLiteral("Plex")
                           : (job.first == vchan::SlotSource::Jellyfin)   ? QStringLiteral("Jellyfin")
                                                                          : QStringLiteral("Emby");
     if (++m_presenceRetries > 5) {
-        // Auth never landed this launch (Plex waiting for a PIN is the common
-        // case): dropping the job is honest — the index keeps standing rows
-        // and the next launch walks again from the top.
+        // Auth never landed for this source this launch (Plex waiting for a
+        // PIN is the common case): dropping the job is honest — standing rows
+        // stay standing and the next launch walks again from the top.
         m_presenceQueue.removeAt(0);
-        m_presenceRetries = 0;
+        m_presenceWalkStarted.insert(srcName + QStringLiteral("/") + job.second);
         qWarning("[VirtualChannels] presence walk skipped for %s/%s this launch — "
                  "the source never reached auth; its rows keep the last known lineup",
                  qPrintable(srcName), qPrintable(job.second));

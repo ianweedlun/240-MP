@@ -667,6 +667,8 @@ private:
     QVariantList m_walkRows;
     bool                        m_presenceWalkActive = false;  // a job is in flight when true
     int                         m_presenceRetries = 0;   // per-job auth retries (bounded)
+    QPair<vchan::SlotSource, QString> m_presenceRetriedJob;    // budget owner
+    QSet<QString>                m_presenceWalkStarted;   // "Source/side" walked or dropped
     QTimer *m_walkTimer = nullptr;
     void    onServerEnumerationFinished(const QVector<vchan::MediaItem> &items);
     void    onServerEnumerationFailed(const QString &reason);
