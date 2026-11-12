@@ -428,7 +428,8 @@ bool MediaServerSource::presence(SlotSource src, const QStringList &libraries,
     // simply keeps its walk jobs queued until the state lands.
     {
         QString authState;
-        const bool answered = QMetaObject::invokeMethod(b, "get_auth_state", &authState);
+        const bool answered = QMetaObject::invokeMethod(
+            b, "get_auth_state", Q_RETURN_ARG(QString, authState));
         if (answered && authState != QLatin1String("authed"))
             return false;   // auth still in flight — the job retries, it does not walk dark
     }
