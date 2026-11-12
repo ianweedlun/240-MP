@@ -4,9 +4,15 @@
 // no-op mixer, which is exactly the path exercised here.
 #include <QTest>
 
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include "audio/ALSAVolumeMixer.h"
 #include "audio/NoopVolumeMixer.h"
 #include "audio/PipeWireVolumeMixer.h"
+#include "audio/VolumeManager.h"
 #include "audio/VolumeMixerFactory.h"
 
 using namespace audio;
@@ -56,6 +62,48 @@ private Q_SLOTS:
     void testFactoryDeterministic() {
         QCOMPARE(makeSystemVolumeMixer()->backendName(),
                  makeSystemVolumeMixer()->backendName());
+    }
+
+    // The central owner: clamps at both ends, mute separate from level,
+    // persistence restores across a fresh manager on the same data root.
+    void testVolumeManagerLevel() {
+        VolumeManager vm(QDir::current().filePath(QStringLiteral("vtm")));
+        vm.setLevel(150);
+        QCOMPARE(vm.level(), 100);
+        vm.setLevel(-10);
+        QCOMPARE(vm.level(), 0);
+        vm.setLevel(55);
+        QCOMPARE(vm.level(), 55);
+    }
+
+    void testVolumeManagerMuteSeparate() {
+        VolumeManager vm(QDir::current().filePath(QStringLiteral("vtm-sep")));
+        vm.setLevel(55);
+        vm.toggleMute();
+        QCOMPARE(vm.level(), 55);
+        QCOMPARE(vm.muted(), true);
+        // Raising volume while muted unmutes at the new level.
+        vm.changeVolume(5);
+        QCOMPARE(vm.level(), 60);
+        QCOMPARE(vm.muted(), false);
+    }
+
+    // Persistence: the saved level/mute survive a fresh launch of the SAME
+    // mixer backend family (real PipeWire/ALSA hold their own state; the
+    // noop mixer answers honestly that it changed nothing — the file is
+    // still written, which is the contract that matters for the Pi).
+    void testVolumeManagerPersistence() {
+        const QString root = QDir::current().filePath(QStringLiteral("vtm-persist"));
+        VolumeManager vm(root);
+        vm.setLevel(61);
+        vm.toggleMute();
+        QVERIFY(vm.persist());
+        QFile f(QDir(root).filePath(QStringLiteral("volume.json")));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QJsonObject saved = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+        QCOMPARE(saved.value(QStringLiteral("level")).toInt(), 61);
+        QCOMPARE(saved.value(QStringLiteral("muted")).toBool(), true);
     }
 };
 
