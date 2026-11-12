@@ -19,12 +19,31 @@ QString asId(const QJsonValue &v) {
 
 } // namespace
 
-QVector<Subject> Catalog::parseGenres(const QJsonObject &body) {
+QVector<Subject> Catalog::parseGenres(const QJsonObject &body, const QString &wants) {
     QVector<Subject> out;
     for (const QJsonValue &v : body.value(QStringLiteral("data")).toArray()) {
         const QJsonObject o = v.toObject();
         const QString name = o.value(QStringLiteral("name")).toString().trimmed();
         if (name.isEmpty()) continue;
+
+        // The row's content kind. TheTVDB keeps the two name spaces separate
+        // ("Comedy" exists as both a series genre and a movie genre), so the
+        // label — not the name — is what decides which recipe may offer it.
+        // Anything unrecognised (an API revision that stops labelling rows, or
+        // a third kind) stays in BOTH lists: over-hiding an existing channel
+        // is a worse regression than offering a row the library turns out not
+        // to fill, which the seed step already refuses with a message.
+        const QString type = o.value(QStringLiteral("type")).toString().trimmed().toLower();
+        if (!wants.isEmpty()) {
+            const bool movieRow = (type == QStringLiteral("movie") || type == QStringLiteral("film"));
+            const bool seriesRow = (type == QStringLiteral("series"));
+            if (wants == QStringLiteral("tv")) {
+                if (movieRow) continue;         // films-only genre on a shows channel
+            } else if (wants == QStringLiteral("movies")) {
+                if (seriesRow) continue;        // shows-only genre on a films channel
+            }
+        }
+
         Subject s;
         s.kind = SubjectKind::Genre;
         s.id = asId(o.value(QStringLiteral("id")));

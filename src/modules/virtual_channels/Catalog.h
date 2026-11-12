@@ -22,7 +22,18 @@ namespace vchan {
 class Catalog {
 public:
     // Subjects from a /genres response body. id may be an int or a string.
-    static QVector<Subject> parseGenres(const QJsonObject &body);
+    //
+    // A genre row is only usable by a recipe that airs the kind of content the
+    // row was filed under: TheTVDB files the SAME name twice, once as a series
+    // genre and once as a movie genre, and offering the movie rows on a TV
+    // recipe (or the series rows on a films recipe) advertises a channel the
+    // library cannot fill. `wants` narrows the list: "tv" keeps series rows,
+    // "movies" keeps movie rows, empty keeps everything (the legacy union).
+    // A row with NO type field belongs to both lists — dropping unlabelled
+    // rows would silently empty a catalog on an API revision that stops
+    // labelling them.
+    static QVector<Subject> parseGenres(const QJsonObject &body,
+                                        const QString &wants = QString());
 
     // Subjects from a /companies body joined against a /companies/types body.
     // Only companies whose type name is exactly "network" are kept.
