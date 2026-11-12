@@ -177,13 +177,13 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
         qInfo("[VirtualChannels] library index unavailable this run — "
               "the add-flow keeps its catalog path");
     if (libraryWalkEnabled()) {
-        using S = vchan::SlotSource;
-        for (S src : { S::Plex, S::Jellyfin, S::Emby }) {
-            if (!m_server->available(src)) continue;
-            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("tv") };
-            m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("movies") };
-        }
+        // The queue is NOT seeded here: at construction the media servers have
+        // not authenticated yet, so an availability check now would drop every
+        // source and the walk would silently never run (the Pi journal proved
+        // exactly that — an index file, zero walk lines). The first walk tick
+        // seeds from whatever is connected by then.
         QTimer::singleShot(kPresenceWalkDelayMs, this, [this] {
+            seedPresenceWalks();
             startNextPresenceWalk();
         });
     }
@@ -3429,9 +3429,29 @@ void VirtualChannelsBackend::onServerBrowseFailed(const QString &kind, const QSt
 // the source layer (single-flight), so they queue behind each other; an answer
 // that never arrives is caught by the watchdog and handed an empty batch, which
 // leaves that source's rows at their last known lineup.
+void VirtualChannelsBackend::seedPresenceWalks() {
+    if (!m_presenceQueue.isEmpty()) return;   // already seeded (retry ticks)
+    using S = vchan::SlotSource;
+    for (S src : { S::Plex, S::Jellyfin, S::Emby }) {
+        if (!m_server->available(src)) continue;
+        m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("tv") };
+        m_presenceQueue << QPair<S, QString>{ src, QStringLiteral("movies") };
+    }
+    if (m_presenceQueue.isEmpty())
+        qInfo("[VirtualChannels] no media server connected at walk time — "
+              "the index keeps whatever an earlier launch left standing");
+}
+
 void VirtualChannelsBackend::startNextPresenceWalk() {
     if (m_presenceQueue.isEmpty()) {
         m_presenceWalkActive = false;
+        return;
+    }
+    if (m_server->busy()) {
+        // The head of the queue stays put: a busy server means the SAME job
+        // runs again, not the next one — popping before the busy check used to
+        // drop a source's whole side (walks logged as running that never did).
+        m_urlTimer->start();
         return;
     }
     const QPair<vchan::SlotSource, QString> job = m_presenceQueue.takeFirst();
@@ -3441,8 +3461,16 @@ void VirtualChannelsBackend::startNextPresenceWalk() {
         m_walkTimer->start();
         return;
     }
-    // Not free to start now (another job owns the source): try again shortly
-    // rather than dropping the walk.
+    // Not free to start now (another job owns the source): the job is put back
+    // at the head and tried again shortly, never dropped.
+    m_presenceQueue.insert(m_presenceQueue.begin(), job);
+    m_presenceWalkActive = false;
+    const QString srcName = (job.first == vchan::SlotSource::Plex)       ? QStringLiteral("Plex")
+                          : (job.first == vchan::SlotSource::Jellyfin)   ? QStringLiteral("Jellyfin")
+                                                                         : QStringLiteral("Emby");
+    qInfo("[VirtualChannels] presence walk retry for %s/%s — source %s left standing "
+          "(the index keeps its last-known lineup)",
+          qPrintable(srcName), qPrintable(job.second), qPrintable(srcName));
     QTimer::singleShot(2000, this, [this] { startNextPresenceWalk(); });
 }
 

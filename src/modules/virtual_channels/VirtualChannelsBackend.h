@@ -677,6 +677,11 @@ private:
     void    onPresenceReady(const QString &provider,
                             const QVector<vchan::LibraryRecord> &records,
                             const QVariantList &collectionRows);
+    // Launch-time library walks: each answered batch folds into the index;
+    // a source whose walk never arrives keeps its rows standing (watchdog
+    // hands an empty batch). The queue is seeded at walk time — construction
+    // time is too early, the servers have not authenticated yet.
+    void    seedPresenceWalks();
     void    startNextPresenceWalk();
     // The walk is the module's own setting (on unless the config says off).
     bool    libraryWalkEnabled() const;
