@@ -2472,7 +2472,8 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
                                            const ChannelDef &def,
                                            const QString &library,
                                            const QStringList &match,
-                                           const QStringList &showIds) {
+                                           const QStringList &showIds,
+                                           const QStringList &genres) {
     if (!m_plex) { plexEnumFail(QStringLiteral("Plex is not available")); return; }
 
     m_pgChannel     = channelNumber;
@@ -2480,6 +2481,7 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
     m_pgLibraryName = library;
     m_pgMatch       = match;
     m_pgShowIds     = showIds;
+    m_pgGenres      = genres;
     m_pgSections.clear();
     m_pgShows.clear();
     m_pgSeasons.clear();
@@ -2751,7 +2753,7 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
     // has named something: its shows arrive from that listing, so taking them
     // from here as well would sweep the library in behind them.
     const bool takesWholeLibrary =
-        m_pgMatch.isEmpty() && m_pgShowIds.isEmpty()
+        m_pgMatch.isEmpty() && m_pgShowIds.isEmpty() && m_pgGenres.isEmpty()
         && m_pgCollections.isEmpty() && m_pgPlaylists.isEmpty();
 
     for (const QVariant &v : items.toList()) {
@@ -2768,6 +2770,18 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
         for (const QString &want : m_pgMatch) {
             if (wanted) break;
             wanted = title.compare(want, Qt::CaseInsensitive) == 0;
+        }
+        if (!wanted && !m_pgGenres.isEmpty()) {
+            const QStringList genres = m.value("genres").toStringList();
+            for (const QString &want : std::as_const(m_pgGenres)) {
+                for (const QString &has : genres) {
+                    if (has.compare(want, Qt::CaseInsensitive) == 0) {
+                        wanted = true;
+                        break;
+                    }
+                }
+                if (wanted) break;
+            }
         }
         if (!wanted) continue;
         if (!key.isEmpty()) m_pgShows << key;
@@ -3154,7 +3168,7 @@ void VirtualChannelsBackend::plexApptNext() {
         m_pgPlaylists       = job.playlists;
         m_pgExcludeSeasons  = job.excludeSeasons;
         m_pgExcludeEpisodes = job.excludeEpisodes;
-        plexEnumStart(m_genChannel, m_genDef, job.library, job.match, job.showIds);
+        plexEnumStart(m_genChannel, m_genDef, job.library, job.match, job.showIds, job.genres);
         return;
     }
 

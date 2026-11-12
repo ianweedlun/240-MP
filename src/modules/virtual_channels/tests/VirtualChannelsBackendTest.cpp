@@ -2109,6 +2109,71 @@ void testGenreRecipeWantsByChannelKind() {
     }
 }
 
+void testPlexTvGenreSeedFiltersShows() {
+    section("Backend: Plex TV genre recipe seeds only shows carrying that genre");
+
+    FakePlexServer plex;
+    plex.libraries = {
+        QVariantMap{{"sectionId", "1"}, {"sectionType", "show"}, {"title", "TV Shows"}},
+    };
+    plex.libraryItems.insert(QStringLiteral("1"), {
+        QVariantMap{{"ratingKey", "10"}, {"type", "show"}, {"title", "PRIVATE SNAFU"},
+                    {"genres", QStringList{"Animation", "Comedy"}}},
+        QVariantMap{{"ratingKey", "20"}, {"type", "show"}, {"title", "THE TWILIGHT ZONE"},
+                    {"genres", QStringList{"Drama", "Horror", "Sci-Fi"}}},
+        QVariantMap{{"ratingKey", "30"}, {"type", "show"}, {"title", "CHEERS"},
+                    {"genres", QStringList{"Comedy"}}},
+    });
+    plex.childrenByKey.insert(QStringLiteral("10"), {
+        QVariantMap{{"ratingKey", "101"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("101"), {
+        QVariantMap{{"ratingKey", "1001"}, {"type", "episode"}, {"title", "Spies"},
+                    {"grandparentTitle", "PRIVATE SNAFU"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 240000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("20"), {
+        QVariantMap{{"ratingKey", "201"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("201"), {
+        QVariantMap{{"ratingKey", "2001"}, {"type", "episode"}, {"title", "Where Is Everybody?"},
+                    {"grandparentTitle", "THE TWILIGHT ZONE"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 1500000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("30"), {
+        QVariantMap{{"ratingKey", "301"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("301"), {
+        QVariantMap{{"ratingKey", "3001"}, {"type", "episode"}, {"title", "Give Me a Ring Sometime"},
+                    {"grandparentTitle", "CHEERS"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 1380000}}
+    });
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const int ch = b.create_preset_channel(0, QStringLiteral("Horror"),
+                                           QStringLiteral("Horror"), QStringLiteral("tv"));
+    check(ch >= 0, "preset channel created");
+
+    bool seeded = false, ok = false;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == ch) { seeded = true; ok = s; }
+                     });
+    b.seed_preset_channel(ch);
+    for (int i = 0; i < 40 && !seeded; ++i) spin(10);
+    check(seeded && ok, "Horror TV genre seed completed");
+
+    const QJsonObject raw = fx.read(ch);
+    const QJsonArray progs = raw.value(QStringLiteral("programmes")).toArray();
+    QStringList names;
+    for (const QJsonValue &v : progs)
+        names << v.toObject().value(QStringLiteral("name")).toString();
+    checkEq(names.size(), 1, "only the Horror show is picked (not Private Snafu or Cheers)");
+    checkStr(names.value(0), QStringLiteral("THE TWILIGHT ZONE"),
+             "the matching Horror show is in the channel");
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -2139,6 +2204,7 @@ int runVirtualChannelsBackendTests() {
     testPresetChannelsSurfaceInBuilder();
     testSeededRecipeReadsBack();
     testGenreRecipeWantsByChannelKind();
+    testPlexTvGenreSeedFiltersShows();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
