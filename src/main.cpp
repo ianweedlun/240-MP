@@ -30,6 +30,8 @@
 #include "modules/virtual_channels/VirtualChannelsBackend.h"
 #include "player/MpvController.h"
 #include "input/InputManager.h"
+#include "audio/VolumeMixerFactory.h"
+#include "audio/VolumeManager.h"
 #include "input/IdleTracker.h"
 #include "update/UpdateManager.h"
 #include "util/ExecPath.h"
@@ -206,6 +208,8 @@ int main(int argc, char *argv[]) {
     inputManager.setDisplayHandoff(&displayHandoff);
     inputManager.setGameObserver(&retroArchBackend);
     IdleTracker         idleTracker(60);   // disabled until Main.qml applies the saved setting
+    VolumeManager       volumeManager(dataRoot);  // app-wide system audio (#34): one
+    // factory-owned mixer; the OSD, player and weather mpv follow this level.
     UpdateManager       updateManager(appRoot, dataRoot);
 
     // Playback follows the UI's display: mpv gets a --fs-screen* arg derived
@@ -236,6 +240,7 @@ int main(int argc, char *argv[]) {
     ctx->setContextProperty("appCore",       &appCore);
     ctx->setContextProperty("mpvController", &mpvController);
     ctx->setContextProperty("inputManager",  &inputManager);
+    ctx->setContextProperty("volumeManager", &volumeManager);
     ctx->setContextProperty("updateManager", &updateManager);
 #ifdef Q_OS_MAC
     // Target display geometry in Qt coordinates (top-left origin), so the QML
