@@ -175,11 +175,25 @@ void LibraryDb::close() {
 // one, and each metadata field is the UNION of what the servers said — except
 // that a field the new walk left EMPTY keeps the old value, which is how a
 // network resolved by TheTVDB survives walks that don't re-resolve it.
-
+// The exception's exception: a row whose EVERY source walked this launch and
+// whose walk did not mention the title is gone from those shelves, so the row
+// drops rather than offering a genre nobody has left.
 bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &records, QString *why) {
     if (!m_open) { if (why) *why = QStringLiteral("library db not open"); return false; }
     QSqlDatabase db = QSqlDatabase::database(kCtxName);
-    if (!db.isValid()) { if (why) *why = QStringLiteral("library db handle lost"); return false; }
+    if (!db.isValid()) { if (why) *why = QStringLiteral("db handle lost"); return false; }
+
+    // This merge owns the (source, channel) pairs its rows name: on those
+    // pairs the fresh rows ARE the truth, so an existing row on an owned pair
+    // that the walk did not mention drops rather than keeps standing. Any
+    // other pair (a server that stayed dark, a side that never walked) keeps
+    // its last known lineup. Ownership comes from the rows themselves — no
+    // extra parameter to thread through the walk.
+    QSet<QString> ownedPairs;
+    for (const LibraryRecord &rec : records)
+        ownedPairs.insert(rec.src + QLatin1Char('|')
+                          + ((rec.channel == QLatin1String("movies"))
+                                 ? QStringLiteral("movies") : QStringLiteral("tv")));
 
     QHash<QString, Row> rows;
     {
@@ -199,7 +213,21 @@ bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &records, QString *
             r.studios = splitList(q.value(6).toString());
             r.collections = splitList(q.value(7).toString());
             r.updated = q.value(8).toLongLong();
-            rows.insert(r.dk, r);
+            // Standing rule vs drop rule: a row survives if ANY of its sources
+            // sits on a pair this merge does not own (that server's lineup is
+            // still the last known one) — or if the walk re-mentions it below.
+            // Every source owned and no mention: the shelves no longer carry
+            // it, so the row drops rather than offering a genre nobody has.
+            const QStringList rowSrcs = splitList(r.srcs);
+            bool allOwned = !rowSrcs.isEmpty();
+            for (const QString &s : rowSrcs) {
+                if (!ownedPairs.contains(s + QLatin1Char('|') + r.channel)) {
+                    allOwned = false;
+                    break;
+                }
+            }
+            if (!allOwned)
+                rows.insert(r.dk, r);
         }
     }
 

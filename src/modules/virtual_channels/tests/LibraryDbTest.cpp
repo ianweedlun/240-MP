@@ -124,6 +124,55 @@ int runLibraryDbTests() {
                            "the cached network survived a walk that did not re-resolve");
         }
 
+        // The removal rule, on its OWN db so the shipped re-open expectations
+        // above stay untouched: a merge OWNS the (source, channel) pairs its
+        // rows name, so a title the walked source no longer mentions drops
+        // rather than offering a genre nobody has; a dark source's show keeps
+        // standing until that source itself walks over it.
+        {
+            const QString rpath = QDir::tempPath() + QStringLiteral("/removal-rule.db");
+            LibraryDb rdb;
+            vtest::check(rdb.open(rpath), "removal-rule db opens");
+            QString why;
+            QVector<LibraryRecord> first(2);
+            first[0].src = QStringLiteral("Plex");  first[0].channel = QStringLiteral("tv");
+            first[0].title = QStringLiteral("Leaving Soon");
+            first[0].genres = QStringList{ QStringLiteral("Doomed") };
+            first[0].updatedMs = 1;
+            first[1].src = QStringLiteral("Emby");   first[1].channel = QStringLiteral("tv");
+            first[1].title = QStringLiteral("Dark Server Show");
+            first[1].genres = QStringList{ QStringLiteral("Held") };
+            first[1].updatedMs = 1;
+            vtest::check(rdb.mergeAndRebuild(first, &why), "both sources' rows indexed");
+            QVector<LibraryRecord> second(1);
+            second[0].src = QStringLiteral("Plex"); second[0].channel = QStringLiteral("tv");
+            second[0].title = QStringLiteral("Still Here");
+            second[0].genres = QStringList{ QStringLiteral("Kept") };
+            second[0].updatedMs = 2;
+            vtest::check(rdb.mergeAndRebuild(second, &why),
+                         "Plex/tv re-walked without the leaving show");
+            vtest::checkEq(rdb.metadataFor(QStringLiteral("Leaving Soon"),
+                                          QStringLiteral("tv"), QStringLiteral("genres")).size(),
+                           0, "the walked source's unmentioned show dropped");
+            vtest::checkEq(rdb.metadataFor(QStringLiteral("Dark Server Show"),
+                                          QStringLiteral("tv"), QStringLiteral("genres")).size(),
+                           1, "the dark source's show kept standing through a Plex-only walk");
+            QVector<LibraryRecord> embyOnly(1);
+            embyOnly[0].src = QStringLiteral("Emby"); embyOnly[0].channel = QStringLiteral("tv");
+            embyOnly[0].title = QStringLiteral("New Emby Show");
+            embyOnly[0].genres = QStringList{ QStringLiteral("Fresh") };
+            embyOnly[0].updatedMs = 3;
+            vtest::check(rdb.mergeAndRebuild(embyOnly, &why), "Emby/tv re-walked alone");
+            vtest::checkEq(rdb.metadataFor(QStringLiteral("Dark Server Show"),
+                                          QStringLiteral("tv"), QStringLiteral("genres")).size(),
+                           0, "and it dropped once Emby walked over it");
+            vtest::checkEq(rdb.metadataFor(QStringLiteral("Still Here"),
+                                          QStringLiteral("tv"), QStringLiteral("genres")).size(),
+                           1, "Plex/tv row kept standing through the Emby-only walk");
+            rdb.close();
+            QFile::remove(rpath);
+        }
+
         // Re-opening the same file keeps the index (the app does this every
         // launch; the walk then refreshes).
         {
