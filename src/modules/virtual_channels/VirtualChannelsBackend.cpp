@@ -2685,6 +2685,8 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
                       });
         }
         const QString kind = m_browseKind; m_browseKind.clear();
+        if (kind == QLatin1String("movies"))
+            m_browseCache.insert(QStringLiteral("plex:movies"), m_browseItems);
         emit sourceBrowseReady(kind, m_browseItems);
         m_browseItems.clear();
         return;
@@ -2707,12 +2709,26 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
         m_pgStage = PlexStage::Idle;
         m_pgTimer->stop();
         const QString kind = m_browseKind; m_browseKind.clear();
+        m_browseCache.insert(QStringLiteral("plex:shows"), m_browseItems);
         emit sourceBrowseReady(kind, m_browseItems);
         m_browseItems.clear();
         return;
     }
 
     if (m_pgStage == PlexStage::ApptItems) {
+        QVariantList cachedMovies = m_browseCache.value(QStringLiteral("plex:movies"));
+        if (m_pgApptCursor == 0 && cachedMovies.isEmpty()) {
+            for (const QVariant &v : items.toList()) {
+                const QVariantMap m = v.toMap();
+                if (m.value("type").toString() != QLatin1String("movie")) continue;
+                const QString key = m.value("ratingKey").toString();
+                const QString title = m.value("title").toString();
+                if (!key.isEmpty() && !title.isEmpty())
+                    cachedMovies.append(QVariantMap{{"id", key}, {"label", title}, {"sub", QString()}});
+            }
+            if (!cachedMovies.isEmpty())
+                m_browseCache.insert(QStringLiteral("plex:movies"), cachedMovies);
+        }
         plexApptCollect(items.toList(), /*applyCriteria*/ true);
         plexApptAdvance();
         return;
@@ -2755,6 +2771,19 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
     const bool takesWholeLibrary =
         m_pgMatch.isEmpty() && m_pgShowIds.isEmpty() && m_pgGenres.isEmpty()
         && m_pgCollections.isEmpty() && m_pgPlaylists.isEmpty();
+
+    if (m_seedActive) {
+        QVariantList showsCache;
+        for (const QVariant &v : items.toList()) {
+            const QVariantMap m = v.toMap();
+            const QString key = m.value("ratingKey").toString();
+            const QString title = m.value("title").toString();
+            if (!key.isEmpty() && !title.isEmpty())
+                showsCache.append(QVariantMap{{"id", key}, {"label", title}, {"sub", QString()}});
+        }
+        if (!showsCache.isEmpty())
+            m_browseCache.insert(QStringLiteral("plex:shows"), showsCache);
+    }
 
     for (const QVariant &v : items.toList()) {
         const QVariantMap m = v.toMap();
@@ -3439,6 +3468,10 @@ void VirtualChannelsBackend::get_resume_options() {
 }
 
 void VirtualChannelsBackend::onServerBrowseReady(const QString &kind, const QVariantList &items) {
+    if (!m_lastServerBrowseSource.isEmpty()
+        && (kind == QLatin1String("shows") || kind == QLatin1String("movies"))) {
+        m_browseCache.insert(m_lastServerBrowseSource + QLatin1Char(':') + kind, items);
+    }
     emit sourceBrowseReady(kind, items);
 }
 
@@ -4410,12 +4443,18 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
                 ? QStringLiteral("collections")
                 : studioMovie ? QStringLiteral("studios")
                               : QStringLiteral("genres");
-        QJsonObject plex = ch.value(QLatin1String("plex")).toObject();
+        SlotSource defaultSrc = SlotSource::Plex;
+        if (!sourceSignedIn(m_plex)) {
+            if      (sourceSignedIn(m_jellyfin)) defaultSrc = SlotSource::Jellyfin;
+            else if (sourceSignedIn(m_emby))     defaultSrc = SlotSource::Emby;
+        }
+        const QString srcName = slotSourceToString(defaultSrc);
+        QJsonObject block = ch.value(srcName).toObject();
         QJsonArray items;
         items.append(wanted);
-        plex[field] = items;
-        ch[QLatin1String("plex")] = plex;
-        ch["source"] = QStringLiteral("plex");
+        block[field] = items;
+        ch[srcName] = block;
+        ch["source"] = srcName;
     }
 
     const QString absRoot = QFileInfo(m_mediaRoot).canonicalFilePath();
@@ -4643,6 +4682,21 @@ void VirtualChannelsBackend::finishSeeding() {
         }
         if (out.isEmpty()) c.remove(QLatin1String("programmes"));
         else               c.insert(QLatin1String("programmes"), out);
+        // If the channel's default source produced no picks (e.g. only
+        // Jellyfin or Emby is connected), point source at the first pick's
+        // server so ChannelSources shows those picks immediately.
+        if (!out.isEmpty()) {
+            const QString curSrc = c.value(QLatin1String("source")).toString();
+            bool hasCur = false;
+            QString firstPickSrc;
+            for (const QJsonValue &v : out) {
+                const QString ps = v.toObject().value(QLatin1String("src")).toString();
+                if (firstPickSrc.isEmpty() && !ps.isEmpty()) firstPickSrc = ps;
+                if (ps == curSrc) { hasCur = true; break; }
+            }
+            if (!hasCur && !firstPickSrc.isEmpty())
+                c[QLatin1String("source")] = firstPickSrc;
+        }
         if (off.isEmpty()) presetNow.remove(QLatin1String("off"));
         else               presetNow.insert(QLatin1String("off"), QJsonArray::fromStringList(off));
         if (presetNow.isEmpty()) c.remove(QLatin1String("preset"));
@@ -5638,6 +5692,28 @@ void VirtualChannelsBackend::browse_from(const QString &source, const QString &k
     if (browse_busy()) { emit sourceBrowseFailed(kind, QStringLiteral("Busy")); return; }
 
     const SlotSource src = slotSourceFromString(source);
+    if (parentKey.isEmpty() && (kind == QLatin1String("shows") || kind == QLatin1String("movies"))) {
+        const QString cacheKey = source + QLatin1Char(':') + kind;
+        if (m_browseCache.contains(cacheKey)) {
+            const QVariantList cached = m_browseCache.value(cacheKey);
+            QMetaObject::invokeMethod(this, [this, kind, cached] {
+                emit sourceBrowseReady(kind, cached);
+            }, Qt::QueuedConnection);
+            return;
+        }
+        if (src != SlotSource::Local) {
+            const QString side = (kind == QLatin1String("movies"))
+                                     ? QStringLiteral("movies") : QStringLiteral("tv");
+            const QVariantList dbItems = m_libraryDb.browseItems(
+                MediaServerSource::providerName(src), side);
+            if (!dbItems.isEmpty()) {
+                QMetaObject::invokeMethod(this, [this, kind, dbItems] {
+                    emit sourceBrowseReady(kind, dbItems);
+                }, Qt::QueuedConnection);
+                return;
+            }
+        }
+    }
     if (src == SlotSource::Plex) {
         if (kind == QLatin1String("shows"))            browse_plex_shows();
         else if (kind.startsWith(QLatin1String("movie"))) browse_plex_movies(kind);
@@ -5652,6 +5728,7 @@ void VirtualChannelsBackend::browse_from(const QString &source, const QString &k
             emit sourceBrowseFailed(kind, QStringLiteral("Playlists are not available here"));
             return;
         }
+        m_lastServerBrowseSource = source;
         if (!m_server->browse(src, kind, parentKey))
             emit sourceBrowseFailed(kind,
                 QStringLiteral("%1 unavailable").arg(MediaServerSource::providerName(src)));

@@ -370,8 +370,9 @@ void MediaServerSource::genNext() {
             // A genre lives on the SERIES item, not on its episodes, so the
             // episode scan can only narrow by show once it has seen the show
             // rows themselves. Ask for both when a genre filter is in play.
-            if (!m_req.genres.isEmpty() && wantType == QString(kEpisode))
+            if (!m_req.genres.isEmpty() && wantType == QString(kEpisode)) {
                 wantType = QStringLiteral("Series,Episode");
+            }
             if (!callBackend("load_items", { lib, wantType, QStringLiteral("SortName") }))
                 fail(QStringLiteral("Server cannot list items"));
             return;
@@ -738,6 +739,7 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
                 rec.src = providerName(m_req.src);
                 rec.channel = m_presenceSide;
                 rec.title = show;
+                rec.itemId = m.value(QStringLiteral("grandparentRatingKey")).toString();
                 rec.genres = m.value(QStringLiteral("genres")).toStringList();
                 rec.collections = m.value(QStringLiteral("collections")).toStringList();
                 m_presenceRecords.append(rec);
@@ -763,6 +765,8 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
             rec.channel = m_presenceSide;
             rec.title = m.value(QStringLiteral("title")).toString();
             if (rec.title.isEmpty()) continue;
+            rec.itemId = plex ? m.value(QStringLiteral("ratingKey")).toString()
+                              : m.value(QStringLiteral("itemId")).toString();
             rec.updatedMs = m.value(QStringLiteral("addedAtMs")).toLongLong();
             rec.genres = m.value(QStringLiteral("genres")).toStringList();
             rec.networks = m.value(QStringLiteral("networks")).toStringList();

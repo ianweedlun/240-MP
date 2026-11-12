@@ -438,6 +438,10 @@ private:
     QStringList m_pgGenres;
     // How many things carry each label being browsed, so a picker can show it.
     QHash<QString, int> m_browseTally;
+    // Cached "shows"/"movies" browse lists per source ("plex:shows", etc.) so
+    // SourceBrowser opens immediately after seeding without re-fetching.
+    QHash<QString, QVariantList> m_browseCache;
+    QString m_lastServerBrowseSource;
     QSet<QString> m_pgExcludeSeasons;
     QSet<QString> m_pgExcludeEpisodes;
     QStringList m_pgCollections;

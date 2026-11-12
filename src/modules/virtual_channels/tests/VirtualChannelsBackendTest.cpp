@@ -2243,6 +2243,22 @@ void testPresetChannelDefaultsToInterleaved() {
         seriesInFirstTwo.insert(slotsArr[i].toObject().value(QStringLiteral("series")).toString());
     checkEq(seriesInFirstTwo.size(), 2,
             "first two slots interleave both Private Snafu and Cheers instead of oldest-only");
+
+    // Verify browse_source("shows") serves from cache immediately after seeding
+    // without re-fetching load_library_all from Plex.
+    const int callsBeforeBrowse = plex.calls.size();
+    QVariantList browsed;
+    bool browseDone = false;
+    QObject::connect(&b, &VirtualChannelsBackend::sourceBrowseReady, &b,
+                     [&](const QString &kind, const QVariantList &items) {
+                         if (kind == QLatin1String("shows")) { browsed = items; browseDone = true; }
+                     });
+    b.browse_source(ch, QStringLiteral("shows"));
+    for (int i = 0; i < 20 && !browseDone; ++i) spin(5);
+    check(browseDone, "browse_source(shows) answered after seeding");
+    checkEq(browsed.size(), 2, "cached shows list holds all library shows");
+    checkEq(plex.calls.size(), callsBeforeBrowse,
+            "browse_source(shows) used cache with zero extra Plex calls");
 }
 
 int runVirtualChannelsBackendTests() {

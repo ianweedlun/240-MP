@@ -37,6 +37,7 @@ int runLibraryDbTests() {
             r.src = QStringLiteral("plex");
             r.channel = QStringLiteral("tv");
             r.title = QStringLiteral("Scrubs");
+            r.itemId = QStringLiteral("101");
             r.genres = { QStringLiteral("Comedy"), QStringLiteral("Drama") };
             r.updatedMs = 1000;
             walk.append(r);
@@ -44,6 +45,7 @@ int runLibraryDbTests() {
             r2.src = QStringLiteral("jellyfin");
             r2.channel = QStringLiteral("tv");
             r2.title = QStringLiteral("scrubs");     // other server, other case
+            r2.itemId = QStringLiteral("jf-101");
             r2.genres = { QStringLiteral("comedy"), QStringLiteral("Horror") };
             r2.updatedMs = 2000;
             walk.append(r2);
@@ -51,6 +53,7 @@ int runLibraryDbTests() {
             m.src = QStringLiteral("plex");
             m.channel = QStringLiteral("movies");
             m.title = QStringLiteral("Private Snafu");
+            m.itemId = QStringLiteral("201");
             m.genres = { QStringLiteral("Comedy") };
             m.updatedMs = 1500;
             walk.append(m);
@@ -58,6 +61,16 @@ int runLibraryDbTests() {
         vtest::check(db.replaceAll(walk), "walk wrote the index");
         vtest::check(!db.isEmpty(), "index no longer empty after the walk");
         vtest::check(db.lastRebuildMs() > 0, "rebuild stamp advanced");
+        const QVariantList plexTv = db.browseItems(QStringLiteral("plex"), QStringLiteral("tv"));
+        vtest::checkEq(plexTv.size(), 1, "browseItems returns plex tv show");
+        vtest::checkStr(plexTv.value(0).toMap().value(QStringLiteral("id")).toString(),
+                        QStringLiteral("101"), "browseItems preserves plex itemId");
+        const QVariantList jfTv = db.browseItems(QStringLiteral("jellyfin"), QStringLiteral("tv"));
+        vtest::checkEq(jfTv.size(), 1, "browseItems returns jellyfin tv show");
+        vtest::checkStr(jfTv.value(0).toMap().value(QStringLiteral("id")).toString(),
+                        QStringLiteral("jf-101"), "browseItems preserves jellyfin itemId");
+        const QVariantList plexMov = db.browseItems(QStringLiteral("plex"), QStringLiteral("movies"));
+        vtest::checkEq(plexMov.size(), 1, "browseItems returns plex movie");
 
         // Deduped by (side, lower(title)): one Scrubs row, so Comedy counts ONCE
         // even though two servers carry it.

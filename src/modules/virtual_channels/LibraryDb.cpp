@@ -105,22 +105,30 @@ const QString kCtxName { QStringLiteral("vchan-library-db") };
 // test.
 bool ensureSchema(QSqlDatabase &db) {
     QSqlQuery probe(db);
-    if (probe.prepare(QStringLiteral("SELECT 1 FROM items LIMIT 1")) && probe.exec())
-        return true;   // an old index: the tables are already there
-    const QVector<QString> stmts {
-        QStringLiteral("CREATE TABLE items (dk TEXT PRIMARY KEY, srcs TEXT,"
-                       " channel TEXT, title TEXT, genres TEXT, networks TEXT,"
-                       " studios TEXT, collections TEXT, updated INTEGER)"),
-        QStringLiteral("CREATE TABLE subjects (kind TEXT, value TEXT,"
-                       " channel TEXT, count INTEGER)"),
-        QStringLiteral("CREATE INDEX subjects_kx ON subjects (kind, channel)"),
-        QStringLiteral("CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT)"),
-    };
-    for (const QString &s : stmts) {
-        QSqlQuery q(db);
-        if (!q.prepare(s) || !q.exec()) return false;
+    const bool hasItems = probe.prepare(QStringLiteral("SELECT 1 FROM items LIMIT 1")) && probe.exec();
+    if (!hasItems) {
+        const QVector<QString> stmts {
+            QStringLiteral("CREATE TABLE items (dk TEXT PRIMARY KEY, srcs TEXT,"
+                           " channel TEXT, title TEXT, genres TEXT, networks TEXT,"
+                           " studios TEXT, collections TEXT, updated INTEGER)"),
+            QStringLiteral("CREATE TABLE subjects (kind TEXT, value TEXT,"
+                           " channel TEXT, count INTEGER)"),
+            QStringLiteral("CREATE INDEX subjects_kx ON subjects (kind, channel)"),
+            QStringLiteral("CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT)"),
+        };
+        for (const QString &s : stmts) {
+            QSqlQuery q(db);
+            if (!q.prepare(s) || !q.exec()) return false;
+        }
     }
-    return true;
+    // Additive table for per-server item IDs so existing library.db files
+    // upgrade in place without losing the standing index.
+    QSqlQuery si(db);
+    return si.prepare(QStringLiteral(
+               "CREATE TABLE IF NOT EXISTS source_items ("
+               " src TEXT, channel TEXT, item_id TEXT, title TEXT,"
+               " PRIMARY KEY (src, channel, title))"))
+           && si.exec();
 }
 
 qint64 readRebuildStamp(QSqlDatabase &db) {
@@ -323,6 +331,36 @@ bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &records, QString *
         sub.bindValue(QStringLiteral(":n"), t.count);
         if (!sub.exec()) { db.rollback(); if (why) *why = QStringLiteral("tally write failed"); return false; }
     }
+    // Update per-server item IDs for the owned (source, channel) pairs so
+    // SourceBrowser can open immediately from library.db across all servers.
+    for (const QString &pair : ownedPairs) {
+        const int sep = pair.indexOf(QLatin1Char('|'));
+        if (sep <= 0) continue;
+        QSqlQuery del(db);
+        if (!del.prepare(QStringLiteral(
+                "DELETE FROM source_items WHERE LOWER(src) = LOWER(:s) AND channel = :c"))) {
+            db.rollback(); if (why) *why = QStringLiteral("source_items clear failed"); return false;
+        }
+        del.bindValue(QStringLiteral(":s"), pair.left(sep));
+        del.bindValue(QStringLiteral(":c"), pair.mid(sep + 1));
+        if (!del.exec()) { db.rollback(); if (why) *why = QStringLiteral("source_items clear failed"); return false; }
+    }
+    for (const LibraryRecord &rec : records) {
+        if (rec.title.isEmpty() || rec.itemId.isEmpty() || rec.src.isEmpty()) continue;
+        const QString ch = (rec.channel == QLatin1String("movies"))
+                               ? QStringLiteral("movies") : QStringLiteral("tv");
+        QSqlQuery ins(db);
+        if (!ins.prepare(QStringLiteral(
+                "INSERT OR REPLACE INTO source_items (src, channel, item_id, title)"
+                " VALUES (:s, :c, :id, :t)"))) {
+            db.rollback(); if (why) *why = QStringLiteral("source_items write failed"); return false;
+        }
+        ins.bindValue(QStringLiteral(":s"), rec.src);
+        ins.bindValue(QStringLiteral(":c"), ch);
+        ins.bindValue(QStringLiteral(":id"), rec.itemId);
+        ins.bindValue(QStringLiteral(":t"), rec.title);
+        if (!ins.exec()) { db.rollback(); if (why) *why = QStringLiteral("source_items write failed"); return false; }
+    }
     writeRebuildStamp(db, nowMs());
     if (!db.commit()) { if (why) *why = QStringLiteral("tally commit failed"); return false; }
     m_lastRebuildMs = readRebuildStamp(db);
@@ -339,6 +377,7 @@ bool LibraryDb::replaceAll(const QVector<LibraryRecord> &records) {
     QSqlQuery wipe(db);
     if (!wipe.prepare(QStringLiteral("DELETE FROM items")) || !wipe.exec()) { db.rollback(); return false; }
     if (!wipe.prepare(QStringLiteral("DELETE FROM subjects")) || !wipe.exec()) { db.rollback(); return false; }
+    if (!wipe.prepare(QStringLiteral("DELETE FROM source_items")) || !wipe.exec()) { db.rollback(); return false; }
     if (!db.commit()) return false;
     return mergeAndRebuild(records);
 }
@@ -526,6 +565,30 @@ bool LibraryDb::isEmpty() const {
 
 qint64 LibraryDb::lastRebuildMs() const { return m_lastRebuildMs; }
 
+QVariantList LibraryDb::browseItems(const QString &src, const QString &channel) const {
+    QVariantList out;
+    if (!m_open || src.isEmpty() || channel.isEmpty()) return out;
+    QSqlDatabase db = QSqlDatabase::database(kCtxName);
+    if (!db.isValid()) return out;
+    QSqlQuery q(db);
+    if (!q.prepare(QStringLiteral(
+            "SELECT item_id, title FROM source_items"
+            " WHERE LOWER(src) = LOWER(:s) AND channel = :c"
+            " ORDER BY title COLLATE NOCASE")))
+        return out;
+    q.bindValue(QStringLiteral(":s"), src);
+    q.bindValue(QStringLiteral(":c"), channel);
+    if (!q.exec()) return out;
+    while (q.next()) {
+        out.append(QVariantMap{
+            {QStringLiteral("id"),    q.value(0).toString()},
+            {QStringLiteral("label"), q.value(1).toString()},
+            {QStringLiteral("sub"),   QString()},
+        });
+    }
+    return out;
+}
+
 #else   // ---- compiled without Qt's Sql module: nothing this build can store
 
 bool LibraryDb::open(const QString &) { return false; }
@@ -545,6 +608,7 @@ QStringList LibraryDb::metadataFor(const QString &, const QString &, const QStri
 bool LibraryDb::noteMetadata(const QString &, const QString &, const QString &, const QStringList &) { return false; }
 bool LibraryDb::isEmpty() const { return true; }
 qint64 LibraryDb::lastRebuildMs() const { return 0; }
+QVariantList LibraryDb::browseItems(const QString &, const QString &) const { return {}; }
 
 #endif   // APP_HAVE_SQLITE
 

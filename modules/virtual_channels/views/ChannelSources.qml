@@ -553,8 +553,7 @@ FocusScope {
         applyPendingRename()
         reload()
         if (navParams.seedSummary && status === "")
-            status = "Seeded " + navParams.seedSummary + " — open "
-                     + (isMovies ? "Films" : "Series") + " to adjust, then Build Channel"
+            status = "Seeded " + navParams.seedSummary + " — ready to Build Channel"
         if (restore !== undefined) current = Math.min(restore, rowCount - 1)
     }
 

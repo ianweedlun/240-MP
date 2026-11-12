@@ -20,6 +20,7 @@ struct LibraryRecord {
     QString src;                    // backend name: plex, jellyfin, emby, local
     QString channel;                // "tv" | "movies" (the library's own side)
     QString title;
+    QString itemId;                 // server-side id (ratingKey / itemId) for drill-down
     QStringList genres;             // as the server spells them
     QStringList networks;           // empty when the server does not carry them
     QStringList studios;
@@ -84,6 +85,10 @@ public:
     // has to survive the next walk that does not re-resolve the title.
     bool noteMetadata(const QString &title, const QString &channel,
                       const QString &field, const QStringList &values);
+
+    // Cached browse listing ({id, label, sub}) for one server ("Plex"/"Jellyfin"/"Emby")
+    // and side ("tv"/"movies"), ordered alphabetically.
+    QVariantList browseItems(const QString &src, const QString &channel) const;
 
     // Nothing indexed yet: presence() is empty, so the QML layer shows the
     // catalog list instead of a confident empty one. Distinguishing "empty
