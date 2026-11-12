@@ -1511,13 +1511,17 @@ VirtualChannelsBackend::readPools(const QJsonObject &channel, ChannelDef &def) c
                 if (!ref.isEmpty()) job.showIds << ref;
             }
             else if (kind == QLatin1String("movie") || kind == QLatin1String("genre")) {
-                // A film is not an episode: it is asked for by title or by
-                // genre, the same two ways a movie slot asks. anyFilm is left
-                // to the line below, which already says only a library takes
-                // everything.
-                job.wants = MediaServerSource::Request::Wants::Films;
+                // A film is asked for by title or by genre, the same two ways a
+                // movie slot asks — but Films is forced only where the channel
+                // itself airs films. A genre row on a TV channel keeps the
+                // episode scan and narrows by the show's own genres; forcing
+                // Films here swept the movie library instead (the "always
+                // Private Snafu" complaint). anyFilm stays as the line below
+                // says: only a library takes everything.
+                if (kind == QLatin1String("movie") || isMovieChannel(channel))
+                    job.wants = MediaServerSource::Request::Wants::Films;
                 if (kind == QLatin1String("movie")) job.titles << name;
-                else                                job.genres << name;
+                else                                 job.genres << name;
             }
             else if (kind == QLatin1String("library"))  job.library      = name;
             else {
@@ -1603,7 +1607,14 @@ VirtualChannelsBackend::readPools(const QJsonObject &channel, ChannelDef &def) c
                     break;
                 case PlanBlock::Draws::Genre:
                     job.genres << b.name;
-                    job.wants = MediaServerSource::Request::Wants::Films;
+                    // A genre lives on the SERIES item, so a TV channel keeps
+                    // its episode scan and the enumeration narrows by show.
+                    // Only a movie channel swaps to the film scan — the twin of
+                    // the Collection case above. Forcing Films here swept the
+                    // movie library and aired whatever theatrical shorts
+                    // happened to carry the genre.
+                    if (isMovieChannel(channel))
+                        job.wants = MediaServerSource::Request::Wants::Films;
                     break;
                 case PlanBlock::Draws::Movie:
                     job.wants = MediaServerSource::Request::Wants::Films;

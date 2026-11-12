@@ -288,9 +288,14 @@ void MediaServerSource::genNext() {
         if (wantsLibraryItems) {
             m_stage = Stage::GenItems;
             m_expandingSeries = false;
-            const QString wantType = m_req.wants == Request::Wants::Anything
-                                     ? QString()
-                                     : QString(wantsFilms(m_req.wants) ? kMovie : kEpisode);
+            QString wantType;
+            if (m_req.wants != Request::Wants::Anything)
+                wantType = QString(wantsFilms(m_req.wants) ? kMovie : kEpisode);
+            // A genre lives on the SERIES item, not on its episodes, so the
+            // episode scan can only narrow by show once it has seen the show
+            // rows themselves. Ask for both when a genre filter is in play.
+            if (!m_req.genres.isEmpty() && wantType == QString(kEpisode))
+                wantType = QStringLiteral("Series,Episode");
             if (!callBackend("load_items", { lib, wantType, QStringLiteral("SortName") }))
                 fail(QStringLiteral("Server cannot list items"));
             return;
@@ -437,6 +442,24 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
         return;
     }
     case Stage::GenItems: {
+        // Genre narrows TV by SHOW: genres live on the series item, so the pass
+        // first collects which series carry a wanted genre, and the episode
+        // pass below keeps every episode of a collected show — whole series in,
+        // never episode-by-episode cherry-picking.
+        QSet<QString> genreShows;
+        if (!m_req.genres.isEmpty() && !wantsFilms(m_req.wants)) {
+            for (const QVariant &sv : list) {
+                const QVariantMap sm = sv.toMap();
+                if (sm.value(QStringLiteral("type")).toString() != QLatin1String("series"))
+                    continue;
+                for (const QString &g : sm.value(QStringLiteral("genres")).toStringList()) {
+                    if (listContainsCI(m_req.genres, g)) {
+                        genreShows.insert(sm.value(QStringLiteral("itemId")).toString());
+                        break;
+                    }
+                }
+            }
+        }
         for (const QVariant &v : list) {
             if (m_collected.size() >= kMaxServerItems) { m_truncated = true; break; }
             const QVariantMap m = v.toMap();
@@ -475,11 +498,15 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
                 if (type != QLatin1String("episode")) continue;
                 const QString seriesId = m.value(QStringLiteral("seriesId")).toString();
                 if (!m_expandingSeries
-                    && (!m_req.match.isEmpty() || !m_req.showIds.isEmpty())) {
+                    && (!m_req.match.isEmpty() || !m_req.showIds.isEmpty()
+                        || !m_req.genres.isEmpty())) {
                     const bool byId   = !seriesId.isEmpty()
                                         && m_req.showIds.contains(seriesId);
                     const bool byName = listContainsCI(m_req.match, mi.series);
-                    if (!byId && !byName) continue;
+                    // Show-level genre: the series carried the genre, so every
+                    // one of its episodes is in play.
+                    const bool byShow = genreShows.contains(seriesId);
+                    if (!byId && !byName && !byShow) continue;
                 }
                 const int season = m.value(QStringLiteral("parentIndex")).toInt();
                 if (!seriesId.isEmpty()

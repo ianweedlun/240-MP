@@ -596,5 +596,44 @@ int runMediaServerSourceTests() {
         }
     }
 
+    {
+        section("media server: a genre enumerates whole shows, not episodes");
+        {
+            FakeMediaServer fake;
+            fake.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+            const auto showItem = [](const QString &id, const QString &title,
+                                     const QStringList &genres) {
+                QVariantList g;
+                for (const QString &x : genres) g.append(x);
+                return QVariantMap{{"itemId", id}, {"type", "series"},
+                                   {"title", title}, {"genres", g}};
+            };
+            fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+                showItem("s1", "Cartoon Classics", QStringList{ QStringLiteral("Comedy") }),
+                showItem("s2", "Case Files", QStringList{ QStringLiteral("Documentary") }),
+                FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                FakeMediaServer::episode("e2", "s1", "Cartoon Classics", 1, 2, 60000),
+                FakeMediaServer::episode("e9", "s2", "Case Files", 1, 1, 60000),
+            };
+            MediaServerSource src;
+            src.setBackend(SlotSource::Jellyfin, &fake);
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src    = SlotSource::Jellyfin;
+            req.genres = QStringList{ QStringLiteral("comedy") };
+            check(src.enumerate(req), "starts");
+            check(r.finished && !r.failed, "the enumeration completes");
+            checkEq(r.items.size(), 2,
+                    "the Comedy show's two episodes are all in — whole series, "
+                    "never episode-by-episode, and the Documentary show stays out");
+            bool askedForShows = false;
+            for (const QString &c : fake.calls)
+                if (c == QStringLiteral("load_items(tv1,Series,Episode)"))
+                    askedForShows = true;
+            check(askedForShows,
+                  "a genre scan asks for the show rows beside the episodes");
+        }
+    }
+
     return 0;
 }

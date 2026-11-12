@@ -2036,6 +2036,79 @@ void testPreviewNeverWrites() {
 
 }  // namespace
 
+// A genre recipe must air what the channel's own kind airs: a TV channel keeps
+// its episode scan and narrows at show level; forcing Films swept the movie
+// library, which is what made "always Private Snafu". Movie channels keep Films.
+void testGenreRecipeWantsByChannelKind() {
+    section("Backend: a genre recipe wants films only on movie channels");
+
+    const auto withGenreBlock = [](const QString &kind) {
+        QJsonObject blk;
+        blk["type"]    = QStringLiteral("genre");
+        blk["name"]    = QStringLiteral("Comedy");
+        blk["minutes"] = 30;
+        QJsonArray blocks;
+        blocks.append(blk);
+        QJsonObject plan;
+        plan["name"]   = QStringLiteral("PRIME");
+        plan["days"]   = QJsonArray{ 1 };
+        plan["blocks"] = blocks;
+        QJsonObject ch;
+        ch["number"]  = 7;
+        ch["source"]  = QStringLiteral("jellyfin");
+        ch["kind"]    = kind;
+        ch["plans"]   = QJsonArray{ plan };
+        return ch;
+    };
+
+    const auto withGenreEntry = [](const QString &kind) {
+        QJsonObject ch;
+        ch["number"] = 8;
+        ch["source"] = QStringLiteral("jellyfin");
+        ch["kind"]   = kind;
+        QJsonObject e;
+        e["name"] = QStringLiteral("Comedy");
+        e["kind"] = QStringLiteral("genre");
+        e["src"]  = QStringLiteral("jellyfin");
+        QJsonArray programmes;
+        programmes.append(e);
+        ch["programmes"] = programmes;
+        return ch;
+    };
+
+    const auto jobsFor = [](const QJsonObject &ch) {
+        Fixture fx;
+        fx.write(ch);
+        VirtualChannelsBackend b(fx.data(), fx.data());
+        vchan::ChannelDef def;
+        def.plans = VirtualChannelsBackend::readPlans(ch);
+        return b.readPools(ch, def);
+    };
+
+    using Wants = vchan::MediaServerSource::Request::Wants;
+    for (const QString &kind : { QStringLiteral("tv"), QStringLiteral("movies") }) {
+        const QVector<VirtualChannelsBackend::PoolJob> blockJobs =
+            jobsFor(withGenreBlock(kind));
+        checkEq(blockJobs.size(), 1, "one block, one job");
+        const VirtualChannelsBackend::PoolJob &bj = blockJobs.value(0);
+        check(bj.pool == vchan::SlotKind::Programme, "a programme job");
+        checkEq(bj.genres.size(), 1, "carrying the genre the block named");
+        const bool films = bj.wants == Wants::Films;
+        check(films == (kind == QStringLiteral("movies")),
+              "the block wants films exactly on the channel that airs films");
+
+        const QVector<VirtualChannelsBackend::PoolJob> entryJobs =
+            jobsFor(withGenreEntry(kind));
+        checkEq(entryJobs.size(), 1, "one entry, one job");
+        const VirtualChannelsBackend::PoolJob &ej = entryJobs.value(0);
+        check(ej.pool == vchan::SlotKind::Programme, "a programme job");
+        checkEq(ej.genres.size(), 1, "carrying the genre the entry named");
+        const bool filmsHere = ej.wants == Wants::Films;
+        check(filmsHere == (kind == QStringLiteral("movies")),
+              "the entry wants films exactly on the channel that airs films");
+    }
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -2065,6 +2138,7 @@ int runVirtualChannelsBackendTests() {
     testPresetChannelsWireTheirContent();
     testPresetChannelsSurfaceInBuilder();
     testSeededRecipeReadsBack();
+    testGenreRecipeWantsByChannelKind();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
