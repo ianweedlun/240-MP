@@ -113,7 +113,6 @@ add_executable(240mp
     src/audio/PipeWireVolumeMixer.cpp
     src/audio/ALSAVolumeMixer.cpp
     src/audio/VolumeMixerFactory.cpp
-    src/audio/VolumeManager.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -327,7 +326,6 @@ if(BUILD_TESTS)
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
         src/audio/VolumeMixerFactory.cpp
-        src/audio/VolumeManager.cpp
         src/tests/VolumeMixerTest.cpp)
     set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
