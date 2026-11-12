@@ -4,6 +4,7 @@
 #include <QVector>
 #include <QFile>
 #include <QJsonDocument>
+#include <QDir>
 
 using namespace vchan;
 
@@ -76,7 +77,7 @@ int runTVDBNetworkResolverTests() {
     // (loadCache on an absent file = silent cold start; a cache hit answers
     // without the wire — the bogus key would fail login if a call ran).
     {
-        const QString p = QStringLiteral("tvdb-cache-test.json");
+        const QString p = QDir::tempPath() + QStringLiteral("/tvdb-cache-test.json");
         {
             QFile f(p);
             QJsonObject seed; seed.insert("Firefly", "15");
@@ -98,6 +99,7 @@ int runTVDBNetworkResolverTests() {
             MediaItem m; m.series = "Firefly";
             vtest::checkStr(r3.networkIdFor(m), "15", "saved cache round-trips");
         }
+        QFile::remove(p);
     }
 
     // --- parseNetworkId: latestNetwork ---
