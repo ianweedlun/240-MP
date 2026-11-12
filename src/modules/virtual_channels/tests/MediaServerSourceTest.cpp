@@ -664,6 +664,97 @@ int runMediaServerSourceTests() {
     }
 
     {
+        section("media server: a presence walk reports the shelves, both sides");
+        struct PresenceResult {
+            bool done = false;
+            bool failed = false;
+            QString provider;
+            QVector<vchan::LibraryRecord> records;
+            QVariantList rows;
+            void attach(MediaServerSource *src) {
+                QObject::connect(src, &MediaServerSource::presenceReady,
+                                 [this](const QString &p,
+                                        const QVector<vchan::LibraryRecord> &recs,
+                                        const QVariantList &rows) {
+                                     done = true; provider = p; records = recs;
+                                     this->rows = rows;
+                                 });
+                QObject::connect(src, &MediaServerSource::enumerationFailed,
+                                 [this](const QString &r) { failed = true; reason = r; });
+            }
+            QString reason;
+        };
+
+        FakeMediaServer fake;
+        fake.libraries = QVariantList{
+            FakeMediaServer::library("tv1", "TV", "tvshows"),
+            FakeMediaServer::library("mv1", "MOVIES", "movies"),
+        };
+        fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+            QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                       {"title", "Cartoon Classics"},
+                       {"genres", QVariantList{ QStringLiteral("Comedy") }},
+                       {"networks", QVariantList{ QStringLiteral("Toon Net") }}},
+            QVariantMap{{"itemId", "s2"}, {"type", "series"},
+                       {"title", "Case Files"},
+                       {"genres", QVariantList{ QStringLiteral("Documentary") }}},
+            // Episode rows carry none of the walked fields, so the walk drops
+            // them — a tv tally built over episodes would double-count shows.
+            FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+            FakeMediaServer::episode("e2", "s2", "Case Files", 1, 1, 60000),
+        };
+        fake.itemsFor["mv1|Movie"] = QVariantList{
+            QVariantMap{{"itemId", "m1"}, {"type", "movie"},
+                       {"title", "Big Trip"},
+                       {"genres", QVariantList{ QStringLiteral("Action") }},
+                       {"studios", QVariantList{ QStringLiteral("Fox") }}},
+            QVariantMap{{"itemId", "m2"}, {"type", "movie"},
+                       {"title", "Big Trip Two"}},
+        };
+        fake.itemsFor["mv1|BoxSet"] = QVariantList{
+            QVariantMap{{"itemId", "bs1"}, {"type", "boxset"},
+                       {"title", "Big Trip Collection"}, {"leafCount", 2}},
+        };
+
+        MediaServerSource src;
+        src.setBackend(SlotSource::Jellyfin, &fake);
+        PresenceResult pr; pr.attach(&src);
+        check(src.presence(SlotSource::Jellyfin, {}, QStringLiteral("tv")),
+              "the tv side starts");
+        check(pr.done && !pr.failed, "the tv side completes");
+        checkStr(pr.provider, QStringLiteral("Jellyfin"), "one shot per source");
+        checkEq(pr.records.size(), 2, "show rows only — episodes carry no fields and stay out");
+        check(pr.records[0].title == QStringLiteral("Cartoon Classics")
+                  && pr.records[0].genres.contains(QStringLiteral("Comedy"))
+                  && pr.records[0].networks.contains(QStringLiteral("Toon Net")),
+              "and the show rows bring what a tv channel is programmed by");
+        check(fake.calls.contains("load_items(tv1,Series,Episode)"),
+              "the tv pass asks for both row kinds");
+
+        MediaServerSource src2;
+        src2.setBackend(SlotSource::Jellyfin, &fake);
+        PresenceResult pr2; pr2.attach(&src2);
+        check(src2.presence(SlotSource::Jellyfin, {}, QStringLiteral("movies")),
+              "the movie side starts");
+        check(pr2.done && !pr2.failed, "the movie side completes");
+        checkEq(pr2.records.size(), 2, "film rows only");
+        check(pr2.records[0].studios.contains(QStringLiteral("Fox")),
+              "and film rows bring the studios a movie channel is programmed by");
+        checkEq(pr2.rows.size(), 1, "the boxset shelf answers as its own row");
+        const QVariantMap shelf = pr2.rows.first().toMap();
+        check(shelf.value(QStringLiteral("kind")).toString() == QStringLiteral("collection")
+                  && shelf.value(QStringLiteral("value")).toString()
+                      == QStringLiteral("Big Trip Collection")
+                  && shelf.value(QStringLiteral("count")).toInt() == 2
+                  && shelf.value(QStringLiteral("channel")).toString()
+                      == QStringLiteral("movies"),
+              "named, counted off the shelf, and kept on the movie side");
+        check(fake.calls.indexOf("load_items(mv1,BoxSet)")
+                  < fake.calls.indexOf("load_items(mv1,Movie)"),
+              "the shelf listing runs before that library's film pass");
+    }
+
+    {
         section("media server: genre tortures — empties and exclusions at show level");
         {
             FakeMediaServer fake;

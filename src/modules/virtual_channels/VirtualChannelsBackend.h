@@ -16,6 +16,7 @@
 #include "ChannelTuner.h"
 #include "DurationProbe.h"
 #include "MediaServerSource.h"
+#include "LibraryDb.h"
 #include "ScheduleGenerator.h"
 #include "TrackChoice.h"
 
@@ -89,6 +90,9 @@ public:
     static constexpr int kMaxScheduleDays     = 7;
     static constexpr int kDefaultScheduleDays = 2;
     static constexpr int kStartupSweepDelayMs = 20000;
+    // The library walk starts after the schedule sweep so a launch never makes
+    // the add-flow wait on a listing.
+    static constexpr int kPresenceWalkDelayMs = 30000;
     Q_INVOKABLE int schedule_days() const;
 
     Q_INVOKABLE void top_up_schedules();
@@ -190,6 +194,24 @@ public:
     Q_INVOKABLE QVariantList list_logos();
     Q_INVOKABLE QString logos_dir() const { return m_dataRoot + QStringLiteral("/logos"); }
     Q_INVOKABLE QString logo_path(const QString &file) const;
+
+    // The local library index (one SQLite file): what the shelves can actually
+    // air. The add-flow's option lists read this instead of guessing categories
+    // from TheTVDB, so a genre whose only show sits on the other side of the
+    // dial stops being offered where it can never play. An index nobody has
+    // walked reads empty, and the UI keeps its catalog fallback in that case —
+    // presence darkens nothing before the walk has run.
+    Q_INVOKABLE QVariantList library_presence(const QString &subjectKind,
+                                              const QString &channel,
+                                              int limit = 40) const;
+    // The count behind one option row ("Comedy — 23 shows"), so a dial can
+    // prefer a category the library fills richly over one it barely has.
+    Q_INVOKABLE int library_count_for(const QString &subjectKind,
+                                      const QString &value,
+                                      const QString &channel) const;
+    // False until the launch walk put something in the index; the UI falls back
+    // to the catalog path while it is false.
+    Q_INVOKABLE bool library_index_known() const;
     Q_INVOKABLE QString channel_logo(int channelNumber);
     Q_INVOKABLE bool    set_channel_logo(int channelNumber, const QString &file);
     // How a channel's logo is drawn where it differs from the module's Channel
@@ -633,10 +655,31 @@ private:
     vchan::Slot       m_serverPendingSlot;        // asked for again once its detail is in
     QString           m_serverAwaitingDetailFor;
     vchan::MediaServerSource *m_server = nullptr;
+
+    // The local library index and the launch walk that fills it. One walk per
+    // source per side of the dial queues behind the other server work (the
+    // source layer is single-flight), and the index commits once the queue
+    // drains. An empty index is not an error: the UI keeps its catalog path
+    // until the first walk puts rows in.
+    vchan::LibraryDb m_libraryDb;
+    QVector<QPair<vchan::SlotSource, QString>> m_presenceQueue;   // source, side
+    QVector<vchan::LibraryRecord> m_walkRecords;
+    QVariantList m_walkRows;
+    bool m_presenceWalkActive = false;   // a job is in flight when true
+    QTimer *m_walkTimer = nullptr;
     void    onServerEnumerationFinished(const QVector<vchan::MediaItem> &items);
     void    onServerEnumerationFailed(const QString &reason);
     void    onServerBrowseReady(const QString &kind, const QVariantList &items);
     void    onServerBrowseFailed(const QString &kind, const QString &reason);
+    // A presence walk finished for one source and side: its rows fold into the
+    // index as they arrive, and the queue moves on. Failures land here too with
+    // nothing in hand, so one server timing out cannot stall the walk.
+    void    onPresenceReady(const QString &provider,
+                            const QVector<vchan::LibraryRecord> &records,
+                            const QVariantList &collectionRows);
+    void    startNextPresenceWalk();
+    // The walk is the module's own setting (on unless the config says off).
+    bool    libraryWalkEnabled() const;
 
     void finishGeneration(bool ok, const QString &message);
 

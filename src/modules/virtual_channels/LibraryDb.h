@@ -36,6 +36,8 @@ class LibraryDb {
 public:
     // Open the index at `path` (empty = unusable). Opening creates the tables
     // on first use, so a fresh app gets an empty index instead of an error.
+    // The SQLite path comes from setDatabaseName; the docs' setFileName is not
+    // in the packaged headers on the Pi (Qt 6.8) nor dev/CI (Qt 6.10).
     bool open(const QString &path);
     void close();
 
@@ -50,6 +52,14 @@ public:
     // Same machinery, empty start: a walk that owns the whole truth (tests, and
     // a from-scratch index) replaces rather than merges.
     bool replaceAll(const QVector<LibraryRecord> &records);
+
+    // Counts the servers already know that no title row carries: a boxset row
+    // already says how many films a collection holds. Applied after a rebuild,
+    // because a rebuild recomputes the tallies from the title rows and would
+    // otherwise drop them. Across sources the largest count wins — never a
+    // total, because a collection sitting on two servers is still one shelf a
+    // viewer can fill.
+    bool applyPresenceRows(const QVariantList &rows, QString *why = nullptr);
 
     // Answers. `subjectKind` is "genre" | "network" | "studio" | "collection";
     // `channel` narrows to one side of the dial ("tv"/"movies") or empty = both

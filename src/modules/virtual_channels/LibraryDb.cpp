@@ -5,7 +5,6 @@
 #include <QSet>
 #include <QVector>
 #include <algorithm>
-#include <chrono>
 
 #ifdef APP_HAVE_SQLITE
 #include <QtSql/QSqlDatabase>
@@ -230,10 +229,10 @@ bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &records, QString *
     {
         QSqlQuery wipe(db);
         if (!wipe.prepare(QStringLiteral("DELETE FROM items")) || !wipe.exec()) {
-            db.rollback(); return false;
+            db.rollback(); if (why) *why = QStringLiteral("index write failed"); return false;
         }
         if (!wipe.prepare(QStringLiteral("DELETE FROM subjects")) || !wipe.exec()) {
-            db.rollback(); return false;
+            db.rollback(); if (why) *why = QStringLiteral("index write failed"); return false;
         }
     }
 
@@ -287,15 +286,13 @@ bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &records, QString *
     }
     for (const TallyRow &t : tallies) {
         QSqlQuery sub(db);
-        if (!sub.prepare(QStringLiteral(
-            "INSERT OR REPLACE INTO subjects (kind, value, channel, count)"
-            " VALUES (:kind, :value, :channel, :count)"))) {
+        if (!sub.prepare(QStringLiteral("INSERT OR REPLACE INTO subjects (kind, value, channel, count) VALUES (:k, :v, :c, :n)"))) {
             db.rollback(); if (why) *why = QStringLiteral("tally write failed"); return false;
         }
-        sub.bindValue(QStringLiteral(":kind"), t.kind);
-        sub.bindValue(QStringLiteral(":value"), t.value);
-        sub.bindValue(QStringLiteral(":channel"), t.channel);
-        sub.bindValue(QStringLiteral(":count"), t.count);
+        sub.bindValue(QStringLiteral(":k"), t.kind);
+        sub.bindValue(QStringLiteral(":v"), t.value);
+        sub.bindValue(QStringLiteral(":c"), t.channel);
+        sub.bindValue(QStringLiteral(":n"), t.count);
         if (!sub.exec()) { db.rollback(); if (why) *why = QStringLiteral("tally write failed"); return false; }
     }
     writeRebuildStamp(db, nowMs());
@@ -318,6 +315,52 @@ bool LibraryDb::replaceAll(const QVector<LibraryRecord> &records) {
     return mergeAndRebuild(records);
 }
 
+// Counts the servers already know that no title row carries: a boxset row
+// already says how many films a collection holds. Applied after a rebuild,
+// because a rebuild recomputes the tallies from the title rows and would
+// otherwise drop them. Across sources the largest count wins — never a total,
+// because a collection sitting on two servers is still one shelf a viewer can
+// fill.
+bool LibraryDb::applyPresenceRows(const QVariantList &rows, QString *why) {
+    if (!m_open) { if (why) *why = QStringLiteral("library db not open"); return false; }
+    QSqlDatabase db = QSqlDatabase::database(kCtxName);
+    if (!db.isValid()) { if (why) *why = QStringLiteral("library db handle lost"); return false; }
+    if (!db.transaction()) { if (why) *why = QStringLiteral("db refused a transaction"); return false; }
+    for (const QVariant &row : rows) {
+        const QVariantMap m = row.toMap();
+        const QString kind = m.value(QStringLiteral("kind")).toString();
+        const QString value = m.value(QStringLiteral("value")).toString();
+        const QString channel = m.value(QStringLiteral("channel")).toString();
+        const int count = m.value(QStringLiteral("count")).toInt();
+        if (kind.isEmpty() || value.isEmpty() || channel.isEmpty() || count <= 0) continue;
+        // Two statements: place it, then raise the standing count to the larger
+        // of the two — SQLite has no per-field max inside INSERT OR REPLACE,
+        // and the CASE keeps whichever count a case-variant row already carried.
+        QSqlQuery put(db);
+        if (!put.prepare(QStringLiteral("INSERT INTO subjects (kind, value, channel, count) VALUES (:k, :v, :c, :n)"))) {
+            db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false;
+        }
+        put.bindValue(QStringLiteral(":k"), kind);
+        put.bindValue(QStringLiteral(":v"), value);
+        put.bindValue(QStringLiteral(":c"), channel);
+        put.bindValue(QStringLiteral(":n"), count);
+        if (!put.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false; }
+        QSqlQuery raise(db);
+        if (!raise.prepare(QStringLiteral(
+            "UPDATE subjects SET count = CASE WHEN count > :n THEN count ELSE :n END"
+            " WHERE kind = :k AND channel = :c AND value COLLATE NOCASE = :v"))) {
+            db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false;
+        }
+        raise.bindValue(QStringLiteral(":k"), kind);
+        raise.bindValue(QStringLiteral(":c"), channel);
+        raise.bindValue(QStringLiteral(":v"), value);
+        raise.bindValue(QStringLiteral(":n"), count);
+        if (!raise.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false; }
+    }
+    if (!db.commit()) { if (why) *why = QStringLiteral("collection rows commit failed"); return false; }
+    return true;
+}
+
 // ---- answers ---------------------------------------------------------------
 
 QVariantList LibraryDb::presence(const QString &subjectKind, const QString &channel,
@@ -332,9 +375,10 @@ QVariantList LibraryDb::presence(const QString &subjectKind, const QString &chan
     // summing across sides).
     if (!channel.isEmpty()) {
         QSqlQuery q(db);
-        if (!q.prepare(QStringLiteral("SELECT value, count FROM subjects"
-                                      " WHERE kind = :k AND channel = :c"
-                                      " ORDER BY count DESC, value COLLATE NOCASE LIMIT :l")))
+        if (!q.prepare(QStringLiteral(
+            "SELECT value, count FROM subjects"
+            " WHERE kind = :k AND channel = :c"
+            " ORDER BY count DESC, value COLLATE NOCASE LIMIT :l")))
             return out;
         q.bindValue(QStringLiteral(":k"), subjectKind);
         q.bindValue(QStringLiteral(":c"), channel);
@@ -392,17 +436,15 @@ int LibraryDb::countFor(const QString &subjectKind, const QString &value,
     if (!m_open || value.isEmpty()) return 0;
     QSqlDatabase db = QSqlDatabase::database(kCtxName);
     if (!db.isValid()) return 0;
-    QSqlQuery q(db);
     // value COLLATE NOCASE = :v: the collation binds to the column side, which
-    // is what makes the lookup answer for either spelling (the probe showed the
-    // literal-side form missing).
+    // is what makes the lookup answer for either spelling (the probe pinned the
+    // other placement silently missing).
+    QSqlQuery q(db);
     if (channel.isEmpty()) {
-        if (!q.prepare(QStringLiteral("SELECT SUM(count) FROM subjects WHERE kind = :k"
-                                      " AND value COLLATE NOCASE = :v")))
+        if (!q.prepare(QStringLiteral("SELECT SUM(count) FROM subjects WHERE kind = :k AND value COLLATE NOCASE = :v")))
             return 0;
     } else {
-        if (!q.prepare(QStringLiteral("SELECT SUM(count) FROM subjects WHERE kind = :k AND channel = :c"
-                                      " AND value COLLATE NOCASE = :v")))
+        if (!q.prepare(QStringLiteral("SELECT SUM(count) FROM subjects WHERE kind = :k AND channel = :c AND value COLLATE NOCASE = :v")))
             return 0;
         q.bindValue(QStringLiteral(":c"), channel);
     }
@@ -435,6 +477,8 @@ bool LibraryDb::noteMetadata(const QString &title, const QString &channel,
     if (merged == existing) return true;   // nothing new to say
     QSqlDatabase db = QSqlDatabase::database(kCtxName);
     if (!db.isValid()) return false;
+    // UPDATE with SQLite's own grammar (the packaged plugin parses SQLite, not
+    // Qt's legacy dialect), and the column comes from the closed field list.
     QSqlQuery q(db);
     if (!q.prepare(QStringLiteral("UPDATE items SET %1 = :vals WHERE dk = :dk").arg(field))) return false;
     q.bindValue(QStringLiteral(":vals"), joinList(merged));
@@ -459,6 +503,10 @@ qint64 LibraryDb::lastRebuildMs() const { return m_lastRebuildMs; }
 bool LibraryDb::open(const QString &) { return false; }
 void LibraryDb::close() {}
 bool LibraryDb::mergeAndRebuild(const QVector<LibraryRecord> &, QString *why) {
+    if (why) *why = QStringLiteral("library db unavailable (built without Sql)");
+    return false;
+}
+bool LibraryDb::applyPresenceRows(const QVariantList &, QString *why) {
     if (why) *why = QStringLiteral("library db unavailable (built without Sql)");
     return false;
 }

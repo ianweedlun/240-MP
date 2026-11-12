@@ -1,6 +1,7 @@
 #pragma once
 #include "ChannelSchedule.h"
 #include "ScheduleGenerator.h"
+#include "LibraryDb.h"
 
 #include <QObject>
 #include <QSet>
@@ -50,6 +51,15 @@ public:
 
     bool browse(SlotSource src, const QString &kind, const QString &parentKey);
 
+    // The launch walk that feeds the library index. One call per side of the
+    // dial: "tv" walks the series rows (where genres/networks/studios live —
+    // a genre belongs to a show, never to an individual episode) and "movies"
+    // walks the film rows plus the boxset rows naming which collections exist.
+    // Raw per-title metadata comes out here; the dedup and tallies are the
+    // index's job, because two servers both carrying Comedy is one shelf on
+    // screen.
+    bool presence(SlotSource src, const QStringList &libraries, const QString &side);
+
     void cancel();
 
     static QString providerName(SlotSource src);
@@ -64,6 +74,12 @@ signals:
     void enumerationFailed(const QString &reason);
     void browseReady(const QString &kind, const QVariantList &items);
     void browseFailed(const QString &kind, const QString &reason);
+    // One shot per side per source: what the shelves hold (title rows with the
+    // fields the server carried) plus the collection rows the boxset listing
+    // reported with their shelf counts. The index merges across sources.
+    void presenceReady(const QString &provider,
+                       const QVector<vchan::LibraryRecord> &records,
+                       const QVariantList &collectionRows);
 
 private slots:
     void onLibrariesLoaded(const QVariant &libraries);
@@ -80,6 +96,8 @@ private:
         GenBoxsets,
         GenBoxsetChildren,
         GenItems,
+        PresenceLibraries,
+        PresenceItems,
         BrowseLibraries,
         BrowseSeries,
         BrowseMovies,
@@ -120,9 +138,20 @@ private:
     void  fail(const QString &reason);
     void  browseNextLibrary();
     void  finishBrowse();
+    void  presenceNextLibrary();
+    void  presenceFinish();
     void  reset();
     bool  fromActive() const;
     QStringList eligibleLibraries(const QVariant &libraries, bool films,
                                   const QStringList &wanted) const;
+
+    // The presence walk's own state: which side of the dial it is reading and
+    // what it has collected so far. Kept apart from the schedule walk's
+    // because the two answer different questions and must not mix.
+    bool        m_presence = false;
+    QString     m_presenceSide;
+    int         m_presencePhase = 0;     // 0 = boxsets first (movies), 1 = rows
+    QVector<LibraryRecord> m_presenceRecords;
+    QVariantList m_presenceSubjectRows;
 };
 }

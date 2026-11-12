@@ -51,10 +51,25 @@ FocusScope {
         authState = needsAuthState ? appCore.get_module_auth_state(moduleId) : ""
         var caps = dynamicOptions["_capabilities"] || []
         var filtered = []
+        var installed = appCore.get_installed_modules()
         for (var i = 0; i < schema.length; i++) {
             var item = schema[i]
             if (item.requires_auth && (authState === "none" || authState === "")) continue
             if (item.requires_capability && caps.indexOf(item.requires_capability) < 0) continue
+            // A row that only means something while ANOTHER module is on hides
+            // itself when that module is off: a control for something the
+            // viewer cannot turn on is clutter, not a choice. Same machinery
+            // as requires_capability above — one more fact the dial knows.
+            if (item.requires_module) {
+                var ready = false
+                for (var mi = 0; mi < installed.length; mi++) {
+                    if (installed[mi].id === item.requires_module && installed[mi].enabled) {
+                        ready = true
+                        break
+                    }
+                }
+                if (!ready) continue
+            }
             filtered.push(item)
         }
         schemaItems = filtered

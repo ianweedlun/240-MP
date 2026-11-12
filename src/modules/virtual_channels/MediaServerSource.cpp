@@ -171,12 +171,24 @@ void MediaServerSource::reset() {
     m_browseSeason = -1;
     m_browseSeries.clear();
     m_browseItems.clear();
+    m_presence = false;
+    m_presenceSide.clear();
+    m_presencePhase = 0;
+    m_presenceRecords.clear();
+    m_presenceSubjectRows.clear();
 }
 
 void MediaServerSource::cancel() { reset(); }
 
 void MediaServerSource::fail(const QString &reason) {
     if (m_stage == Stage::Idle) return;
+    if (m_presence) {
+        // A walk that could not finish hands back what it collected and stops:
+        // the index keeps the rows it already has for this source, so an
+        // unreachable server cannot dark-room a shelf the viewer still has.
+        presenceFinish();
+        return;
+    }
     const QString kind = m_browseKind;
     reset();
     qWarning("[VirtualChannels] media server request failed: %s", qPrintable(reason));
@@ -332,7 +344,6 @@ bool MediaServerSource::browse(SlotSource src, const QString &kind, const QStrin
     m_req.src     = src;
     m_browseKind  = kind;
     m_browseParent= parentKey;
-
     if (kind == QLatin1String("seasons")) {
         m_stage = Stage::BrowseSeasons;
         if (!callBackend("load_seasons", { parentKey })) { reset(); return false; }
@@ -388,6 +399,69 @@ void MediaServerSource::finishBrowse() {
     emit browseReady(kind, items);
 }
 
+// ---- the presence walk ------------------------------------------------------
+// Feeds the library index once per launch. It walks SHOW rows for tv (a genre
+// and a network belong to the show, so an episode pass would report them
+// nowhere) and FILM rows for movies, and it reads only what the index needs
+// — titles and the metadata fields the servers already carry on those rows.
+// Movie collections come from the boxset listing beside the film pass: a boxset
+// row already knows how many films it holds, which is the honest count of what
+// a collection channel would draw.
+bool MediaServerSource::presence(SlotSource src, const QStringList &libraries,
+                                 const QString &side) {
+    if (busy()) return false;
+    if (side != QLatin1String("tv") && side != QLatin1String("movies")) return false;
+    QObject *b = backend(src);
+    if (!b) return false;
+
+    reset();
+    m_active = b;
+    m_req = Request{};
+    m_req.src = src;
+    m_req.libraries = libraries;
+    m_req.wants = (side == QLatin1String("movies"))
+                      ? Request::Wants::Films : Request::Wants::Episodes;
+    m_presence = true;
+    m_presenceSide = side;
+    m_presencePhase = 0;      // 0 = boxsets first (movies side), 1 = the rows
+    m_stage = Stage::PresenceLibraries;
+    if (!callBackend("load_libraries")) { reset(); return false; }
+    return true;
+}
+
+void MediaServerSource::presenceNextLibrary() {
+    if (m_libs.isEmpty()) { presenceFinish(); return; }
+    // The boxset listing for a movie library runs before that library's film
+    // pass, so the collection names and their shelf counts arrive together.
+    if (m_presenceSide == QLatin1String("movies") && m_presencePhase == 0) {
+        m_presencePhase = 1;
+        m_stage = Stage::PresenceItems;
+        if (!callBackend("load_items", { m_libs.first(), QString(kBoxSet), QString() }))
+            fail(QStringLiteral("Server cannot list collections"));
+        return;
+    }
+    const QString lib = m_libs.takeFirst();
+    m_presencePhase = 0;
+    m_stage = Stage::PresenceItems;
+    // The backends' type map has no bare "Series", so the tv pass asks for
+    // both row kinds and the handler below keeps only the show rows — that is
+    // where genres and networks live.
+    const QString wantType = (m_presenceSide == QLatin1String("movies"))
+                                 ? QString(kMovie) : QStringLiteral("Series,Episode");
+    if (!callBackend("load_items", { lib, wantType, QStringLiteral("SortName") }))
+        fail(QStringLiteral("Server cannot walk that library"));
+}
+
+void MediaServerSource::presenceFinish() {
+    const QString provider = providerName(m_req.src);
+    QVector<LibraryRecord> records;
+    records.swap(m_presenceRecords);
+    QVariantList rows;
+    rows.swap(m_presenceSubjectRows);
+    reset();
+    emit presenceReady(provider, records, rows);
+}
+
 void MediaServerSource::browseNextLibrary() {
     if (m_libs.isEmpty()) { finishBrowse(); return; }
     const QString lib = m_libs.takeFirst();
@@ -420,6 +494,12 @@ void MediaServerSource::onLibrariesLoaded(const QVariant &libraries) {
         m_libs = eligibleLibraries(libraries, wantsFilms(m_req.wants), QStringList());
         if (m_libs.isEmpty()) { fail(QStringLiteral("No matching libraries")); return; }
         browseNextLibrary();
+        return;
+    }
+    if (m_stage == Stage::PresenceLibraries) {
+        m_libs = eligibleLibraries(libraries, wantsFilms(m_req.wants), m_req.libraries);
+        if (m_libs.isEmpty()) { fail(QStringLiteral("No matching libraries")); return; }
+        presenceNextLibrary();
         return;
     }
 }
@@ -533,6 +613,44 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
             m_browseItems.append(QVariantMap{{"id", id}, {"label", title}, {"sub", QString()}});
         }
         browseNextLibrary();
+        return;
+    }
+    case Stage::PresenceItems: {
+        // The walk's rows: show rows carry what a tv channel can be programmed
+        // by, film rows what a movie channel can. Boxset rows are not titles —
+        // they answer the collection question with a shelf count already on the
+        // row, so they go to the index as their own rows.
+        const bool tvSide = (m_presenceSide == QLatin1String("tv"));
+        for (const QVariant &v : list) {
+            const QVariantMap m = v.toMap();
+            const QString type = m.value(QStringLiteral("type")).toString();
+            if (type == QLatin1String("boxset")) {
+                const QString name = m.value(QStringLiteral("title")).toString();
+                if (name.isEmpty()) continue;
+                int shelf = m.value(QStringLiteral("childCount")).toInt();
+                if (shelf <= 0) shelf = m.value(QStringLiteral("leafCount")).toInt();
+                m_presenceSubjectRows.append(QVariantMap{
+                    {QStringLiteral("kind"), QStringLiteral("collection")},
+                    {QStringLiteral("channel"), QStringLiteral("movies")},
+                    {QStringLiteral("value"), name},
+                    {QStringLiteral("count"), qMax(1, shelf)}});
+                continue;
+            }
+            if (tvSide ? (type != QLatin1String("series")) : (type != QLatin1String("movie")))
+                continue;
+            LibraryRecord rec;
+            rec.src = providerName(m_req.src);
+            rec.channel = m_presenceSide;
+            rec.title = m.value(QStringLiteral("title")).toString();
+            if (rec.title.isEmpty()) continue;
+            rec.updatedMs = m.value(QStringLiteral("addedAtMs")).toLongLong();
+            rec.genres = m.value(QStringLiteral("genres")).toStringList();
+            rec.networks = m.value(QStringLiteral("networks")).toStringList();
+            rec.studios = m.value(QStringLiteral("studios")).toStringList();
+            rec.collections = m.value(QStringLiteral("collections")).toStringList();
+            m_presenceRecords.append(rec);
+        }
+        presenceNextLibrary();
         return;
     }
     case Stage::BrowseMovies: {

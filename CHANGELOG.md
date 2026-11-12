@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — CHANNELS: the dial reads its shelves
+- **Local library index + launch walk**: the module looks its shelves over once at start ("Scan Library at Start", on by default in the new Shelves section), so the add-on lists offer only what is actually watchable — ordered by how many titles carry each category, count beside every row ("12 shows") — instead of an alphabetic catalog list of things nobody owns. A fresh app, an un-scanned app, and a viewer who turns it off keep the old lists byte for byte. A server that stays offline keeps its last-known lineup instead of darkening its channels; boxset shelves contribute their real counts; a genre nobody has stops being offered rather than sitting at a stale count.
+- **Network questions the shelves answer skip TheTVDB**: a show the walk saw a network for answers from the catalog's own network listing, so a seed pays zero searches for it — cold or warm, across boots. Answers TheTVDB does provide are taught back into the index, so a seed never re-pays a question it already asked.
+- **Channel settings declutter**: the Weather Channel row only appears while the weather module is on — a control for something the viewer cannot turn on is clutter, not a choice.
+- Built on Qt's Sql module (optional): a build without it compiles the index's unavailable-shim half and keeps the catalog path, so the index can never break a platform's build — the Pi ships it (Qt 6.8's Sql is packaged on Debian 13) and dev/CI use 6.10's.
+
 ### Fixed — Virtual channels: a genre recipe airs the shows that carry the genre
 
 - **TV genre recipe swept the MOVIE library and kept airing "Private Snafu"** (owner report: the genre channel always landed on the same theatrical short). Both `readPools` sites forced `wants=Films` for any genre recipe — the plan-block `Draws::Genre` case and the `genre` pool-entry kind — so a TV channel asked the server for films in that genre and whatever shorts happened to carry it won. Now `Films` is forced only when `isMovieChannel(channel)`, mirroring the Collection twin; a TV genre keeps its `Episodes` scan.
