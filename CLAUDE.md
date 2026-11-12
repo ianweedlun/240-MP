@@ -2,10 +2,8 @@
 
 **Agent contract first:** the project rules, communication pipeline, and definition-of-done
 live in **[.hermes.md](.hermes.md)** (repo root, single-sourced on `dev`, mirrored to every
-branch) — that is the human-readable source of truth. Agents should first check
-[.hermes.megacave.md](.hermes.megacave.md): its `SRC-BLOB:` header vs
-`git ls-tree origin/dev .hermes.md | awk '{print $3}'` — equal → read the compressed mirror
-(fast ingest); different → read `.hermes.md` and re-synthesize the mirror. Read the contract
+branch) — that is the human-readable source of truth. (The compressed mirror
+`.hermes.megacave.md` is retired — deleted 2026-11-12; read `.hermes.md` directly.) Read the contract
 before working; this file must never duplicate it.
 
 240-MP is a retro VHS-style media app built with C++ Qt6 + QML, targeting Raspberry Pi 4 and macOS. Modules are self-contained media integrations (Plex, Local Files, Ambient Mode, etc.) that the app shell discovers and loads at startup.
