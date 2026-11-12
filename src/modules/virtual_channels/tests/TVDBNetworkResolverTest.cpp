@@ -149,6 +149,31 @@ int runTVDBNetworkResolverTests() {
                                               QStringLiteral("networks")).size(), 0,
                                "and the empty answer was not taught to the index");
             }
+            {
+                // replaceAll is wipe-all by contract: a launch that walked
+                // replaces the whole index from the fresh rows (tallies
+                // recomputed). Teaching survives the launches that DID NOT
+                // walk — a source that never reached auth writes nothing, and
+                // its last known lineup keeps standing rows (the retry chain
+                // logs exactly this). Pin the wipe side here; the standing
+                // side is pinned where the retry chain lands on the Pi.
+                QVector<vchan::LibraryRecord> more(1);
+                vchan::LibraryRecord &e = more.first();
+                e.src = QStringLiteral("Emby");
+                e.channel = QStringLiteral("tv");
+                e.title = QStringLiteral("Other Show");
+                e.networks = QStringList{ QStringLiteral("NBC") };
+                e.updatedMs = 2;
+                vtest::check(db.replaceAll(more), "a walked launch replaces the index");
+                vtest::checkEq(db.metadataFor(QStringLiteral("Firefly"),
+                                              QStringLiteral("tv"),
+                                              QStringLiteral("networks")).size(), 0,
+                               "and a show the fresh walk did not see is gone (wipe-all)");
+                vtest::checkEq(db.metadataFor(QStringLiteral("Other Show"),
+                                              QStringLiteral("tv"),
+                                              QStringLiteral("networks")).size(), 1,
+                               "while the fresh row reads back");
+            }
         }
         db.close();
         QFile::remove(dbPath);
