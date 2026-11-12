@@ -42,8 +42,12 @@ public:
     explicit MediaServerSource(QObject *parent = nullptr);
 
     void setBackend(SlotSource src, QObject *backend);
+    void setPresencePlex(QObject *plex);   // presence walks only — never the browse machine
     QObject *backend(SlotSource src) const;
-    bool available(SlotSource src) const { return backend(src) != nullptr; }
+    bool available(SlotSource src) const {
+        return src == SlotSource::Plex ? m_presencePlex != nullptr
+                                       : backend(src) != nullptr;
+    }
     bool busy() const;
 
     bool enumerate(const Request &req);
@@ -108,6 +112,11 @@ private:
 
     QObject *m_jellyfin = nullptr;
     QObject *m_emby     = nullptr;
+    // Presence walks only: the browse machine never grew a Plex transport
+    // (its guard test says so), so the launch walk holds Plex in its own
+    // slot and pages it with Plex's verbs. Handing Plex to the browse
+    // machine would route browsing through methods it does not have.
+    QObject *m_presencePlex = nullptr;
     QObject *m_active   = nullptr;
     Stage    m_stage    = Stage::Idle;
     QTimer  *m_timer    = nullptr;
@@ -151,6 +160,7 @@ private:
     bool        m_presence = false;
     QString     m_presenceSide;
     int         m_presencePhase = 0;     // 0 = boxsets first (movies), 1 = rows
+    QSet<QString> m_presenceSeenShows;   // Plex's section pass repeats the show on every episode row
     QVector<LibraryRecord> m_presenceRecords;
     QVariantList m_presenceSubjectRows;
 };

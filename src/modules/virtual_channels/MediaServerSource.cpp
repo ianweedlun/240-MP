@@ -67,6 +67,51 @@ bool MediaServerSource::parseSeasonKey(const QString &key, QString *seriesId, in
     return true;
 }
 
+void MediaServerSource::setPresencePlex(QObject *plex) {
+    m_presencePlex = nullptr;
+    if (!plex) return;
+    const QMetaObject *mo = plex->metaObject();
+    // Presence-only: the walk needs the section pass and the shelf listing.
+    // The browse machine's verbs are NOT demanded here — that is the door
+    // that keeps Plex out of browsing, and this check keeps it honest.
+    static const char *required[] = {
+        "load_libraries()",
+        "load_library_all(QString)",
+        "load_collections(QString)",
+        "get_auth_state()",
+    };
+    for (const char *m : required) {
+        if (mo->indexOfMethod(m) < 0) {
+            qWarning("[VirtualChannels] Plex backend has no %s — the walk skips it", m);
+            return;
+        }
+    }
+    if (mo->indexOfSignal("librariesLoaded(QVariant)") < 0
+        || mo->indexOfSignal("itemsLoaded(QVariant)") < 0) {
+        qWarning("[VirtualChannels] Plex does not report its listings — the walk skips it");
+        return;
+    }
+    connect(plex, SIGNAL(librariesLoaded(QVariant)), this, SLOT(onLibrariesLoaded(QVariant)),
+            Qt::UniqueConnection);
+    connect(plex, SIGNAL(itemsLoaded(QVariant)), this, SLOT(onItemsLoaded(QVariant)),
+            Qt::UniqueConnection);
+    if (mo->indexOfSignal("collectionsLoaded(QVariant)") >= 0)
+        connect(plex, SIGNAL(collectionsLoaded(QVariant)), this, SLOT(onItemsLoaded(QVariant)),
+                Qt::UniqueConnection);
+    if (mo->indexOfSignal("errorOccurred(QString)") >= 0)
+        connect(plex, SIGNAL(errorOccurred(QString)), this, SLOT(onBackendError(QString)),
+                Qt::UniqueConnection);
+    m_presencePlex = plex;
+    if (!m_wired.contains(plex)) {
+        m_wired.insert(plex);
+        connect(plex, &QObject::destroyed, this, [this, plex]() {
+            m_wired.remove(plex);
+            if (m_active == plex) fail(QStringLiteral("Server went away"));
+            if (m_presencePlex == plex) m_presencePlex = nullptr;
+        });
+    }
+}
+
 void MediaServerSource::setBackend(SlotSource src, QObject *backend) {
     QObject **slotPtr = (src == SlotSource::Jellyfin) ? &m_jellyfin
                       : (src == SlotSource::Emby)     ? &m_emby
@@ -106,6 +151,9 @@ void MediaServerSource::setBackend(SlotSource src, QObject *backend) {
     if (mo->indexOfSignal("boxsetChildrenLoaded(QVariant)") >= 0)
         connect(backend, SIGNAL(boxsetChildrenLoaded(QVariant)),
                 this, SLOT(onBoxsetChildrenLoaded(QVariant)), Qt::UniqueConnection);
+    if (mo->indexOfSignal("collectionsLoaded(QVariant)") >= 0)
+        connect(backend, SIGNAL(collectionsLoaded(QVariant)),
+                this, SLOT(onItemsLoaded(QVariant)), Qt::UniqueConnection);
     if (mo->indexOfSignal("errorOccurred(QString)") >= 0)
         connect(backend, SIGNAL(errorOccurred(QString)), this, SLOT(onBackendError(QString)),
                 Qt::UniqueConnection);
@@ -125,6 +173,11 @@ void MediaServerSource::setBackend(SlotSource src, QObject *backend) {
 QObject *MediaServerSource::backend(SlotSource src) const {
     if (src == SlotSource::Jellyfin) return m_jellyfin;
     if (src == SlotSource::Emby)     return m_emby;
+    // The browse machine never grew a Plex transport and never will through
+    // this door. The presence walk holds Plex in its own slot and only sees
+    // it while a walk is running — a browse asking for Plex still comes back
+    // "not handled", which is what the machine's test guards.
+    if (src == SlotSource::Plex && m_presence) return m_presencePlex;
     return nullptr;
 }
 
@@ -159,6 +212,7 @@ void MediaServerSource::reset() {
     m_libs.clear();
     m_pendingSeries.clear();
     m_pendingBoxsets.clear();
+    m_presenceSeenShows.clear();
     m_currentLib.clear();
     m_askedBoxsetsForLib = false;
     m_truncated = false;
@@ -239,7 +293,17 @@ QStringList MediaServerSource::eligibleLibraries(const QVariant &libraries, bool
 
     for (const QVariant &v : libraries.toList()) {
         const QVariantMap m = v.toMap();
-        const QString type = m.value(QStringLiteral("collectionType")).toString();
+        // Plex pages its sections under its own labels ("show"/"movie" in
+        // "sectionType"); the Jellyfin/Emby trio answers with "tvshows"/
+        // "movies" in "collectionType". One eligibility, two spellings —
+        // the machine asks the same question of all three transports.
+        QString type = m.value(QStringLiteral("collectionType")).toString();
+        if (type.isEmpty())
+            type = m.value(QStringLiteral("sectionType")).toString();
+        if (type == QStringLiteral("show"))
+            type = kTvType;
+        else if (type == QStringLiteral("movie"))
+            type = kMovieType;
         if (bothKinds ? (type != kTvType && type != kMovieType) : (type != need))
             continue;
         if (!wanted.isEmpty() && !listContainsCI(wanted, m.value(QStringLiteral("title")).toString()))
@@ -411,8 +475,12 @@ bool MediaServerSource::presence(SlotSource src, const QStringList &libraries,
                                  const QString &side) {
     if (busy()) return false;
     if (side != QLatin1String("tv") && side != QLatin1String("movies")) return false;
+    // The presence flag is raised BEFORE the lookup: Plex answers only while
+    // a walk runs, so the door order is what keeps the browse machine's
+    // "not handled" guard honest rather than accidental.
+    m_presence = true;
     QObject *b = backend(src);
-    if (!b) return false;
+    if (!b) { m_presence = false; return false; }
     // The dial does not walk through a handshake: a backend that has not
     // authenticated yet would answer with an empty library, and an empty
     // answer merged into the index would wipe everything the dial knows.
@@ -451,18 +519,30 @@ bool MediaServerSource::presence(SlotSource src, const QStringList &libraries,
 
 void MediaServerSource::presenceNextLibrary() {
     if (m_libs.isEmpty()) { presenceFinish(); return; }
+    const bool plex = (m_req.src == SlotSource::Plex);
     // The boxset listing for a movie library runs before that library's film
     // pass, so the collection names and their shelf counts arrive together.
     if (m_presenceSide == QLatin1String("movies") && m_presencePhase == 0) {
         m_presencePhase = 1;
         m_stage = Stage::PresenceItems;
-        if (!callBackend("load_items", { m_libs.first(), QString(kBoxSet), QString() }))
+        if (plex) {
+            if (!callBackend("load_collections", { m_libs.first() }))
+                fail(QStringLiteral("Server cannot list collections"));
+        } else if (!callBackend("load_items", { m_libs.first(), QString(kBoxSet), QString() })) {
             fail(QStringLiteral("Server cannot list collections"));
+        }
         return;
     }
     const QString lib = m_libs.takeFirst();
     m_presencePhase = 0;
     m_stage = Stage::PresenceItems;
+    if (plex) {
+        // Plex pages a whole section at a time and the type rides on the
+        // section itself, so the walk asks it once per shelf.
+        if (!callBackend("load_library_all", { lib }))
+            fail(QStringLiteral("Server cannot walk that library"));
+        return;
+    }
     // The backends' type map has no bare "Series", so the tv pass asks for
     // both row kinds and the handler below keeps only the show rows — that is
     // where genres and networks live.
@@ -641,10 +721,29 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
         // they answer the collection question with a shelf count already on the
         // row, so they go to the index as their own rows.
         const bool tvSide = (m_presenceSide == QLatin1String("tv"));
+        const bool plex = (m_req.src == SlotSource::Plex);
         for (const QVariant &v : list) {
             const QVariantMap m = v.toMap();
             const QString type = m.value(QStringLiteral("type")).toString();
-            if (type == QLatin1String("boxset")) {
+            // Plex's section pass flattens seasons into episode rows, so its
+            // show-level facts ride on every episode row — the show's title,
+            // genres and collections are the row's grandparent fields. One
+            // record per show, not one per episode.
+            if (plex && tvSide && type == QLatin1String("episode")) {
+                const QString show = m.value(QStringLiteral("grandparentTitle")).toString();
+                if (show.isEmpty()) continue;
+                if (m_presenceSeenShows.contains(show)) continue;
+                m_presenceSeenShows.insert(show);
+                LibraryRecord rec;
+                rec.src = providerName(m_req.src);
+                rec.channel = m_presenceSide;
+                rec.title = show;
+                rec.genres = m.value(QStringLiteral("genres")).toStringList();
+                rec.collections = m.value(QStringLiteral("collections")).toStringList();
+                m_presenceRecords.append(rec);
+                continue;
+            }
+            if (type == QLatin1String("boxset") || type == QLatin1String("collection")) {
                 const QString name = m.value(QStringLiteral("title")).toString();
                 if (name.isEmpty()) continue;
                 int shelf = m.value(QStringLiteral("childCount")).toInt();
@@ -656,7 +755,8 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
                     {QStringLiteral("count"), qMax(1, shelf)}});
                 continue;
             }
-            if (tvSide ? (type != QLatin1String("series")) : (type != QLatin1String("movie")))
+            if (tvSide ? (type != QLatin1String("series") && type != QLatin1String("show"))
+                       : (type != QLatin1String("movie")))
                 continue;
             LibraryRecord rec;
             rec.src = providerName(m_req.src);

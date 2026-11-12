@@ -156,6 +156,10 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
     m_server = new MediaServerSource(this);
     m_server->setBackend(SlotSource::Jellyfin, m_jellyfin);
     m_server->setBackend(SlotSource::Emby, m_emby);
+    // Plex rides the walk through its own door — the browse machine never
+    // sees it, and the walk's auth gate (get_auth_state) is what keeps it
+    // honest when the device handshake is still in flight at boot.
+    m_server->setPresencePlex(m_plex);
     if (!m_server->available(SlotSource::Jellyfin)) m_jellyfin = nullptr;
     if (!m_server->available(SlotSource::Emby))     m_emby = nullptr;
     connect(m_server, &MediaServerSource::enumerationFinished,
