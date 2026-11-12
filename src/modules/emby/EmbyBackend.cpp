@@ -694,6 +694,13 @@ QVariantMap EmbyBackend::formatItem(const QJsonObject &item) const {
         studios.append(v.toVariant());
     if (studios.isEmpty() && !item["Studio"].toString().isEmpty())
         studios << item["Studio"].toString();
+    // The broadcast networks a show aired on, when the server carries them
+    // (Emby names the field the same way Jellyfin does). The presence walk
+    // feeds the index from here; Plex tags no networks, so those shows lean
+    // on TheTVDB and the resolver's own learning covers them.
+    QVariantList networks;
+    for (const QJsonValue &v : item["Networks"].toArray())
+        networks.append(v.toVariant());
 
     QVariantMap map;
     map["itemId"]          = item["Id"].toString();

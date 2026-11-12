@@ -102,6 +102,58 @@ int runTVDBNetworkResolverTests() {
         QFile::remove(p);
     }
 
+    // --- the presence index answers before TheTVDB does ---
+    {
+        const QString dbPath = QDir::tempPath() + QStringLiteral("/tvdb-index-test.db");
+        LibraryDb db;
+        vtest::check(db.open(dbPath), "index opens for the join test");
+        {
+            // One show, walked with its network; the catalog row supplies the
+            // id the join needs. A resolver pointed at this index must answer
+            // without paying the fake network at all — the fixture below has
+            // no HTTP handler, so any attempt would come back empty.
+            QVector<vchan::LibraryRecord> recs(1);
+            vchan::LibraryRecord &r = recs.first();
+            r.src = QStringLiteral("Jellyfin");
+            r.channel = QStringLiteral("tv");
+            r.title = QStringLiteral("Firefly");
+            r.networks = QStringList{ QStringLiteral("Comedy Central") };
+            r.updatedMs = 1;
+            vtest::check(db.replaceAll(recs), "the walked show lands in the index");
+            vtest::checkEq(db.metadataFor(QStringLiteral("Firefly"),
+                                          QStringLiteral("tv"),
+                                          QStringLiteral("networks")).size(), 1,
+                           "and its network reads back");
+
+            TVDBNetworkResolver res("00000000-0000-0000-0000-000000000000");
+            res.useIndex(&db);
+            QVector<Subject> cat(1);
+            cat.first().kind = SubjectKind::Network;
+            cat.first().id = QStringLiteral("15");
+            cat.first().name = QStringLiteral("Comedy Central");
+            res.noteNetworkCatalog(cat);
+            {
+                MediaItem m; m.series = QStringLiteral("Firefly");
+                vtest::checkStr(res.networkIdFor(m), QStringLiteral("15"),
+                                "the shelves answer the network with no search at all");
+            }
+            {
+                // The teaching side stays honest: with no HTTP fixture, a
+                // fresh lookup answers empty, and an empty answer must NOT be
+                // taught (no phantom network written into the index).
+                MediaItem m; m.series = QStringLiteral("Cargo");
+                vtest::checkStr(res.networkIdFor(m), QString(),
+                                "no search means no answer");
+                vtest::checkEq(db.metadataFor(QStringLiteral("Cargo"),
+                                              QStringLiteral("tv"),
+                                              QStringLiteral("networks")).size(), 0,
+                               "and the empty answer was not taught to the index");
+            }
+        }
+        db.close();
+        QFile::remove(dbPath);
+    }
+
     // --- parseNetworkId: latestNetwork ---
     {
         QJsonObject ext = extendedWithNetwork(389, "AMC", "latestNetwork");

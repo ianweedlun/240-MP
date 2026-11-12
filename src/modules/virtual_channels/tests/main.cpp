@@ -16,7 +16,6 @@ int runCatalogTests();
 int runTVDBAuthTests();
 int runTVDBNetworkResolverTests();
 int runLibraryDbTests();
-int runLibraryDbTests();
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
@@ -34,7 +33,6 @@ int main(int argc, char **argv) {
     runCatalogTests();
     runTVDBAuthTests();
     runTVDBNetworkResolverTests();
-    runLibraryDbTests();
     runLibraryDbTests();
 
     std::printf("\n%d checks, %d failed\n", vtest::g_checks, vtest::g_failed);

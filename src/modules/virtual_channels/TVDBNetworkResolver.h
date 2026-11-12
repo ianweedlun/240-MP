@@ -9,6 +9,7 @@
 #include <QVector>
 
 #include "Subject.h"
+#include "LibraryDb.h"
 
 namespace vchan {
 
@@ -63,12 +64,28 @@ public:
     void loadCache(const QString &path);
     void saveCache() const;
 
+    // The module's presence index, when it has one. The resolver uses it to
+    // skip TheTVDB for shows the shelves already named a network for, and to
+    // teach the index what a fresh lookup answered. A resolver without an
+    // index (the unit tests, a bare caller) keeps the old HTTP-only path.
+    void useIndex(vchan::LibraryDb *db);
+    // The network names TheTVDB's own listing carries, in lower-case join form,
+    // plus the id behind each. The add-flow pays this listing once per view,
+    // so the resolver borrows it instead of fetching a second time. Feeding
+    // both directions at once keeps the join a single hash lookup per side.
+    void noteNetworkCatalog(const QVector<Subject> &networks);
+
 private:
     mutable QString m_token;
     mutable QHash<QString, QString> m_cache;
     mutable QString m_cachePath;   // set by loadCache; saveCache writes back
     QString m_apiKey;
     mutable QNetworkAccessManager m_nam;
+    // The presence index and the catalog's network rows, when the module has
+    // them (borrowed, never owned — the module keeps both alive).
+    vchan::LibraryDb *m_db = nullptr;
+    QHash<QString, QString> m_networkIds;       // lower(name) -> tvdb id
+    QHash<QString, QString> m_reverseNetworks;  // tvdb id -> label
 
     QString sessionToken() const;
     QVector<QJsonObject> searchSeries(const QString &title) const;

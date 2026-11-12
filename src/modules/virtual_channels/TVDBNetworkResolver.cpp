@@ -22,14 +22,56 @@ TVDBNetworkResolver::TVDBNetworkResolver(const QString &apiKey)
     : m_apiKey(apiKey)
     , m_nam() {}
 
+void TVDBNetworkResolver::useIndex(vchan::LibraryDb *db) {
+    m_db = db;
+}
+
+void TVDBNetworkResolver::noteNetworkCatalog(const QVector<Subject> &networks) {
+    m_networkIds.clear();
+    m_reverseNetworks.clear();
+    for (const Subject &s : networks) {
+        // A network's catalog row carries both halves of the join: the name
+        // the shelves use and the id TheTVDB answers with. Feeding both
+        // directions keeps either lookup a single hash hit.
+        m_networkIds.insert(s.name.toLower(), s.id);
+        m_reverseNetworks.insert(s.id, s.name);
+    }
+}
+
 QString TVDBNetworkResolver::networkIdFor(const MediaItem &item) const {
     const QString name = item.series.trimmed();
     const QString query = name.isEmpty() ? item.title : name;
     if (query.isEmpty()) return {};
     if (m_cache.contains(query)) return m_cache.value(query);
 
+    // The shelves answer before TheTVDB does. A presence walk that saw the
+    // server's Networks field for this show means no HTTP call and no rate
+    // limit for it — and a show the shelves answered for never re-pays, even
+    // across boots, because the index is a file.
+    // A name is not an id: the join needs a catalog row, so a network the
+    // shelves carry but the catalog can't name keeps the old path rather than
+    // inventing an identity.
+    if (m_db) {
+        const QStringList nets = m_db->metadataFor(query, QStringLiteral("tv"),
+                                                   QStringLiteral("networks"));
+        for (const QString &net : nets) {
+            const QString id = m_networkIds.value(net.toLower());
+            if (!id.isEmpty()) {
+                m_cache.insert(query, id);
+                return id;
+            }
+        }
+    }
+
     const QString netId = resolveByTitle(query);
     m_cache.insert(query, netId);
+    // A fresh answer is worth keeping in the index too: next session's walk
+    // may miss it, and the show still never re-pays TheTVDB. The reverse map
+    // (id -> label) comes from the same catalog listing; without it the
+    // resolver has no name to write, so it says nothing.
+    if (m_db && !netId.isEmpty() && m_reverseNetworks.contains(netId))
+        m_db->noteMetadata(query, QStringLiteral("tv"), QStringLiteral("networks"),
+                           { m_reverseNetworks.value(netId) });
     static int freshLookups = 0;
     ++freshLookups;
     qInfo("[VirtualChannels] tvdb search #%d '%s' -> '%s' (empty means no match or a rate-limit miss)",
