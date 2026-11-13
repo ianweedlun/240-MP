@@ -42,7 +42,9 @@ FocusScope {
         studioMovie ? "studio"
         : subjectRoot.recipe === "collection"
             ? (subjectRoot.wants === "movies" ? "moviecollections" : "tvcollections")
-            : recipe
+            : (subjectRoot.recipe === "genre" && subjectRoot.wants === "movies")
+                ? "moviegenres"
+                : recipe
     readonly property string subjectWord:
         studioMovie ? "Studio"
         : recipe.charAt(0).toUpperCase() + recipe.slice(1)

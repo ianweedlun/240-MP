@@ -4279,7 +4279,8 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
         // it stops paying is a search per title at seed time, and the
         // resolver's index join does that per show instead.
         const bool networkKind = (kind == QLatin1String("network"));
-        const bool genreKind = (kind == QLatin1String("genre"));
+        const bool genreKind = (kind == QLatin1String("genre")
+                                || kind == QLatin1String("moviegenres"));
         const bool collectionKind = (kind == QLatin1String("moviecollections")
                                      || kind == QLatin1String("tvcollections"));
         const bool studioKind = (kind == QLatin1String("studio"));
@@ -4293,6 +4294,11 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
                                   || kind == QLatin1String("tvcollections"))
                                      ? QStringLiteral("tv") : QStringLiteral("movies");
             QVariantList rows = m_libraryDb.presence(subjectKind, chan, 60);
+            // Plex carries TV networks in Studio rather than a separate
+            // network tag, so when library.db has no "network" rows on the tv
+            // side, join against the tv "studio" rows instead.
+            if (networkKind && rows.isEmpty())
+                rows = m_libraryDb.presence(QStringLiteral("studio"), QStringLiteral("tv"), 60);
             if (networkKind && !rows.isEmpty()) {
                 TVDBNetworkResolver *res = resolver();
                 if (res) {
@@ -4356,7 +4362,8 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
     if (!res) { emit catalogFailed(kind, "TheTVDB apikey is not set"); return; }
 
     QVector<Subject> subjects;
-    if (kind == QStringLiteral("genre"))      subjects = res->listGenres();
+    if (kind == QStringLiteral("genre") || kind == QLatin1String("moviegenres"))
+        subjects = res->listGenres();
     else if (kind == QStringLiteral("network")) {
         subjects = res->listNetworks();
         // The network listing is the only place a network's name meets its

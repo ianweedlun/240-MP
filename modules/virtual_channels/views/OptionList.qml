@@ -29,6 +29,7 @@ Item {
     readonly property int count: rows.length
     property int _rev: 0
     onRowsChanged: { ++_rev; clampCurrent() }
+    function refresh() { ++_rev }
 
     signal step(int delta)
     signal activate(int index)
@@ -140,7 +141,7 @@ Item {
             width: form.width
             height: form.rowH
             readonly property bool selected: index === optionList.current
-            readonly property bool steps: (optionList._rev, optionList.cycles(index))
+            readonly property bool steps: optionList._rev >= 0 ? optionList.cycles(index) : false
 
             Rectangle {
                 anchors.fill: parent
@@ -148,7 +149,7 @@ Item {
             }
 
             Text {
-                text: (optionList._rev, optionList.labelFor(row.index))
+                text: optionList._rev >= 0 ? optionList.labelFor(row.index) : ""
                 color: row.selected ? root.surfaceColor : root.primaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
@@ -177,7 +178,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                    text: (optionList._rev, optionList.valueFor(row.index))
+                    text: optionList._rev >= 0 ? optionList.valueFor(row.index) : ""
                     color: row.selected ? root.surfaceColor : root.tertiaryColor
                     font.family: root.globalFont
                     font.pixelSize: root.sh * 0.0333
@@ -208,7 +209,7 @@ Item {
 
         Text {
             text: optionList.showingStatus ? optionList.status
-                                           : (optionList._rev, optionList.helpFor(optionList.current))
+                                           : (optionList._rev >= 0 ? optionList.helpFor(optionList.current) : "")
             color: root.primaryColor
             font.family: root.globalFont
             font.pixelSize: root.sh * 0.0270833

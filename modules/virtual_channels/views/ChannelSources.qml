@@ -164,6 +164,7 @@ FocusScope {
         adsPerBreak = timing.adsPerBreak
         order       = timing.order
         if (current >= rowCount) current = rowCount - 1
+        options.refresh()
         console.log("[presetflow] reload done: ch:", channelNumber,
                     "kind:", cfg.kind === undefined ? "unset" : cfg.kind,
                     "films:", countOf("films"))

@@ -2261,6 +2261,42 @@ void testPresetChannelDefaultsToInterleaved() {
             "browse_source(shows) used cache with zero extra Plex calls");
 }
 
+void testAllRecipesFilterByLibraryDb() {
+    section("Backend: all recipes filter by library.db (including moviegenres and tv studio->network)");
+
+    Fixture fx;
+    vchan::LibraryDb db;
+    check(db.open(fx.data() + QStringLiteral("/library.db")), "opened library.db");
+    vchan::LibraryRecord tvShow;
+    tvShow.src = QStringLiteral("Plex");
+    tvShow.channel = QStringLiteral("tv");
+    tvShow.title = QStringLiteral("Scrubs");
+    tvShow.itemId = QStringLiteral("10");
+    tvShow.genres = { QStringLiteral("Comedy") };
+    tvShow.studios = { QStringLiteral("NBC") };
+
+    vchan::LibraryRecord movie;
+    movie.src = QStringLiteral("Plex");
+    movie.channel = QStringLiteral("movies");
+    movie.title = QStringLiteral("Alien");
+    movie.itemId = QStringLiteral("20");
+    movie.genres = { QStringLiteral("Sci-Fi") };
+    movie.studios = { QStringLiteral("20th Century Fox") };
+    check(db.replaceAll({ tvShow, movie }), "seeded library.db");
+    db.close();
+
+    VirtualChannelsBackend b(fx.data(), fx.data(), nullptr);
+    QVariantList movieGenres;
+    QObject::connect(&b, &VirtualChannelsBackend::catalogReady, &b,
+                     [&](const QString &kind, const QVariantList &opts) {
+                         if (kind == QLatin1String("moviegenres")) movieGenres = opts;
+                     });
+    b.load_catalog(QStringLiteral("moviegenres"));
+    checkEq(movieGenres.size(), 1, "moviegenres returns only movie-side genres from library.db");
+    checkStr(movieGenres.value(0).toMap().value(QStringLiteral("label")).toString(),
+             QStringLiteral("Sci-Fi"), "moviegenres returns Sci-Fi, not TV Comedy");
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -2293,6 +2329,7 @@ int runVirtualChannelsBackendTests() {
     testGenreRecipeWantsByChannelKind();
     testPlexTvGenreSeedFiltersShows();
     testPresetChannelDefaultsToInterleaved();
+    testAllRecipesFilterByLibraryDb();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
