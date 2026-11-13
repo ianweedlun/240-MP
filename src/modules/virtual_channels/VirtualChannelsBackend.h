@@ -2,6 +2,7 @@
 #include <functional>
 #include <optional>
 #include <QHash>
+#include <QJsonArray>
 #include <QPair>
 #include <QSet>
 #include <QObject>
@@ -15,13 +16,20 @@
 #include "ChannelTuner.h"
 #include "DurationProbe.h"
 #include "MediaServerSource.h"
+#include "LibraryDb.h"
 #include "ScheduleGenerator.h"
 #include "TrackChoice.h"
 
+class QProcess;
 class QTimer;
+
+namespace vchan {
+class TVDBNetworkResolver; // forward: used as a pointer member only
+} // namespace vchan
 
 class VirtualChannelsBackend : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QString previewFrame READ previewFrame NOTIFY previewFrameChanged)
 public:
     explicit VirtualChannelsBackend(const QString &appRoot,
                                     const QString &dataRoot,
@@ -29,6 +37,7 @@ public:
                                     QObject *jellyfinBackend = nullptr,
                                     QObject *embyBackend = nullptr,
                                     QObject *parent = nullptr);
+    ~VirtualChannelsBackend() override;
 
     Q_INVOKABLE QVariantList get_channels();
 
@@ -38,6 +47,11 @@ public:
                                            int artWidth = 480, int artHeight = 270);
     Q_INVOKABLE void preview_stream(int channelNumber);
     Q_INVOKABLE void cancel_preview_stream();
+    Q_INVOKABLE void start_preview_video(const QString &url, double positionMs, double volume);
+    Q_INVOKABLE void stop_preview_video();
+    Q_INVOKABLE void set_preview_volume(double volume);
+    Q_INVOKABLE bool preview_video_available() const;
+    QString previewFrame() const { return m_previewFrame; }
 
     Q_INVOKABLE QVariantMap now_next(int channelNumber);
 
@@ -84,6 +98,9 @@ public:
     static constexpr int kMaxScheduleDays     = 7;
     static constexpr int kDefaultScheduleDays = 2;
     static constexpr int kStartupSweepDelayMs = 20000;
+    // The library walk starts after the schedule sweep so a launch never makes
+    // the add-flow wait on a listing.
+    static constexpr int kPresenceWalkDelayMs = 30000;
     Q_INVOKABLE int schedule_days() const;
 
     Q_INVOKABLE void top_up_schedules();
@@ -125,6 +142,9 @@ public:
         QString library;
         QStringList titles;
         QStringList genres;
+        // Movie channels ask "by studio": the studio strings the servers
+        // carry (Plex Studio attribute, Jellyfin Studios, Emby Studio).
+        QStringList studios;
         QStringList collections;
         QStringList playlists;
         bool anyFilm = true;
@@ -182,6 +202,24 @@ public:
     Q_INVOKABLE QVariantList list_logos();
     Q_INVOKABLE QString logos_dir() const { return m_dataRoot + QStringLiteral("/logos"); }
     Q_INVOKABLE QString logo_path(const QString &file) const;
+
+    // The local library index (one SQLite file): what the shelves can actually
+    // air. The add-flow's option lists read this instead of guessing categories
+    // from TheTVDB, so a genre whose only show sits on the other side of the
+    // dial stops being offered where it can never play. An index nobody has
+    // walked reads empty, and the UI keeps its catalog fallback in that case —
+    // presence darkens nothing before the walk has run.
+    Q_INVOKABLE QVariantList library_presence(const QString &subjectKind,
+                                              const QString &channel,
+                                              int limit = 40) const;
+    // The count behind one option row ("Comedy — 23 shows"), so a dial can
+    // prefer a category the library fills richly over one it barely has.
+    Q_INVOKABLE int library_count_for(const QString &subjectKind,
+                                      const QString &value,
+                                      const QString &channel) const;
+    // False until the launch walk put something in the index; the UI falls back
+    // to the catalog path while it is false.
+    Q_INVOKABLE bool library_index_known() const;
     Q_INVOKABLE QString channel_logo(int channelNumber);
     Q_INVOKABLE bool    set_channel_logo(int channelNumber, const QString &file);
     // How a channel's logo is drawn where it differs from the module's Channel
@@ -194,6 +232,32 @@ public:
     Q_INVOKABLE QVariantMap logo_style_range(const QString &key) const;
 
     Q_INVOKABLE int create_channel(const QString &name);
+    // Build a preset channel: identity (name) is derived from the subject, the
+    // recipe is recorded under "preset" so the channel is recognisably a
+    // genre/network/collection channel. `wants` says whether the channel airs
+    // shows or films ("tv" | "movies"). Returns the new channel number, or -1.
+    Q_INVOKABLE int create_preset_channel(int kind, const QString &id,
+                                          const QString &name,
+                                          const QString &wants = QStringLiteral("tv"));
+
+    // Preset recipe kind as stored: channels written before the type fix carry
+    // it as a JSON STRING ("1") and newer ones as a number — QJsonValue::toInt()
+    // on a string is 0, which re-typed every Network/Collection preset into
+    // Genre on reload (identity filter skipped, bogus server block written;
+    // the ABC preset aired all 21,615 library items). Always read preset kind
+    // through this, never a bare toInt().
+    static int presetKindOf(const QJsonObject &preset);
+
+    // Stand the preset's content up: ask the connected sources for what the
+    // recipe names and write the picks into the channel's pools as concrete
+    // series/film entries, so the builder opens with everything already ticked
+    // and the viewer's work is removing what they don't want. Async: answers
+    // through presetSeeded. The recipe itself stays on the channel under
+    // "preset" so "Seed from recipe" can run it again after the viewer's
+    // removals (seed_preset_channel again) without the recipe deciding what
+    // airs by itself.
+    Q_INVOKABLE void seed_preset_channel(int channelNumber);
+    Q_INVOKABLE bool seed_active() const { return m_seedActive; }
 
     Q_INVOKABLE QVariantList channel_interstitials(int channelNumber);
     Q_INVOKABLE QVariantList media_folders(int maxDepth = 3);
@@ -247,8 +311,23 @@ public:
 
     Q_INVOKABLE QVariantList list_channels();
 
+    // Load the subject values for a preset recipe. `kind` is "genre",
+    // "network" or "collection": the first two come from TheTVDB (needs the
+    // apikey set), collections from the connected media server. Delivers the
+    // values via catalogReady; catalogFailed when the source is unavailable.
+    Q_INVOKABLE void load_catalog(const QString &kind);
+
+    // Pure keep rule for browse section enumeration (unit-testable, static):
+    // which Plex library type feeds which browse kind. TV-side kinds ("shows",
+    // "tvcollections") walk show libraries only, movie-side kinds (anything
+    // starting "movie") walk movie libraries only, and the legacy "collections"
+    // union takes both.
+    static bool browseKeepsLibrary(const QString &browseKind,
+                                   const QString &sectionType);
+
     Q_INVOKABLE int guide_channel_number() const;
     Q_INVOKABLE int weather_channel_number() const;
+    Q_INVOKABLE int manage_channel_number() const;
     Q_INVOKABLE bool weather_channel_enabled() const;
     Q_INVOKABLE bool rename_channel(int number, const QString &name);
     Q_INVOKABLE bool move_channel(int number, int direction);
@@ -264,11 +343,21 @@ signals:
 
     void playDescriptorReady(const QVariantMap &descriptor);
     void previewStreamReady(int channelNumber, const QString &url, double positionMs);
+    void previewFrameChanged();
 
     void generationProgress(int channelNumber, int done, int total);
     void generationFinished(int channelNumber, bool ok, const QString &message);
 
     void actionStatus(const QString &message);
+
+    // Catalog of preset-recipe subject values, delivered after load_catalog.
+    // `kind` echoes the requested recipe; `options` is [{id, label}].
+    void catalogReady(const QString &kind, const QVariantList &options);
+    void catalogFailed(const QString &kind, const QString &message);
+
+    // The seeding pass finished: ok says whether anything landed, and message
+    // counts the shows/films written (or says why nothing did).
+    void presetSeeded(int channelNumber, bool ok, const QString &message);
 
 public slots:
     void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
@@ -289,6 +378,11 @@ private slots:
     void onGenerationTick();
     void onUrlTimeout();
     void onPlexEnumTimeout();
+    // Bridges the media-server browse to the collection catalog: when a catalog
+    // load is pending, the browse result (or failure) is delivered as
+    // catalogReady/catalogFailed instead of to a source browser.
+    void onCatalogBrowseReady(const QString &, const QVariantList &);
+    void onCatalogBrowseFailed(const QString &, const QString &);
 
 private:
     QString m_appRoot;
@@ -302,7 +396,16 @@ private:
     QObject *m_jellyfin = nullptr;
     QObject *m_emby = nullptr;
 
+    // The TVDB catalog resolver, built lazily once an apikey is known. A preset
+    // genre/network channel enumerates its subject values from it.
+    vchan::TVDBNetworkResolver *m_resolver = nullptr;
+    // While a collection catalog is loading, this records what the caller asked
+    // for so onPlexCollectionsLoaded can deliver it back through catalogReady.
+    QString m_catalogPending;
+
     vchan::SlotSource channelSource(int channelNumber) const;
+    // Builds (once) and returns the TVDB resolver, or nullptr if no apikey.
+    vchan::TVDBNetworkResolver *resolver();
     static vchan::SlotSource sourceOf(const QJsonObject &channel);
     static bool    isMovieChannel(const QJsonObject &channel);
     static bool    usesDayPlan(const QJsonObject &channel);
@@ -341,8 +444,14 @@ private:
     QString     m_pgLibraryName;
     QStringList m_pgMatch;
     QStringList m_pgShowIds;
+    QStringList m_pgGenres;
+    QStringList m_pgStudios;
     // How many things carry each label being browsed, so a picker can show it.
     QHash<QString, int> m_browseTally;
+    // Cached "shows"/"movies" browse lists per source ("plex:shows", etc.) so
+    // SourceBrowser opens immediately after seeding without re-fetching.
+    QHash<QString, QVariantList> m_browseCache;
+    QString m_lastServerBrowseSource;
     QSet<QString> m_pgExcludeSeasons;
     QSet<QString> m_pgExcludeEpisodes;
     QStringList m_pgCollections;
@@ -356,8 +465,13 @@ private:
     QStringList m_pgSeasons;
     QVector<vchan::MediaItem> m_pgEpisodes;
 
+    // Public: the same gate the harvest applies, so a test can ask the gate
+    // directly beside the readPools tests.
+public:
     static bool bookingWants(const PoolJob &job, const QString &title,
-                             const QStringList &genres = QStringList());
+                             const QStringList &genres = QStringList(),
+                             const QStringList &studios = QStringList());
+private:
     void appendToPool(const PoolJob &job, const QVector<vchan::MediaItem> &items);
     static QVector<QPair<vchan::SlotKind, const char *>> poolFields();
     QVector<PoolJob> m_pgApptJobs;
@@ -374,7 +488,9 @@ private:
 
     void browse_plex_shows();
     void browse_plex_movies(const QString &kind);
-    void browse_plex_collections();
+    // kind names the browse ("collections" unions both libraries;
+    // "tvcollections"/"moviecollections" walk only the matching type).
+    void browse_plex_collections(const QString &kind);
     void browse_plex_playlists();
     void browse_plex_seasons(const QString &showRatingKey);
     void browse_plex_episodes(const QString &seasonRatingKey);
@@ -412,7 +528,9 @@ private:
 
     void plexEnumStart(int channelNumber, const vchan::ChannelDef &def,
                        const QString &library, const QStringList &match,
-                       const QStringList &showIds = {});
+                       const QStringList &showIds = {},
+                       const QStringList &genres = {},
+                       const QStringList &studios = {});
     bool plexExcluded(const QString &ratingKey, bool isSeason) const;
     bool plexItemToMedia(const QVariantMap &m, vchan::MediaItem *out) const;
     void plexEnumNext();
@@ -435,6 +553,15 @@ private:
     bool    m_genActive = false;
     int     m_genChannel = -1;
     vchan::ChannelDef m_genDef;
+    // A seeding pass shares the generation machinery (same enumeration, same
+    // busy state) and differs only in what happens when the items land: the
+    // picks are written into the channel's pools instead of laid onto a clock.
+    bool     m_seedActive = false;
+    QString  m_seedRecipeKey;      // "<kind id>:<subject id>" marks the entries
+    QJsonArray m_seedPriorProgrammes;   // the channel's own entries, put back
+                                        // once the picks land (the seed pass
+                                        // reads the recipe with them set aside)
+    void     finishSeeding();
     struct PendingItem { QString absPath; QString rel; vchan::SlotKind kind;
                          int apptIndex = -1;
                          int pack = -1;
@@ -540,15 +667,50 @@ private:
     int     m_previewChannel  = -1;
     int     m_previewSlot     = -1;
     qint64  m_previewPosition = 0;
+    QProcess *m_previewProc   = nullptr;
+    QTimer   *m_previewPoll   = nullptr;
+    QString   m_previewDir;
+    QString   m_previewIpcPath;
+    QString   m_previewFrame;
+    void      pollPreviewFrames();
     QObject *serverBackend(vchan::SlotSource src) const;
     vchan::SlotSource m_serverPendingSrc = vchan::SlotSource::Local;
     vchan::Slot       m_serverPendingSlot;        // asked for again once its detail is in
     QString           m_serverAwaitingDetailFor;
     vchan::MediaServerSource *m_server = nullptr;
+
+    // The local library index and the launch walk that fills it. One walk per
+    // source per side of the dial queues behind the other server work (the
+    // source layer is single-flight), and the index commits once the queue
+    // drains. An empty index is not an error: the UI keeps its catalog path
+    // until the first walk puts rows in.
+    vchan::LibraryDb m_libraryDb;
+    QVector<QPair<vchan::SlotSource, QString>> m_presenceQueue;   // source, side
+    QVector<vchan::LibraryRecord> m_walkRecords;
+    QVariantList m_walkRows;
+    bool                        m_presenceWalkActive = false;  // a job is in flight when true
+    int                         m_presenceRetries = 0;   // per-job auth retries (bounded)
+    QPair<vchan::SlotSource, QString> m_presenceRetriedJob;    // budget owner
+    QSet<QString>                m_presenceWalkStarted;   // "Source/side" walked or dropped
+    QTimer *m_walkTimer = nullptr;
     void    onServerEnumerationFinished(const QVector<vchan::MediaItem> &items);
     void    onServerEnumerationFailed(const QString &reason);
     void    onServerBrowseReady(const QString &kind, const QVariantList &items);
     void    onServerBrowseFailed(const QString &kind, const QString &reason);
+    // A presence walk finished for one source and side: its rows fold into the
+    // index as they arrive, and the queue moves on. Failures land here too with
+    // nothing in hand, so one server timing out cannot stall the walk.
+    void    onPresenceReady(const QString &provider,
+                            const QVector<vchan::LibraryRecord> &records,
+                            const QVariantList &collectionRows);
+    // Launch-time library walks: each answered batch folds into the index;
+    // a source whose walk never arrives keeps its rows standing (watchdog
+    // hands an empty batch). The queue is seeded at walk time — construction
+    // time is too early, the servers have not authenticated yet.
+    void    seedPresenceWalks();
+    void    startNextPresenceWalk();
+    // The walk is the module's own setting (on unless the config says off).
+    bool    libraryWalkEnabled() const;
 
     void finishGeneration(bool ok, const QString &message);
 

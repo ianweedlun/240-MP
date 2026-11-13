@@ -51,19 +51,47 @@ FocusScope {
         authState = needsAuthState ? appCore.get_module_auth_state(moduleId) : ""
         var caps = dynamicOptions["_capabilities"] || []
         var filtered = []
+        var installed = appCore.get_installed_modules()
         for (var i = 0; i < schema.length; i++) {
             var item = schema[i]
             if (item.requires_auth && (authState === "none" || authState === "")) continue
             if (item.requires_capability && caps.indexOf(item.requires_capability) < 0) continue
+            // A row that only means something while ANOTHER module is on hides
+            // itself when that module is off: a control for something the
+            // viewer cannot turn on is clutter, not a choice. Same machinery
+            // as requires_capability above — one more fact the dial knows.
+            if (item.requires_module) {
+                var ready = false
+                for (var mi = 0; mi < installed.length; mi++) {
+                    if (installed[mi].id === item.requires_module && installed[mi].enabled) {
+                        ready = true
+                        break
+                    }
+                }
+                if (!ready) continue
+            }
             filtered.push(item)
         }
         schemaItems = filtered
 
         if (filtered.length > 0) {
             var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            settingsList.currentIndex = Math.min(restore, filtered.length - 1)
+            settingsList.currentIndex =
+                snapSelectable(Math.min(restore, filtered.length - 1), 1)
             settingsList.positionViewAtIndex(settingsList.currentIndex, ListView.Contain)
         }
+    }
+
+    // Section rows have no values — never stop on one. Land on the nearest
+    // selectable row in the direction the viewer was heading.
+    function snapSelectable(idx, dir) {
+        var n = schemaItems.length
+        if (n === 0) return idx
+        for (var k = 0; k < n; k++) {
+            var j = ((idx + dir * k) % n + n) % n
+            if (schemaItems[j].type !== "section") return j
+        }
+        return idx
     }
 
     function storedValue(key) {
@@ -125,7 +153,7 @@ FocusScope {
         if (type === "location_picker") {
             // The file is truth, not the saved value: conf-only edits show
             // too, and so do picker commits.
-            var line = weatherBackend.primaryLocationLine()
+            var line = appCore.weatherPrimaryLocationLine()
             return line !== "" ? line : "NOT SET"
         }
 
@@ -236,15 +264,12 @@ FocusScope {
         focus: true
 
         Keys.onUpPressed: {
-            if (currentIndex > 0) currentIndex--
-            else {
-                currentIndex = schemaItems.length-1
-            }
+            currentIndex = snapSelectable((currentIndex - 1 + schemaItems.length) % schemaItems.length, -1)
             settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
         }
+
         Keys.onDownPressed: {
-            if (currentIndex < count - 1) currentIndex++
-            else currentIndex = 0
+            currentIndex = snapSelectable((currentIndex + 1) % schemaItems.length, 1)
             settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
         }
 
@@ -313,7 +338,22 @@ FocusScope {
             width: settingsList.width
             height: root.sh * 0.0583333 //28
 
+            // --- SECTION LABEL --- (mirrors the core Settings.qml treatment)
+            Text {
+                visible: modelData.type === "section"
+                text: modelData.label || ""
+                color: root.secondaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                anchors.verticalCenter: parent.verticalCenter
+                topPadding: root.sh * 0.0020833 //1
+                leftPadding: root.sw * 0.009375 //6
+                rightPadding: root.sw * 0.009375 //6
+                font.pixelSize: root.sh * 0.0291667 //14
+            }
+
             Rectangle {
+                visible: modelData.type !== "section"
                 anchors.fill: parent
                 color: settingsList.currentIndex === index ? root.accentColor : "transparent"
 

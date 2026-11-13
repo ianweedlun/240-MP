@@ -30,6 +30,17 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml Network Svg Test)
 # so a build or an install without the module simply shows a still card
 # instead. (Debian: qt6-multimedia-dev, qml6-module-qtmultimedia.)
 find_package(Qt6 QUIET COMPONENTS Multimedia)
+
+# Optional: Qt's Sql module backs the local library index (LibraryDb). Optional
+# on purpose: the module's own guard macro APP_HAVE_SQLITE is what the source is
+# written against, so a build without the Sql package still links and runs, it
+# just has no persistent index and answers "unknown" from the DB. (Debian:
+# libqt6sql6 + libqt6sql6-sqlite, the latter carrying the QSQLITE plugin.)
+find_package(Qt6 QUIET COMPONENTS Sql)
+if(Qt6Sql_FOUND)
+    add_compile_definitions(APP_HAVE_SQLITE)
+endif()
+
 find_package(OpenSSL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED) # gamepad input (InputManager)
 
@@ -87,6 +98,10 @@ add_executable(240mp
     src/modules/virtual_channels/DurationProbe.cpp
     src/modules/virtual_channels/MediaServerSource.cpp
     src/modules/virtual_channels/LocalLibrary.cpp
+    src/modules/virtual_channels/LibraryDb.cpp
+    src/modules/virtual_channels/Catalog.cpp
+    src/modules/virtual_channels/TVDBAuth.cpp
+    src/modules/virtual_channels/TVDBNetworkResolver.cpp
     src/player/MpvController.cpp
     src/util/MpvBasicOptions.cpp
     src/util/YtDlpLocator.cpp
@@ -94,6 +109,10 @@ add_executable(240mp
     src/util/ExecPath.cpp
     src/util/DisplayHandoff.cpp
     src/util/FontconfigOverride.cpp
+    src/audio/NoopVolumeMixer.cpp
+    src/audio/PipeWireVolumeMixer.cpp
+    src/audio/ALSAVolumeMixer.cpp
+    src/audio/VolumeMixerFactory.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -121,6 +140,16 @@ if(Qt6Multimedia_FOUND)
     message(STATUS "Qt Multimedia found — the guide will show moving previews")
 else()
     message(STATUS "Qt Multimedia not found — the guide will show still cards")
+endif()
+
+# The library index links the Sql module only when the distro shipped it;
+# without it LibraryDb compiles to its unavailable-shim branch and the add-flow
+# lists fall back to the catalog path.
+if(Qt6Sql_FOUND)
+    target_link_libraries(240mp PRIVATE Qt6::Sql)
+    message(STATUS "Qt Sql found — the library index is persistent")
+else()
+    message(STATUS "Qt Sql not found — library presence lives in memory only")
 endif()
 
 target_link_libraries(240mp PRIVATE
@@ -269,6 +298,43 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-codes COMMAND weather-tests)
 
+    # AppCore -> weather module proxy (issue #53): app-level views load outside
+    # the weather module's QQml scope where the module-scope "weatherBackend"
+    # context property is null. The location reads are proxied through appCore,
+    # which holds every backend. Links AppCore + WeatherBackend and exercises
+    # the proxy directly (no QML engine, no network).
+    add_executable(appcore-weather-proxy-tests
+        src/AppCore.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/tests/AppCoreWeatherProxyTest.cpp)
+    set_target_properties(appcore-weather-proxy-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-weather-proxy-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-weather-proxy-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-weather-proxy-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-weather-proxy COMMAND appcore-weather-proxy-tests)
+
+    # System-volume mixer abstraction: exercises the factory's backend
+    # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
+    # No real audio hardware needed — the factory picks a no-op on WSL/CI.
+    add_executable(volume-mixer-tests
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/tests/VolumeMixerTest.cpp)
+    set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(volume-mixer-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME volume-mixer COMMAND volume-mixer-tests)
+
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
         src/modules/plex/tests/PlaybackDecisionTest.cpp)
@@ -298,6 +364,11 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/tests/MediaServerSourceTest.cpp
         src/modules/virtual_channels/tests/LocalLibraryTest.cpp
         src/modules/virtual_channels/tests/VirtualChannelsBackendTest.cpp
+        src/modules/virtual_channels/tests/SubjectEngineTest.cpp
+        src/modules/virtual_channels/tests/CatalogTest.cpp
+        src/modules/virtual_channels/tests/TVDBAuthTest.cpp
+        src/modules/virtual_channels/tests/TVDBNetworkResolverTest.cpp
+        src/modules/virtual_channels/tests/LibraryDbTest.cpp
         # Listed so AUTOMOC processes it: it declares a QObject but has no
         # same-named source file for AUTOMOC to pair it with.
         src/modules/virtual_channels/tests/FakeMediaServer.h
@@ -310,18 +381,46 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/ScheduleGenerator.cpp
         src/modules/virtual_channels/DurationProbe.cpp
         src/modules/virtual_channels/MediaServerSource.cpp
+        src/modules/virtual_channels/SubjectEngine.cpp
+        src/modules/virtual_channels/Catalog.cpp
+        src/modules/virtual_channels/TVDBAuth.cpp
+        src/modules/virtual_channels/TVDBNetworkResolver.cpp
         src/modules/virtual_channels/LocalLibrary.cpp
-        src/modules/virtual_channels/VirtualChannelsBackend.cpp)
+        src/modules/virtual_channels/VirtualChannelsBackend.cpp
+        src/modules/virtual_channels/LibraryDb.cpp
+        src/modules/virtual_channels/tests/LibraryDbTest.cpp)
     # MediaServerSource and the fake backend it is tested against are both
     # QObjects, so this target needs moc even though the rest of the suite is
     # plain C++.
     set_target_properties(vchan-tests PROPERTIES AUTOMOC ON)
-    target_link_libraries(vchan-tests PRIVATE Qt6::Core)
+    target_link_libraries(vchan-tests PRIVATE Qt6::Core Qt6::Network)
+    if(Qt6Sql_FOUND)
+        target_link_libraries(vchan-tests PRIVATE Qt6::Sql)
+    endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(vchan-tests PRIVATE -Wall -Wextra)
     endif()
     enable_testing()
     add_test(NAME vchan-schedule COMMAND vchan-tests)
+
+    # Preset add-flow QML smoke test: loads PresetRecipe/PresetSubject offscreen
+    # with stubbed backends and asserts the recipe -> rows -> create+nav wiring
+    # that pure-logic ctest can't reach. Needs Quick+Qml (QML engine) and Gui
+    # (QGuiApplication); runs headless via the offscreen platform set in main().
+    add_executable(vchan-preset-smoke
+        src/tests/preset-smoke-test.cpp)
+    set_target_properties(vchan-preset-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(vchan-preset-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(vchan-preset-smoke PRIVATE src)
+    # Repo root so the test locates the module views and the shared Components/
+    # import path without hardcoding a machine path.
+    # Repo root as a C string literal. Use the same set()/\" pattern the
+    # APP_VERSION def uses — target_compile_definitions strips a bare \" passed
+    # inline, which would otherwise split the path into tokens at compile time.
+    set(MP240_REPO_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(vchan-preset-smoke PRIVATE ${MP240_REPO_ROOT_DEF})
+    add_test(NAME vchan-preset-smoke COMMAND vchan-preset-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────

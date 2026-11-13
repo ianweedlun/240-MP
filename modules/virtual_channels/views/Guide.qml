@@ -28,9 +28,14 @@ FocusScope {
     property string previewMode: "VIDEO"
 
     property int masterVolume: 100
+    readonly property bool guideMusicOn:
+        typeof weatherBackend !== "undefined" && weatherBackend && weatherBackend.musicPlaying
+
+    onGuideMusicOnChanged: applyVolume()
 
     readonly property bool previewAudible:
-        previewShowsVideo && previewLoader.item !== null && previewLoader.item.active
+        !guideMusicOn && previewShowsVideo
+        && previewLoader.item !== null && previewLoader.item.active
         && previewLoader.item.canPlayAudio
 
     onPreviewAudibleChanged: applyDuck()
@@ -46,7 +51,7 @@ FocusScope {
     readonly property int audibleVolume: volumeOsd.muted ? 0 : masterVolume
 
     function applyVolume() {
-        if (previewLoader.item) previewLoader.item.volume = audibleVolume
+        if (previewLoader.item) previewLoader.item.volume = guideMusicOn ? 0 : audibleVolume
         if (weatherBackend)
             weatherBackend.set_music_volume(audibleVolume)
     }
@@ -68,9 +73,9 @@ FocusScope {
     property var nowPlaying: ({})
     property int  detailFor: -1
 
-    readonly property int previewSettleMs: 700
+    readonly property int previewSettleMs: 250
 
-    readonly property int previewDwellMs: 2500
+    readonly property int previewDwellMs: 400
 
     Timer {
         id: previewSettle
@@ -99,6 +104,7 @@ FocusScope {
     property string previewImage: ""
     property int previewSlot: -1
     property bool previewStarted: false
+    property bool previewingWeather: false
 
     Timer {
         id: previewFollow
@@ -134,6 +140,16 @@ FocusScope {
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { stopPreview(); return }
         var row = rows[i]
+        if (row.viewPath === weatherView) {
+            if (!previewShowsPicture) return
+            previewingWeather = true
+            previewStarted = true
+            previewImage = ""
+            if (previewLoader.item) previewLoader.item.clear()
+            if (virtualChannelsBackend) virtualChannelsBackend.cancel_preview_stream()
+            return
+        }
+        previewingWeather = false
         if (row.isSpecial) { stopPreview(); return }
 
         if (!previewShowsPicture) return
@@ -170,6 +186,7 @@ FocusScope {
         dwellChannel = -1
         previewSlot = -1
         previewStarted = false
+        previewingWeather = false
         // Also runs from Component.onDestruction, by which point the context
         // property is gone.
         if (virtualChannelsBackend) virtualChannelsBackend.cancel_preview_stream()
@@ -178,25 +195,49 @@ FocusScope {
     }
 
     function refreshNowPlaying() {
-        if (autoScroll) { nowPlaying = ({}); detailFor = -1; return }
+        if (!showDetail) { nowPlaying = ({}); detailFor = -1; return }
+        if (autoScroll && detailFor >= 0) return
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
         detailFor = row.number
-        nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
-                                   : virtualChannelsBackend.now_next(row.number)
+        if (row.viewPath === weatherView) {
+            nowPlaying = ({
+                valid: true,
+                series: "WEATHER CHANNEL",
+                title: "Local Forecast",
+                desc: "Live local conditions, extended forecast and almanac."
+            })
+        } else {
+            nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
+                                       : virtualChannelsBackend.now_next(row.number)
+        }
     }
 
     function refreshDetail() {
+        if (!showDetail) {
+            stopPreview()
+            nowPlaying = ({})
+            detailFor = -1
+            return
+        }
         stopPreview()
-        if (showDetail) previewSettle.restart()
-        if (autoScroll) { nowPlaying = ({}); detailFor = -1; return }
+        previewSettle.restart()
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
         detailFor = row.number
-        nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
-                                   : virtualChannelsBackend.now_next(row.number)
+        if (row.viewPath === weatherView) {
+            nowPlaying = ({
+                valid: true,
+                series: "WEATHER CHANNEL",
+                title: "Local Forecast",
+                desc: "Live local conditions, extended forecast and almanac."
+            })
+        } else {
+            nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
+                                       : virtualChannelsBackend.now_next(row.number)
+        }
     }
 
     function runLabel(ms) {
@@ -211,12 +252,13 @@ FocusScope {
         return m > 0 ? m + "M " + (sec > 0 ? sec + "S" : "") : sec + "S"
     }
 
-    readonly property real edgeMargin: root.sw * 0.045
-    readonly property real topMargin:  root.sh * 0.055
+    readonly property real edgeMargin: Math.round(root.sw * 0.045)
+    readonly property real topMargin:  Math.round(root.sh * 0.055)
 
     focus: true
 
     readonly property string weatherView: "WeatherChannel.qml"
+    readonly property string manageView: "Manage.qml"
 
     function refresh() {
         nowMs = virtualChannelsBackend.now_ms()
@@ -227,11 +269,6 @@ FocusScope {
         // so what channel up and down will land on is what the grid shows.
         var all = []
         for (var i = 0; i < real.length; i++) all.push(real[i])
-        all.push({ number: virtualChannelsBackend.guide_channel_number(),
-                   name: "Guide", isSpecial: true, viewPath: "",
-                   blocks: [{ startMs: fromMs, durMs: spanMs,
-                              title: "TV Guide", series: "",
-                              ep: "", onNow: true }] })
         if (toggleOn("channels.weather", false))
             all.push({ number: virtualChannelsBackend.weather_channel_number(),
                        name: "Weather", isSpecial: true,
@@ -267,10 +304,35 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        autoScrollEnabled = toggleOn("guide.autoscroll", true)
-        autoScroll = autoScrollEnabled
-        var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
-        if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
+        // The consolidated single row. Old two-row configs still mean the same
+        // thing until the viewer uses the new one: read the new key first,
+        // fall back to the legacy pair.
+        var idling = appCore.get_setting(guideRoot.moduleId, "guide.idling")
+        var idlingSrc = "legacy"
+        if (idling !== undefined && String(idling) !== "") {
+            idlingSrc = "setting"
+            var opt = String(idling)
+            if (opt.indexOf("Holds") === 0) {
+                autoScrollEnabled = opt.indexOf("Never") < 0
+                autoScroll = false
+                resumeSeconds = autoScrollEnabled
+                               ? (opt.indexOf("1m") >= 0 ? 60
+                                  : (opt.indexOf("5m") >= 0 ? 300 : 30))
+                               : 0
+            } else {
+                autoScrollEnabled = true
+                autoScroll = false
+                resumeSeconds = 5
+            }
+        } else {
+            autoScrollEnabled = toggleOn("guide.autoscroll", true)
+            autoScroll = false
+            var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
+            if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
+        }
+        appCore.note_state("guide-idle",
+                           "auto=" + (autoScrollEnabled ? "on" : "off") +
+                           " resume=" + resumeSeconds + "s src=" + idlingSrc)
         var pv = appCore.get_setting(guideRoot.moduleId, "guide.preview")
         if (pv !== undefined && pv !== null && String(pv) !== "")
             previewMode = String(pv).toUpperCase()
@@ -280,6 +342,13 @@ FocusScope {
         volumeOsd.level = masterVolume
         applyVolume()
         refresh()
+        for (var k = 0; k < rows.length; k++) {
+            if (!rows[k].isSpecial) {
+                channelRows.currentIndex = k
+                break
+            }
+        }
+        refreshNowPlaying()
 
         if (idleTracker) idleTracker.mpvActive = true
 
@@ -287,9 +356,12 @@ FocusScope {
             var wasPlaying = weatherBackend.musicPlaying
             weatherBackend.startMusic()
             musicStartedHere = !wasPlaying && weatherBackend.musicPlaying
+            applyVolume()
             if (!weatherBackend.musicPlaying)
                 status = "Music needs the Weather module's Music setting on"
         }
+        previewSettle.restart()
+        if (autoScrollEnabled && resumeSeconds > 0) resumeTimer.restart()
     }
 
     Component.onDestruction: {
@@ -337,8 +409,7 @@ FocusScope {
         windowOffset = 0
         refresh()
         autoScroll = true
-        stopPreview()
-        refreshDetail()
+        if (!showDetail) refreshDetail()
     }
 
     function takeControl() {
@@ -449,6 +520,11 @@ FocusScope {
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             var i = channelRows.currentIndex
+            // During the crawl the ListView model is rows.length * copies, so the
+            // highlight index can sit past the row count. A stray value like that
+            // can outlive the crawl and land on the real row with the same
+            // residue; wrap it before the guard below would otherwise reject it.
+            if (guideRoot.rows.length > 0) i %= guideRoot.rows.length
             if (!guideRoot.autoScroll && i >= 0 && i < guideRoot.rows.length) {
                 var row = guideRoot.rows[i]
                 guideRoot.stopPreview()
@@ -466,16 +542,16 @@ FocusScope {
         }
     }
 
-    readonly property real gridWidth:   width - edgeMargin * 2
-    readonly property real channelColW: gridWidth * 0.30
+    readonly property real gridWidth:   Math.round(width - edgeMargin * 2)
+    readonly property real channelColW: Math.round(gridWidth * 0.30)
     readonly property real timeAreaW:   gridWidth - channelColW
     readonly property real pxPerMs:     timeAreaW / spanMs
-    readonly property real rowH:        root.sh * 0.10
-    readonly property real headerH:     root.sh * 0.075
+    readonly property real rowH:        Math.round(root.sh * 0.10)
+    readonly property real headerH:     Math.round(root.sh * 0.075)
 
-    readonly property bool showDetail:  !autoScroll && rows.length > 0
+    readonly property bool showDetail:  rows.length > 0 && (previewShowsPicture || !autoScroll)
     onShowDetailChanged: if (!showDetail) stopPreview()
-    readonly property real detailH:     showDetail ? height * 0.42 : 0
+    readonly property real detailH:     showDetail ? Math.round(height * 0.42) : 0
 
     Rectangle {
         anchors.fill: parent
@@ -499,7 +575,10 @@ FocusScope {
             width: visible ? Math.min(parent.width * 0.5, height * 4 / 3) : 0
             clip: true
 
-            Rectangle { anchors.fill: parent; color: "black" }
+            Rectangle {
+                anchors.fill: parent
+                color: guideRoot.previewingWeather ? root.surfaceColor : "black"
+            }
 
             Image {
                 id: previewStill
@@ -517,13 +596,46 @@ FocusScope {
                 asynchronous: true
                 onLoaded: {
                     item.finished.connect(guideRoot.followSchedule)
-                    item.volume = guideRoot.masterVolume
+                    item.volume = guideRoot.guideMusicOn ? 0 : guideRoot.audibleVolume
                 }
                 active: guideRoot.previewShowsVideo
                 source: "ChannelPreview.qml"
                 onStatusChanged: {
                     if (status === Loader.Error)
                         console.log("[guide] no video preview available; showing the still instead")
+                }
+            }
+
+            Item {
+                id: wxPreviewHost
+                anchors.fill: parent
+                visible: guideRoot.previewingWeather && wxPreviewLoader.status === Loader.Ready
+                clip: true
+
+                Item {
+                    width: root.sw
+                    height: root.sh
+                    transformOrigin: Item.TopLeft
+                    scale: Math.min(wxPreviewHost.width / Math.max(1, root.sw),
+                                    wxPreviewHost.height / Math.max(1, root.sh))
+
+                    Loader {
+                        id: wxPreviewLoader
+                        anchors.fill: parent
+                        focus: false
+                        readonly property bool wantWeather:
+                            guideRoot.showDetail && guideRoot.previewShowsPicture
+                            && guideRoot.previewingWeather
+                        onWantWeatherChanged: {
+                            if (wantWeather) {
+                                setSource(Qt.resolvedUrl("../../weather/views/Weather.qml"), {
+                                    "navParams": { previewMode: true, moduleId: "com.240mp.weather" }
+                                })
+                            } else {
+                                setSource("")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -536,6 +648,32 @@ FocusScope {
             height: parent.height
 
             Text {
+                id: channelLine
+                text: {
+                    var target = guideRoot.detailFor
+                    for (var j = 0; j < guideRoot.rows.length; j++) {
+                        if (guideRoot.rows[j].number === target)
+                            return "CH " + guideRoot.rows[j].number + "  " + guideRoot.rows[j].name
+                    }
+                    var i = channelRows.currentIndex
+                    if (guideRoot.rows.length > 0 && i >= 0) {
+                        var r = guideRoot.rows[i % guideRoot.rows.length]
+                        if (r) return "CH " + r.number + "  " + r.name
+                    }
+                    return ""
+                }
+                visible: text !== ""
+                color: root.accentColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                anchors.top: parent.top
+                anchors.left: parent.left
+                width: parent.width
+                elide: Text.ElideRight
+                font.pixelSize: root.sh * 0.026
+            }
+
+            Text {
                 id: seriesLine
                 text: {
                     var n = guideRoot.nowPlaying
@@ -545,13 +683,14 @@ FocusScope {
                 color: root.primaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
-                anchors.top: parent.top
+                anchors.top: channelLine.visible ? channelLine.bottom : parent.top
+                anchors.topMargin: channelLine.visible ? root.sh * 0.004 : 0
                 anchors.left: parent.left
                 width: parent.width
                 wrapMode: Text.WordWrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
-                font.pixelSize: root.sh * 0.040
+                font.pixelSize: root.sh * 0.036
             }
 
             Text {
@@ -603,6 +742,7 @@ FocusScope {
             Item {
                 id: progress
                 visible: guideRoot.nowPlaying && guideRoot.nowPlaying.valid === true
+                         && Number(guideRoot.nowPlaying.durMs) > 0
                 anchors.top: runLine.visible ? runLine.bottom : epLine.bottom
                 anchors.topMargin: root.sh * 0.012
                 anchors.left: parent.left
@@ -717,8 +857,8 @@ FocusScope {
         x: guideRoot.edgeMargin
         y: header.y + header.height
         width: guideRoot.gridWidth
-        height: guideRoot.height - y
-                - (guideRoot.autoScroll ? guideRoot.topMargin * 0.5 : root.sh * 0.06)
+        height: Math.round(guideRoot.height - y
+                           - (guideRoot.autoScroll ? guideRoot.topMargin * 0.5 : root.sh * 0.06))
         clip: true
         interactive: false
         currentIndex: 0
@@ -746,19 +886,23 @@ FocusScope {
             Rectangle {
                 anchors.fill: parent
                 color: parent.selected ? root.accentColor : "transparent"
-                border.color: root.tertiaryColor
-                border.width: 1
             }
 
             Rectangle {
                 visible: !parent.selected
                 x: 1
-                y: 1
+                y: 0
                 width: guideRoot.channelColW - 1
-                height: parent.height - 2
+                height: parent.height - 1
                 property color baseColor: root.primaryColor
                 color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, 0.13)
             }
+
+            // Crisp 1px hairlines on top (z: 2) so selected row keeps identical borders.
+            Rectangle { z: 2; x: 0; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: guideRoot.channelColW - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: parent.width - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: 0; y: parent.height - 1; width: parent.width; height: 1; color: root.tertiaryColor }
 
             Text {
                 id: chNum
@@ -791,20 +935,23 @@ FocusScope {
                     required property var modelData
 
                     readonly property real rawX: (modelData.startMs - guideRoot.fromMs) * guideRoot.pxPerMs
-                    readonly property real clippedX: Math.max(0, rawX)
+                    readonly property int  snappedX: Math.round(Math.max(0, rawX))
                     readonly property real rawRight: (modelData.startMs + modelData.durMs - guideRoot.fromMs) * guideRoot.pxPerMs
+                    readonly property int  snappedRight: Math.round(Math.min(guideRoot.timeAreaW, rawRight))
 
-                    x: guideRoot.channelColW + clippedX
-                    y: 1
-                    width: Math.max(0, Math.min(guideRoot.timeAreaW, rawRight) - clippedX) - 1
-                    height: parent.height - 2
+                    x: guideRoot.channelColW + snappedX
+                    y: 0
+                    width: Math.max(0, snappedRight - snappedX)
+                    height: parent.height - 1
                     visible: width > 2
 
                     Rectangle {
                         anchors.fill: parent
                         color: modelData.onNow ? root.secondaryColor : root.surfaceColor
-                        border.color: root.tertiaryColor
-                        border.width: 1
+                    }
+                    Rectangle {
+                        x: parent.width - 1; y: 0; width: 1; height: parent.height
+                        color: root.tertiaryColor
                     }
 
                     Text {
@@ -859,7 +1006,7 @@ FocusScope {
         opacity: 0.6
         y: channelRows.y
         x: guideRoot.edgeMargin + guideRoot.channelColW
-           + (guideRoot.nowMs - guideRoot.fromMs) * guideRoot.pxPerMs
+           + Math.round((guideRoot.nowMs - guideRoot.fromMs) * guideRoot.pxPerMs)
         visible: guideRoot.rows.length > 0
                  && guideRoot.nowMs >= guideRoot.fromMs
                  && guideRoot.nowMs < guideRoot.fromMs + guideRoot.spanMs

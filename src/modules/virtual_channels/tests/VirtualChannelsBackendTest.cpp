@@ -935,6 +935,110 @@ void testServerBlockGathers() {
     }
 }
 
+// What the seed pass wrote into the source block has to come back when the
+// tuner reads the channel: a seeded genre or studio lives ONLY in the block
+// (the pool is set aside for the run), and a block whose filter is never read
+// asks for nothing — which used to read back as the whole library.
+void testSeededRecipeReadsBack() {
+    section("Backend: a block filter reads back as a filter");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+    vchan::ChannelDef def;
+
+    QJsonObject ch;
+    ch["number"] = 3;
+    ch["source"] = QStringLiteral("plex");
+    ch["kind"]   = QStringLiteral("movies");
+    QJsonObject plex;
+    plex["genres"] = QJsonArray{ QStringLiteral("Action") };
+    plex["studios"] = QJsonArray{ QStringLiteral("Paramount") };
+    ch["plex"] = plex;
+
+    const QVector<VirtualChannelsBackend::PoolJob> jobs = b.readPools(ch, def);
+    checkEq(jobs.size(), 1, "the block becomes one job");
+    const VirtualChannelsBackend::PoolJob &job = jobs.value(0);
+    check(job.pool == vchan::SlotKind::Programme, "a programme job");
+    check(job.src == vchan::SlotSource::Plex, "asked of Plex");
+    checkEq(job.genres.size(), 1, "carrying the genre the recipe named");
+    checkStr(job.genres.value(0), QStringLiteral("Action"), "by its name");
+    checkEq(job.studios.size(), 1, "carrying the studio the recipe named");
+    checkStr(job.studios.value(0), QStringLiteral("Paramount"), "by its name");
+    check(job.match.isEmpty() && job.titles.isEmpty(),
+          "the recipe lives in the filter lists, not in a picked show list");
+
+    // The same block beside a pool that holds entries — the studio and genre
+    // filters still air; only `match` is the legacy read that stays out.
+    QJsonObject withEntries = ch;
+    QJsonArray programmes;
+    {
+        QJsonObject e;
+        e["name"] = QStringLiteral("Top Gun");
+        e["kind"] = QStringLiteral("movie");
+        e["src"]  = QStringLiteral("plex");
+        programmes.append(e);
+    }
+    withEntries["programmes"] = programmes;
+    const QVector<VirtualChannelsBackend::PoolJob> jobs2 = b.readPools(withEntries, def);
+    bool carried = false;
+    for (const VirtualChannelsBackend::PoolJob &j : jobs2)
+        if (j.studios.size() == 1 && j.src == vchan::SlotSource::Plex)
+            carried = true;
+    check(carried, "the studio filter reads back beside entries too");
+
+    // The harvest's own gate: a studio match is case-blind, and a film whose
+    // studio does not match is kept out.
+    VirtualChannelsBackend::PoolJob gate;
+    gate.studios << QStringLiteral("Paramount");
+    check(VirtualChannelsBackend::bookingWants(gate, "TOP GUN",
+                                               { QStringLiteral("Action") },
+                                               { QStringLiteral("paramount") }),
+          "the studio string matches whatever the case");
+    check(!VirtualChannelsBackend::bookingWants(gate, "DIE HARD",
+                                                { QStringLiteral("Action") },
+                                                { QStringLiteral("fox") }),
+          "a film from another studio is kept out");
+
+    // The shape the CRT actually writes when a studio preset seeds: no server
+    // block at all, identity only in the preset object. The builder screen
+    // hides genre and studio rows — channel_source_config must agree by
+    // reporting neither field, or the hide rule and the counts drift apart.
+    Fixture fx2;
+    QJsonObject seededOnly;
+    seededOnly["number"] = 4;
+    seededOnly["source"] = QStringLiteral("plex");
+    seededOnly["kind"] = QStringLiteral("movies");
+    seededOnly["name"] = QStringLiteral("20th Century Fox");
+    QJsonObject preset;
+    preset["id"] = QStringLiteral("20th Century Fox");
+    preset["name"] = QStringLiteral("20th Century Fox");
+    preset["kind"] = QStringLiteral("1");
+    seededOnly["preset"] = preset;
+    QJsonArray entries;
+    for (const char *film : {"ALIEN", "BORAT"}) {
+        QJsonObject e;
+        e["name"] = QString::fromLatin1(film);
+        e["kind"] = QStringLiteral("movie");
+        e["src"] = QStringLiteral("plex");
+        e["preset"] = QStringLiteral("1:20th Century Fox");
+        entries.append(e);
+    }
+    seededOnly["programmes"] = entries;
+    fx2.write(seededOnly);
+    VirtualChannelsBackend c(fx2.data(), fx2.data());
+
+    const QVariantMap cfg = c.channel_source_config(4);
+    check(cfg.contains(QStringLiteral("preset")), "the preset identity rides into the config");
+    checkEq(cfg.value(QStringLiteral("genres")).toStringList().size(), 0,
+            "no genre field for a studio preset channel");
+    checkEq(cfg.value(QStringLiteral("studios")).toStringList().size(), 0,
+            "no studio field either — the block never landed on disk");
+    checkEq(cfg.value(QStringLiteral("films")).toStringList().size(), 2,
+            "the seeded picks are what air");
+    checkEq(cfg.value(QStringLiteral("match")).toStringList().size(), 0,
+            "and none of them read as legacy matches");
+}
+
 void testPlansRoundTrip() {
     section("Backend: plans survive being read out and handed back");
 
@@ -1222,6 +1326,138 @@ void testChannelLifecycle() {
     for (const QVariant &v : b.list_channels())
         if (v.toMap().value(QStringLiteral("number")).toInt() == made) stillThere = true;
     check(!stillThere, "the deleted channel is gone");
+}
+
+void testPresetChannelWritesTheRecord() {
+    section("Backend: a preset channel records its recipe and derives its name");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // kind 1 == Network (SubjectKind: Genre=0, Network=1, Collection=2).
+    const int made = b.create_preset_channel(1, "389", "AMC");
+    check(made > 0, "a preset channel is created");
+
+    const QJsonObject o = fx.read(made);
+    check(!o.isEmpty(), "the record exists");
+    checkStr(o.value(QStringLiteral("name")).toString(), "AMC",
+             "name auto-derived from the subject, not left blank");
+    const QJsonObject preset = o.value(QStringLiteral("preset")).toObject();
+    checkEq(VirtualChannelsBackend::presetKindOf(preset), 1,
+            "recipe kind recorded (number; presetKindOf reads it)");
+    checkStr(preset.value(QStringLiteral("id")).toString(), "389", "subject id recorded");
+    checkStr(preset.value(QStringLiteral("name")).toString(), "AMC", "subject name recorded");
+
+    // A second preset takes the next free number and derives its own name.
+    const int made2 = b.create_preset_channel(0, "29", "Action"); // Genre
+    checkEq(made2, made + 1, "the next preset takes the next number");
+    checkStr(fx.read(made2).value(QStringLiteral("name")).toString(), "Action",
+             "the genre preset derives its name too");
+}
+
+void testPresetChannelsWireTheirContent() {
+    section("Backend: a preset channel wires its subject's content, not an empty source");
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // Collection (kind 2): the Plex collection is wired in, so the channel has
+    // content the moment it is created instead of landing on an empty source.
+    const int coll = b.create_preset_channel(2, "402", "Adult Swim");
+    check(coll > 0, "a collection preset channel is created");
+    const QJsonObject collRec = fx.read(coll);
+    checkStr(collRec.value(QStringLiteral("source")).toString(), "plex",
+             "the collection channel points at Plex");
+    const QJsonArray collItems =
+        collRec.value(QStringLiteral("plex")).toObject()
+            .value(QStringLiteral("collections")).toArray();
+    checkEq(collItems.size(), 1, "the collection is recorded in the Plex block");
+    checkStr(collItems.at(0).toString(), "Adult Swim",
+             "it is the exact subject the viewer picked");
+
+    // Genre (kind 0): the media-server genre filter is wired in the same way.
+    const int genre = b.create_preset_channel(0, "29", "Action");
+    check(genre > 0, "a genre preset channel is created");
+    const QJsonObject genreRec = fx.read(genre);
+    checkStr(genreRec.value(QStringLiteral("source")).toString(), "plex",
+             "the genre channel points at Plex");
+    const QJsonArray genreItems =
+        genreRec.value(QStringLiteral("plex")).toObject()
+            .value(QStringLiteral("genres")).toArray();
+    checkEq(genreItems.size(), 1, "the genre is recorded in the Plex block");
+    checkStr(genreItems.at(0).toString(), "Action",
+             "it is the exact subject the viewer picked");
+
+    // Studio (kind 1, TV): wired into the source block's `studios` filter,
+    // same as movie studios — no TheTVDB resolver needed.
+    const int net = b.create_preset_channel(1, "389", "AMC");
+    check(net > 0, "a studio preset channel is created");
+    const QJsonObject netRec = fx.read(net);
+    check(netRec.value(QStringLiteral("plex")).toObject()
+              .value(QStringLiteral("studios")).toArray()
+              .contains(QStringLiteral("AMC")),
+          "tv studio wires into plex.studios");
+    checkStr(netRec.value(QStringLiteral("preset")).toObject()
+                 .value(QStringLiteral("name")).toString(), "AMC",
+             "the recipe is recorded for the later generator");
+}
+
+void testPresetChannelsSurfaceInBuilder() {
+    section("Backend: channel_source_config surfaces the preset's content");
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data());
+
+    // A collection preset: the subject rides into the config as the channel's
+    // collection, so the builder screen names it instead of answering NONE.
+    const int coll = b.create_preset_channel(2, "402", "Adult Swim");
+    check(coll > 0, "a collection preset channel is created");
+    const QVariantMap cc = b.channel_source_config(coll);
+    checkStr(cc.value(QStringLiteral("source")).toString(), "plex",
+             "the collection channel is on Plex");
+    check(cc.value(QStringLiteral("collections")).toStringList()
+              .contains(QStringLiteral("Adult Swim")),
+          "the wired collection surfaces in the builder config");
+    checkStr(cc.value(QStringLiteral("preset")).toString(), "Adult Swim",
+          "the recipe is named in the builder config");
+    checkEq(cc.value(QStringLiteral("presetOff")).toInt(), 0,
+            "nothing has been taken out of it yet");
+
+    // A genre preset: the recipe lives in the block as the server-side filter,
+    // not as entry rows — the hand-ticked genres are entries. The config says
+    // both, so the Genres row reads the filter and not an empty pool.
+    const int genre = b.create_preset_channel(0, "29", "Action");
+    check(genre > 0, "a genre preset channel is created");
+    const QVariantMap gc = b.channel_source_config(genre);
+    check(gc.value(QStringLiteral("genres")).toStringList()
+              .contains(QStringLiteral("Action")),
+          "the block's genre filter surfaces among the genres");
+    checkStr(gc.value(QStringLiteral("preset")).toString(), "Action",
+             "the recipe is named in the builder config");
+
+    // A TV studio preset (kind 1): carries its studio filter in the block.
+    const int net = b.create_preset_channel(1, "389", "AMC");
+    check(net > 0, "a tv studio preset channel is created");
+    const QVariantMap nc = b.channel_source_config(net);
+    check(nc.value(QStringLiteral("match")).toStringList().isEmpty(),
+          "a fresh studio preset has no picks yet");
+    checkStr(nc.value(QStringLiteral("preset")).toString(), "AMC",
+             "the recipe alone is what the builder needs to seed from");
+    check(nc.value(QStringLiteral("studios")).toStringList()
+              .contains(QStringLiteral("AMC")),
+          "tv studio presets carry their studio filter");
+
+    // The same ask on a movie channel means studio: Plex carries the string on
+    // films, so the recipe rides straight into the block — no resolver needed.
+    const int studio = b.create_preset_channel(1, "77", "Paramount", "movies");
+    check(studio > 0, "a studio preset channel is created");
+    const QVariantMap sc = b.channel_source_config(studio);
+    checkStr(sc.value(QStringLiteral("source")).toString(), "plex",
+             "the studio channel is on Plex");
+    check(sc.value(QStringLiteral("studios")).toStringList()
+              .contains(QStringLiteral("Paramount")),
+          "the studio filter surfaces in the builder config");
+    checkStr(sc.value(QStringLiteral("preset")).toString(), "Paramount",
+             "the recipe is named in the builder config");
 }
 
 
@@ -1689,6 +1925,14 @@ void testSpecialNumbersNeverCollide() {
         checkEq(b.weather_channel_number(), 1, "and the weather, which shared nothing, is not touched");
     }
     {
+        // The manage slot carries no setting yet, so it sits at the end of the
+        // dial order rather than colliding with any live number.
+        Fixture fm;
+        fm.writeMany({ localChannel(0), localChannel(2) });
+        VirtualChannelsBackend b(fm.data(), fm.data());
+        checkEq(b.manage_channel_number(), 99, "no setting written yet, the manage slot is at the end of the order");
+    }
+    {
         // Guide and weather on the one number: the weather gives way.
         Fixture fw;
         fw.write(localChannel(5));
@@ -1697,6 +1941,12 @@ void testSpecialNumbersNeverCollide() {
         VirtualChannelsBackend b(fw.data(), fw.data());
         checkEq(b.guide_channel_number(), 0, "the guide keeps 0");
         checkEq(b.weather_channel_number(), 1, "the weather moves off it");
+        bool hasGuideOnDial = false;
+        for (const QVariant &v : b.list_channels()) {
+            if (v.toMap().value(QStringLiteral("special")).toString() == QLatin1String("guide"))
+                hasGuideOnDial = true;
+        }
+        check(!hasGuideOnDial, "built-in guide channel is absent from zap dial and manage list");
     }
 }
 
@@ -1793,6 +2043,282 @@ void testPreviewNeverWrites() {
 
 }  // namespace
 
+// A genre recipe must air what the channel's own kind airs: a TV channel keeps
+// its episode scan and narrows at show level; forcing Films swept the movie
+// library, which is what made "always Private Snafu". Movie channels keep Films.
+void testGenreRecipeWantsByChannelKind() {
+    section("Backend: a genre recipe wants films only on movie channels");
+
+    const auto withGenreBlock = [](const QString &kind) {
+        QJsonObject blk;
+        blk["type"]    = QStringLiteral("genre");
+        blk["name"]    = QStringLiteral("Comedy");
+        blk["minutes"] = 30;
+        QJsonArray blocks;
+        blocks.append(blk);
+        QJsonObject plan;
+        plan["name"]   = QStringLiteral("PRIME");
+        plan["days"]   = QJsonArray{ 1 };
+        plan["blocks"] = blocks;
+        QJsonObject ch;
+        ch["number"]  = 7;
+        ch["source"]  = QStringLiteral("jellyfin");
+        ch["kind"]    = kind;
+        ch["plans"]   = QJsonArray{ plan };
+        return ch;
+    };
+
+    const auto withGenreEntry = [](const QString &kind) {
+        QJsonObject ch;
+        ch["number"] = 8;
+        ch["source"] = QStringLiteral("jellyfin");
+        ch["kind"]   = kind;
+        QJsonObject e;
+        e["name"] = QStringLiteral("Comedy");
+        e["kind"] = QStringLiteral("genre");
+        e["src"]  = QStringLiteral("jellyfin");
+        QJsonArray programmes;
+        programmes.append(e);
+        ch["programmes"] = programmes;
+        return ch;
+    };
+
+    const auto jobsFor = [](const QJsonObject &ch) {
+        Fixture fx;
+        fx.write(ch);
+        VirtualChannelsBackend b(fx.data(), fx.data());
+        vchan::ChannelDef def;
+        def.plans = VirtualChannelsBackend::readPlans(ch);
+        return b.readPools(ch, def);
+    };
+
+    using Wants = vchan::MediaServerSource::Request::Wants;
+    for (const QString &kind : { QStringLiteral("tv"), QStringLiteral("movies") }) {
+        const QVector<VirtualChannelsBackend::PoolJob> blockJobs =
+            jobsFor(withGenreBlock(kind));
+        checkEq(blockJobs.size(), 1, "one block, one job");
+        const VirtualChannelsBackend::PoolJob &bj = blockJobs.value(0);
+        check(bj.pool == vchan::SlotKind::Programme, "a programme job");
+        checkEq(bj.genres.size(), 1, "carrying the genre the block named");
+        const bool films = bj.wants == Wants::Films;
+        check(films == (kind == QStringLiteral("movies")),
+              "the block wants films exactly on the channel that airs films");
+
+        const QVector<VirtualChannelsBackend::PoolJob> entryJobs =
+            jobsFor(withGenreEntry(kind));
+        checkEq(entryJobs.size(), 1, "one entry, one job");
+        const VirtualChannelsBackend::PoolJob &ej = entryJobs.value(0);
+        check(ej.pool == vchan::SlotKind::Programme, "a programme job");
+        checkEq(ej.genres.size(), 1, "carrying the genre the entry named");
+        const bool filmsHere = ej.wants == Wants::Films;
+        check(filmsHere == (kind == QStringLiteral("movies")),
+              "the entry wants films exactly on the channel that airs films");
+    }
+}
+
+void testPlexTvGenreSeedFiltersShows() {
+    section("Backend: Plex TV genre recipe seeds only shows carrying that genre");
+
+    FakePlexServer plex;
+    plex.libraries = {
+        QVariantMap{{"sectionId", "1"}, {"sectionType", "show"}, {"title", "TV Shows"}},
+    };
+    plex.libraryItems.insert(QStringLiteral("1"), {
+        QVariantMap{{"ratingKey", "10"}, {"type", "show"}, {"title", "PRIVATE SNAFU"},
+                    {"genres", QStringList{"Animation", "Comedy"}}},
+        QVariantMap{{"ratingKey", "20"}, {"type", "show"}, {"title", "THE TWILIGHT ZONE"},
+                    {"genres", QStringList{"Drama", "Horror", "Sci-Fi"}}},
+        QVariantMap{{"ratingKey", "30"}, {"type", "show"}, {"title", "CHEERS"},
+                    {"genres", QStringList{"Comedy"}}},
+    });
+    plex.childrenByKey.insert(QStringLiteral("10"), {
+        QVariantMap{{"ratingKey", "101"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("101"), {
+        QVariantMap{{"ratingKey", "1001"}, {"type", "episode"}, {"title", "Spies"},
+                    {"grandparentTitle", "PRIVATE SNAFU"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 240000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("20"), {
+        QVariantMap{{"ratingKey", "201"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("201"), {
+        QVariantMap{{"ratingKey", "2001"}, {"type", "episode"}, {"title", "Where Is Everybody?"},
+                    {"grandparentTitle", "THE TWILIGHT ZONE"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 1500000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("30"), {
+        QVariantMap{{"ratingKey", "301"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("301"), {
+        QVariantMap{{"ratingKey", "3001"}, {"type", "episode"}, {"title", "Give Me a Ring Sometime"},
+                    {"grandparentTitle", "CHEERS"}, {"parentIndex", 1}, {"index", 1},
+                    {"duration", 1380000}}
+    });
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const int ch = b.create_preset_channel(0, QStringLiteral("Horror"),
+                                           QStringLiteral("Horror"), QStringLiteral("tv"));
+    check(ch >= 0, "preset channel created");
+
+    bool seeded = false, ok = false;
+    int matchCountInSignal = -1;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == ch) {
+                             seeded = true;
+                             ok = s;
+                             matchCountInSignal = b.channel_source_config(ch)
+                                                      .value(QStringLiteral("match"))
+                                                      .toStringList().size();
+                         }
+                     });
+    b.seed_preset_channel(ch);
+    for (int i = 0; i < 40 && !seeded; ++i) spin(10);
+    check(seeded && ok, "Horror TV genre seed completed");
+    checkEq(matchCountInSignal, 1,
+            "channel_source_config already has seeded picks when presetSeeded fires");
+
+    const QJsonObject raw = fx.read(ch);
+    const QJsonArray progs = raw.value(QStringLiteral("programmes")).toArray();
+    QStringList names;
+    for (const QJsonValue &v : progs)
+        names << v.toObject().value(QStringLiteral("name")).toString();
+    checkEq(names.size(), 1, "only the Horror show is picked (not Private Snafu or Cheers)");
+    checkStr(names.value(0), QStringLiteral("THE TWILIGHT ZONE"),
+             "the matching Horror show is in the channel");
+}
+
+void testPresetChannelDefaultsToInterleaved() {
+    section("Backend: preset channel defaults to interleaved so all shows air");
+
+    FakePlexServer plex;
+    plex.libraries = {
+        QVariantMap{{"sectionId", "1"}, {"sectionType", "show"}, {"title", "TV Shows"}},
+    };
+    plex.libraryItems.insert(QStringLiteral("1"), {
+        QVariantMap{{"ratingKey", "10"}, {"type", "show"}, {"title", "PRIVATE SNAFU"},
+                    {"genres", QStringList{"Comedy"}}},
+        QVariantMap{{"ratingKey", "30"}, {"type", "show"}, {"title", "CHEERS"},
+                    {"genres", QStringList{"Comedy"}}},
+    });
+    plex.childrenByKey.insert(QStringLiteral("10"), {
+        QVariantMap{{"ratingKey", "101"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("101"), {
+        QVariantMap{{"ratingKey", "1001"}, {"type", "episode"}, {"title", "Spies"},
+                    {"grandparentTitle", "Private Snafu"}, {"parentIndex", 1}, {"index", 1},
+                    {"originallyAvailableAt", "1943-01-01"}, {"duration", 240000}},
+        QVariantMap{{"ratingKey", "1002"}, {"type", "episode"}, {"title", "Gripes"},
+                    {"grandparentTitle", "Private Snafu"}, {"parentIndex", 1}, {"index", 2},
+                    {"originallyAvailableAt", "1943-07-01"}, {"duration", 240000}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("30"), {
+        QVariantMap{{"ratingKey", "301"}, {"type", "season"}, {"title", "Season 1"}}
+    });
+    plex.childrenByKey.insert(QStringLiteral("301"), {
+        QVariantMap{{"ratingKey", "3001"}, {"type", "episode"}, {"title", "Give Me a Ring Sometime"},
+                    {"grandparentTitle", "Cheers"}, {"parentIndex", 1}, {"index", 1},
+                    {"originallyAvailableAt", "1982-09-30"}, {"duration", 1380000}}
+    });
+
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const int ch = b.create_preset_channel(0, QStringLiteral("Comedy"),
+                                           QStringLiteral("Comedy"), QStringLiteral("tv"));
+    check(ch >= 0, "preset channel created");
+    checkStr(fx.read(ch).value(QStringLiteral("order")).toString(),
+             QStringLiteral("interleaved"),
+             "preset channel defaults to interleaved order");
+
+    bool seeded = false, seedOk = false;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == ch) { seeded = true; seedOk = s; }
+                     });
+    b.seed_preset_channel(ch);
+    for (int i = 0; i < 40 && !seeded; ++i) spin(10);
+    check(seeded && seedOk, "Comedy TV genre seed completed");
+
+    bool built = false, buildOk = false;
+    QObject::connect(&b, &VirtualChannelsBackend::generationFinished, &b,
+                     [&](int num, bool ok, const QString &) {
+                         if (num == ch) { built = true; buildOk = ok; }
+                     });
+    b.regenerate(ch);
+    for (int i = 0; i < 60 && !built; ++i) spin(10);
+    check(built && buildOk, "Comedy TV genre channel built");
+
+    QFile sf(fx.data() + "/channels/schedule/" + QString::number(ch) + ".json");
+    check(sf.open(QIODevice::ReadOnly), "schedule file exists");
+    const QJsonObject sched = QJsonDocument::fromJson(sf.readAll()).object();
+    const QJsonArray slotsArr = sched.value(QStringLiteral("slots")).toArray();
+    QSet<QString> seriesInFirstTwo;
+    for (int i = 0; i < qMin(2, slotsArr.size()); ++i)
+        seriesInFirstTwo.insert(slotsArr[i].toObject().value(QStringLiteral("series")).toString());
+    checkEq(seriesInFirstTwo.size(), 2,
+            "first two slots interleave both Private Snafu and Cheers instead of oldest-only");
+
+    // Verify browse_source("shows") serves from cache immediately after seeding
+    // without re-fetching load_library_all from Plex.
+    const int callsBeforeBrowse = plex.calls.size();
+    QVariantList browsed;
+    bool browseDone = false;
+    QObject::connect(&b, &VirtualChannelsBackend::sourceBrowseReady, &b,
+                     [&](const QString &kind, const QVariantList &items) {
+                         if (kind == QLatin1String("shows")) { browsed = items; browseDone = true; }
+                     });
+    b.browse_source(ch, QStringLiteral("shows"));
+    for (int i = 0; i < 20 && !browseDone; ++i) spin(5);
+    check(browseDone, "browse_source(shows) answered after seeding");
+    checkEq(browsed.size(), 2, "cached shows list holds all library shows");
+    checkEq(plex.calls.size(), callsBeforeBrowse,
+            "browse_source(shows) used cache with zero extra Plex calls");
+}
+
+void testAllRecipesFilterByLibraryDb() {
+    section("Backend: all recipes filter by library.db (including moviegenres and tv studio->network)");
+
+    Fixture fx;
+    vchan::LibraryDb db;
+    check(db.open(fx.data() + QStringLiteral("/library.db")), "opened library.db");
+    vchan::LibraryRecord tvShow;
+    tvShow.src = QStringLiteral("Plex");
+    tvShow.channel = QStringLiteral("tv");
+    tvShow.title = QStringLiteral("Scrubs");
+    tvShow.itemId = QStringLiteral("10");
+    tvShow.genres = { QStringLiteral("Comedy") };
+    tvShow.studios = { QStringLiteral("NBC") };
+
+    vchan::LibraryRecord movie;
+    movie.src = QStringLiteral("Plex");
+    movie.channel = QStringLiteral("movies");
+    movie.title = QStringLiteral("Alien");
+    movie.itemId = QStringLiteral("20");
+    movie.genres = { QStringLiteral("Sci-Fi") };
+    movie.studios = { QStringLiteral("20th Century Fox") };
+    check(db.replaceAll({ tvShow, movie }), "seeded library.db");
+    db.close();
+
+    VirtualChannelsBackend b(fx.data(), fx.data(), nullptr);
+    QVariantList movieGenres, tvStudios;
+    QObject::connect(&b, &VirtualChannelsBackend::catalogReady, &b,
+                     [&](const QString &kind, const QVariantList &opts) {
+                         if (kind == QLatin1String("moviegenres")) movieGenres = opts;
+                         if (kind == QLatin1String("tvstudios"))   tvStudios = opts;
+                     });
+    b.load_catalog(QStringLiteral("moviegenres"));
+    checkEq(movieGenres.size(), 1, "moviegenres returns only movie-side genres from library.db");
+    checkStr(movieGenres.value(0).toMap().value(QStringLiteral("label")).toString(),
+             QStringLiteral("Sci-Fi"), "moviegenres returns Sci-Fi, not TV Comedy");
+
+    b.load_catalog(QStringLiteral("tvstudios"));
+    checkEq(tvStudios.size(), 1, "tvstudios returns only tv-side studios from library.db");
+    checkStr(tvStudios.value(0).toMap().value(QStringLiteral("label")).toString(),
+             QStringLiteral("NBC"), "tvstudios returns NBC, not movie 20th Century Fox");
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -1818,6 +2344,14 @@ int runVirtualChannelsBackendTests() {
     testInterstitialsAreCounted();
     testSourceSwitchAndPicks();
     testChannelLifecycle();
+    testPresetChannelWritesTheRecord();
+    testPresetChannelsWireTheirContent();
+    testPresetChannelsSurfaceInBuilder();
+    testSeededRecipeReadsBack();
+    testGenreRecipeWantsByChannelKind();
+    testPlexTvGenreSeedFiltersShows();
+    testPresetChannelDefaultsToInterleaved();
+    testAllRecipesFilterByLibraryDb();
     testSubtitleCycleRefusesWithNoTracks();
     testSubtitleCycleHoldsForBothAnswers();
     testSubtitleHoldIsCapped();
@@ -1836,5 +2370,48 @@ int runVirtualChannelsBackendTests() {
     testPreviewNeverWrites();
     testChannelLogoStyle();
     testSpecialNumbersNeverCollide();
+
+    vtest::section("Preset kind type contract");
+    // QJsonValue::toInt() on a JSON *string* returns 0: presets used to store
+    // kind as "1"/"2" strings, so Network/Collection channels re-typed to
+    // Genre on every reload — identity filter skipped, bogus genre block
+    // written (ABC aired the whole library; A24 studio got 2 picks).
+    // presetKindOf reads BOTH generations, so legacy channels on disk stay
+    // valid until their next seeding rewrites the number.
+    {
+        const QJsonObject fresh{{"kind", 2}, {"id", "SCOOBY-DOO"}};
+        const QJsonObject legacy{{"kind", QStringLiteral("2")},
+                                 {"id", "SCOOBY-DOO"}};
+        vtest::checkEq(VirtualChannelsBackend::presetKindOf(fresh), 2,
+                       "number kind reads");
+        vtest::checkEq(VirtualChannelsBackend::presetKindOf(legacy), 2,
+                       "legacy string kind reads");
+        vtest::checkEq(legacy.value(QStringLiteral("kind")).toInt(), 0,
+                       "the trap: raw toInt on string kind == 0 (Genre)");
+        vtest::checkEq(QJsonObject{{"kind", 1}}
+                           .value(QStringLiteral("kind")).toInt(), 1,
+                       "number kind survives toInt unchanged");
+    }
+
+    // --- browse section keep rule: tv/movie collections are separated at
+    //     the library walk, not after the fact (the Collections-preset bug) ---
+    {
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("tvcollections", "show"), true,
+                       "tvcollections keeps show libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("tvcollections", "movie"), false,
+                       "tvcollections refuses movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviecollections", "movie"), true,
+                       "moviecollections keeps movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviecollections", "show"), false,
+                       "moviecollections refuses show libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("collections", "show"), true,
+                       "legacy collections unions shows");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("collections", "movie"), true,
+                       "legacy collections unions movies");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("shows", "movie"), false,
+                       "shows never walk movie libraries");
+        vtest::checkEq(VirtualChannelsBackend::browseKeepsLibrary("moviestudios", "movie"), true,
+                       "movie-side kinds keep movie libraries");
+    }
     return 0;
 }

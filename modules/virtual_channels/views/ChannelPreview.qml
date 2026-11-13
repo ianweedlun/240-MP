@@ -1,70 +1,64 @@
 import QtQuick
-import QtMultimedia
 
 Item {
     id: preview
 
-    readonly property bool active: player.source != ""
+    property bool active: false
     property bool ready: false
 
     signal finished()
 
     property int volume: 100
+    readonly property bool canPlayAudio: true
 
-    readonly property bool canPlayAudio: devices.audioOutputs.length > 0
-    MediaDevices { id: devices }
+    property string currentUrl: ""
+
+    onVolumeChanged: {
+        if (active && typeof virtualChannelsBackend !== "undefined" && virtualChannelsBackend) {
+            virtualChannelsBackend.set_preview_volume(Math.max(0, Math.min(1, volume / 100.0)))
+        }
+    }
 
     function show(url, positionMs) {
         if (url === undefined || url === null || String(url) === "") { clear(); return }
-        if (String(player.source) === String(url)) {
-            if (Math.abs(player.position - positionMs) > 4000) player.position = positionMs
+        if (typeof virtualChannelsBackend === "undefined" || !virtualChannelsBackend
+                || !virtualChannelsBackend.preview_video_available()) {
+            clear()
             return
         }
+        var u = String(url)
+        if (active && currentUrl === u) return
+        currentUrl = u
         ready = false
-        player.stop()
-        player.source = url
-        pendingPosition = positionMs
-        player.play()
+        virtualChannelsBackend.start_preview_video(
+            u, Number(positionMs) || 0, Math.max(0, Math.min(1, volume / 100.0)))
+        active = true
     }
 
     function clear() {
         ready = false
-        pendingPosition = -1
-        player.stop()
-        player.source = ""
-    }
-
-    property real pendingPosition: -1
-
-    MediaPlayer {
-        id: player
-        videoOutput: output
-        audioOutput: AudioOutput {
-            volume: Math.max(0, Math.min(1, preview.volume / 100))
-        }
-
-        onMediaStatusChanged: {
-            if (mediaStatus === MediaPlayer.LoadedMedia || mediaStatus === MediaPlayer.BufferedMedia) {
-                if (preview.pendingPosition >= 0) {
-                    player.position = preview.pendingPosition
-                    preview.pendingPosition = -1
-                }
-                preview.ready = true
-            }
-            if (mediaStatus === MediaPlayer.EndOfMedia) preview.finished()
-        }
-
-        onErrorOccurred: function(err, str) {
-            console.log("[guide] preview could not play:", str)
-            preview.clear()
+        active = false
+        currentUrl = ""
+        if (typeof virtualChannelsBackend !== "undefined" && virtualChannelsBackend) {
+            virtualChannelsBackend.stop_preview_video()
         }
     }
 
-    VideoOutput {
-        id: output
+    Image {
+        id: frameView
         anchors.fill: parent
-        fillMode: VideoOutput.PreserveAspectCrop
-        visible: preview.ready
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: false
+        cache: false
+        source: (preview.active
+                 && typeof virtualChannelsBackend !== "undefined"
+                 && virtualChannelsBackend)
+                ? virtualChannelsBackend.previewFrame
+                : ""
+        visible: preview.active && status === Image.Ready
+        onStatusChanged: {
+            if (status === Image.Ready && preview.active) preview.ready = true
+        }
     }
 
     Component.onDestruction: clear()

@@ -161,7 +161,7 @@ FocusScope {
     // on the first day -- and the next block added would go onto a day nobody
     // chose, which is a wrong that says nothing as it happens.
     function openBlock(i) {
-        navigateTo("modules/virtual_channels/views/BlockEdit.qml", {
+        navigateTo("BlockEdit.qml", {
             moduleId:      planRoot.moduleId,
             channelNumber: planRoot.channelNumber,
             channelName:   planRoot.channelName,

@@ -39,6 +39,8 @@ jobs:
             libssl-dev \
             libsdl2-dev \
             libpcsclite-dev \
+            libqt6sql6 \
+            libqt6sql6-sqlite \
             ccache
 
       - name: Configure (with tests)

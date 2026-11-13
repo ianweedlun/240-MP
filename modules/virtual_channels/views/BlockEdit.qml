@@ -297,7 +297,7 @@ FocusScope {
         }
 
         if (r === "intros" || r === "outros") {
-            navigateTo("modules/virtual_channels/views/SourceIdents.qml", {
+            navigateTo("SourceIdents.qml", {
                 moduleId:      editRoot.moduleId,
                 channelNumber: editRoot.channelNumber,
                 channelName:   editRoot.channelName,
@@ -317,7 +317,7 @@ FocusScope {
             // The same list a pool row opens, told which block it is choosing
             // for. One thing at a time, and you can open what you chose to
             // leave parts of it out.
-            navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+            navigateTo("SourceBrowser.qml", {
                 moduleId:      editRoot.moduleId,
                 channelNumber: editRoot.channelNumber,
                 kind:          kind,

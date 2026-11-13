@@ -811,6 +811,28 @@ static QStringList plexTags(const QJsonObject &m, const char *key) {
     return out;
 }
 
+static QStringList plexStudios(const QJsonObject &m) {
+    // Plex library rows carry the producing studio as a bare lowercase string
+    // attribute ("studio": "Orion-Nova Productions"); older Drive-style rows
+    // may use a capitalized "Studio" or a [{tag}] array. Read any of them.
+    QStringList out;
+    auto push = [&out](const QString &s) {
+        const QString t = s.trimmed();
+        if (!t.isEmpty() && !out.contains(t)) out << t;
+    };
+    auto read = [&](const QJsonValue &v) {
+        if (v.isString()) { push(v.toString()); return; }
+        if (!v.isArray()) return;
+        for (const QJsonValue &e : v.toArray()) {
+            if (e.isString()) push(e.toString());
+            else if (e.isObject()) push(e.toObject().value(QLatin1String("tag")).toString());
+        }
+    };
+    read(m[QLatin1String("studio")]);
+    read(m[QLatin1String("Studio")]);
+    return out;
+}
+
 QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
     return QVariantMap{
         {"ratingKey",              m["ratingKey"].toString()},
@@ -839,6 +861,7 @@ QVariantMap PlexBackend::formatItem(const QJsonObject &m) const {
         {"viewedLeafCount",        m["viewedLeafCount"].toInt()},
         {"originallyAvailableAt",  m["originallyAvailableAt"].toString()},
         {"genres",                 plexTags(m, "Genre")},
+        {"studios",                plexStudios(m)},
         {"collections",            plexTags(m, "Collection")},
         {"thumb",                  m["thumb"].toString()},
         {"parentThumb",            m["parentThumb"].toString()},

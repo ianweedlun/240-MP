@@ -255,6 +255,7 @@ private:
     QString       m_musicSocketPath;
     bool          m_musicPaused = false;
     int           m_musicVolume  = 50;
+    bool          m_musicVolumeOverridden = false;
     double        m_musicApplied = 100.0;
     bool          m_musicDucked  = false;
     double        m_musicFadeTo  = 100.0;

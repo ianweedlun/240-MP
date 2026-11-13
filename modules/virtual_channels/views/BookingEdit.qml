@@ -218,7 +218,7 @@ FocusScope {
 
         if (row === "name") {
             appCore.save_setting(moduleId, "booking_name_buffer", "")
-            navigateTo("modules/virtual_channels/views/TextEntry.qml", {
+            navigateTo("TextEntry.qml", {
                 moduleId: editRoot.moduleId,
                 settingKey: "booking_name_buffer",
                 title: "Name This Slot",
@@ -227,7 +227,7 @@ FocusScope {
             return
         }
         if (row === "days") {
-            navigateTo("modules/virtual_channels/views/BookingDays.qml", {
+            navigateTo("BookingDays.qml", {
                 moduleId:      editRoot.moduleId,
                 channelNumber: editRoot.channelNumber,
                 bookingIndex:  editRoot.bookingIndex,
@@ -248,7 +248,7 @@ FocusScope {
             return
         }
         if (row === "films" && source === "local") {
-            navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+            navigateTo("SourceBrowser.qml", {
                 moduleId:      editRoot.moduleId,
                 channelNumber: editRoot.channelNumber,
                 kind:          "movies",
@@ -258,7 +258,7 @@ FocusScope {
             return
         }
         if (row === "films" || row === "genres" || row === "collections" || row === "playlists") {
-            navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+            navigateTo("SourceBrowser.qml", {
                 moduleId:      editRoot.moduleId,
                 channelNumber: editRoot.channelNumber,
                 kind: row === "films"   ? "movies"
