@@ -2039,6 +2039,18 @@ void testPreviewNeverWrites() {
     checkEq(plex.count("set_audio_stream"), 0, "no audio write");
     checkEq(plex.count("set_subtitle_stream"), 0, "no subtitle write");
     checkEq(plex.count("build_stream_url"), 1, "the preview plays the file as it is");
+
+    // When Plex marks an item above the resolution cap (forceTranscode=true),
+    // the guide preview uses request_transcode instead of direct-playing raw 4K,
+    // while still never mutating the server part's audio/subtitle selections.
+    FakePlexServer plex4k;
+    plex4k.detail = plexDetail(QStringLiteral("8583"), 1, 2);
+    plex4k.detail[QStringLiteral("forceTranscode")] = true;
+    VirtualChannelsBackend b4k(fx.data(), fx.data(), &plex4k);
+    b4k.preview_stream(5); spin(30);
+    checkEq(plex4k.count("set_audio_stream"), 0, "4K preview: no audio write");
+    checkEq(plex4k.count("set_subtitle_stream"), 0, "4K preview: no subtitle write");
+    checkEq(plex4k.count("request_transcode"), 1, "4K preview transcodes above resolution cap");
 }
 
 }  // namespace

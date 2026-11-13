@@ -772,7 +772,10 @@ bool VirtualChannelsBackend::requestPlexUrl(const Slot &s, qint64 offsetMs,
         return false;
     }
 
-    if (s.partKey.isEmpty()) {
+    const QString quality = plexVideoQuality();
+    const bool needForceCheck = transcodeAllowed && quality != QLatin1String("auto");
+    const QString forceKey = s.ref + QLatin1Char('|') + quality;
+    if (s.partKey.isEmpty() || (needForceCheck && !m_plexForceTranscodeByRef.contains(forceKey))) {
         if (m_plex->metaObject()->indexOfMethod("load_item_detail(QString)") < 0) {
             qWarning("[VirtualChannels] Plex backend cannot resolve a part key");
             return false;
@@ -795,9 +798,11 @@ bool VirtualChannelsBackend::requestPlexUrl(const Slot &s, qint64 offsetMs,
         applyTrackChoice(QString(), {}, {}, QString(), QString());
         m_plexPartId.clear();
     }
+    const bool allowTranscode = transcodeAllowed
+        && (quality == QLatin1String("auto") || m_plexForceTranscodeByRef.value(forceKey, false));
     const QString sessionId = QStringLiteral("vchan-%1").arg(nowMs());
     const bool ok = askPlexForStream(s.ref, s.partKey, sessionId, offsetMs,
-                                     transcodeAllowed);
+                                     allowTranscode);
     if (ok) m_urlTimer->start();
     return ok;
 }
@@ -933,7 +938,14 @@ void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     // set, and every programme after its first airing. A part that did not say
     // what it shows is not second-guessed, and a write still in flight from a
     // press is not repeated.
-    if (plexWillTranscode(m_plexPendingTranscodeOk)) {
+    const QString quality = plexVideoQuality();
+    const bool itemForceTranscode = d.value(QStringLiteral("forceTranscode"), false).toBool();
+    m_plexForceTranscodeByRef.insert(ref + QLatin1Char('|') + quality, itemForceTranscode);
+    const bool allowTranscode = m_plexPendingTranscodeOk
+        && (quality == QLatin1String("auto")
+            || (m_previewChannel >= 0 ? itemForceTranscode : true));
+
+    if (m_previewChannel < 0 && plexWillTranscode(allowTranscode)) {
         const QString wantAudio = streamIdAt(m_audioStreams, m_audioIndex);
         const QString wantSubtitle =
             m_preferredSubtitleId.isEmpty() ? QStringLiteral("0") : m_preferredSubtitleId;
@@ -953,7 +965,7 @@ void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     const QString sessionId = QStringLiteral("vchan-%1").arg(nowMs());
     m_urlTimer->start();
     askPlexForStream(d.value("ratingKey").toString(), partKey, sessionId,
-                     m_plexPendingOffsetMs, m_plexPendingTranscodeOk);
+                     m_plexPendingOffsetMs, allowTranscode);
 }
 
 void VirtualChannelsBackend::preview_stream(int channelNumber) {
@@ -976,13 +988,20 @@ void VirtualChannelsBackend::preview_stream(int channelNumber) {
     m_urlDescriptor   = QVariantMap{};
 
     const bool asked = (s.src == SlotSource::Plex)
-                       ? requestPlexUrl(s, 0, /*transcodeAllowed*/ false)
+                       ? requestPlexUrl(s, m_previewPosition, /*transcodeAllowed*/ true)
                        : requestServerUrl(s);
     if (!asked) cancel_preview_stream();
 }
 
 void VirtualChannelsBackend::cancel_preview_stream() {
     stop_preview_video();
+    if (m_previewTranscodeActive && !m_plexTranscodeSession.isEmpty() && m_plex
+        && m_plex->metaObject()->indexOfMethod("stop_transcode(QString)") >= 0) {
+        QMetaObject::invokeMethod(m_plex, "stop_transcode",
+                                  Q_ARG(QString, m_plexTranscodeSession));
+        m_plexTranscodeSession.clear();
+    }
+    m_previewTranscodeActive = false;
     if (m_previewChannel < 0) return;
     m_previewChannel  = -1;
     m_previewSlot     = -1;
@@ -1144,13 +1163,21 @@ void VirtualChannelsBackend::pollPreviewFrames() {
 bool VirtualChannelsBackend::deliverPreviewUrl(const QString &url, const QString &token) {
     if (m_previewChannel < 0) return false;
     const int ch = m_previewChannel;
-    const qint64 pos = m_previewPosition;
+    const bool transcoded = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty())
+                            || url.contains(QLatin1String("master.m3u8"));
+    const qint64 pos = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty())
+                       ? 0 : m_previewPosition;
+    m_previewTranscodeActive = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty());
     m_previewChannel  = -1;
     m_previewSlot     = -1;
     m_previewPosition = 0;
     m_urlPending      = false;
     if (m_urlTimer) m_urlTimer->stop();
-    if (url.isEmpty()) return true;
+    if (url.isEmpty()) {
+        m_previewTranscodeActive = false;
+        return true;
+    }
+    Q_UNUSED(transcoded);
 
     QString full = url;
     if (!token.isEmpty()) {

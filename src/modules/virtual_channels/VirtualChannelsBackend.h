@@ -659,6 +659,8 @@ private:
 
     qint64  m_plexPendingOffsetMs = 0;
     bool    m_plexPendingTranscodeOk = false;
+    QHash<QString, bool> m_plexForceTranscodeByRef;
+    bool    m_previewTranscodeActive = false;
     bool    requestServerUrl(const vchan::Slot &s, bool chooseTracks = false);
     bool    askServerForStream(const vchan::Slot &s);
     void    applyTrackChoice(const QString &ref, const QVariantList &audio,
