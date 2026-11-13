@@ -676,6 +676,7 @@ private:
     QString   m_previewDir;
     QString   m_previewIpcPath;
     QString   m_previewFrame;
+    quint64   m_previewSeq = 0;
     void      pollPreviewFrames();
     QObject *serverBackend(vchan::SlotSource src) const;
     vchan::SlotSource m_serverPendingSrc = vchan::SlotSource::Local;

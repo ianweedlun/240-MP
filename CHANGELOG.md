@@ -4,8 +4,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
-### Fixed — Virtual channels: Guide video previews respect media-server transcode settings
+### Fixed — Virtual channels: Guide video previews respect media-server transcode settings & stay smooth
 - **Plex / Jellyfin / Emby Guide previews**: `preview_stream()` now passes `m_previewPosition` and `transcodeAllowed = true` and honors `PlexBackend`'s resolution-aware `forceTranscode` decision (only transcoding items above the configured Video Quality threshold, starting at the live offset), while cleaning up active preview transcode sessions on channel change (`cancel_preview_stream`).
+- **Non-blocking preview teardown & real-time pacing**: replaced synchronous `waitForFinished()` in `stop_preview_video()` with async process teardown + per-launch `/dev/shm` directories (eliminating Guide navigation freezes), and moved `fps=8` before `scale=320:240` with `realtime` pacing when muted (`--no-audio`) so `mpv --vo=image` no longer runs untimed at 300%+ CPU.
 
 ### Changed — Virtual channels: streamlined settings & couch navigation
 - **Settings → CHANNELS simplified**: trimmed `manifest.json` down to 7 couch-essential rows: `Enabled`, `Manage Channels`, `Media Folder`, `Weather Channel`, `Auto-Scroll Guide` (simple ON/OFF toggle, replacing the 5-state idle menu), `Channel Preview`, and `Guide Music`. Cut background technical knobs (`Schedule Ahead`, `Scan Library at Start`, section headers).

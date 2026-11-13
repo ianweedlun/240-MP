@@ -1047,21 +1047,31 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
         baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 
     const qint64 pid = QCoreApplication::applicationPid();
-    m_previewDir = QStringLiteral("%1/240mp_preview_%2").arg(baseTmp).arg(pid);
+    const quint64 seq = ++m_previewSeq;
+    m_previewDir = QStringLiteral("%1/240mp_preview_%2_%3").arg(baseTmp).arg(pid).arg(seq);
     QDir(m_previewDir).removeRecursively();
     QDir().mkpath(m_previewDir);
-    m_previewIpcPath = QStringLiteral("%1/240mp_preview_ipc_%2.sock").arg(baseTmp).arg(pid);
+    m_previewIpcPath = QStringLiteral("%1/240mp_preview_ipc_%2_%3.sock").arg(baseTmp).arg(pid).arg(seq);
     QFile::remove(m_previewIpcPath);
 
     const int volPct = qBound(0, qRound(volume * 100.0), 100);
+    // Drop frames down to 8 fps *before* scaling so we don't software-scale
+    // 24-60 fps only to discard most of them. When muted (--no-audio), vo=image
+    // has no clock and runs untimed at 300%+ CPU unless throttled by realtime.
+    QString vf = QStringLiteral("fps=8,scale=320:240:force_original_aspect_ratio=decrease:flags=fast_bilinear");
+    if (volPct <= 0) vf += QStringLiteral(",realtime");
+
     QStringList args;
     args << QStringLiteral("--no-config")
          << QStringLiteral("--no-terminal")
          << QStringLiteral("--really-quiet")
-         << QStringLiteral("--vf=scale=320:240:force_original_aspect_ratio=decrease,fps=10")
+         << QStringLiteral("--vd-lavc-threads=2")
+         << QStringLiteral("--demuxer-max-bytes=4M")
+         << QStringLiteral("--cache-secs=4")
+         << QStringLiteral("--vf=") + vf
          << QStringLiteral("--vo=image")
          << QStringLiteral("--vo-image-format=jpg")
-         << QStringLiteral("--vo-image-jpeg-quality=80")
+         << QStringLiteral("--vo-image-jpeg-quality=75")
          << QStringLiteral("--vo-image-outdir=") + m_previewDir
          << QStringLiteral("--input-ipc-server=") + m_previewIpcPath;
     if (volPct <= 0) {
@@ -1074,23 +1084,24 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
         args << QStringLiteral("--start=") + QString::number(positionMs / 1000.0, 'f', 3);
     args << url;
 
-    m_previewProc = new QProcess(this);
-    m_previewProc->setProcessChannelMode(QProcess::MergedChannels);
-    connect(m_previewProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this](int code, QProcess::ExitStatus) {
-                if (m_previewPoll) m_previewPoll->stop();
-                if (code != 0 && m_previewProc) {
-                    const QByteArray out = m_previewProc->readAll().trimmed();
+    QProcess *proc = new QProcess(this);
+    m_previewProc = proc;
+    proc->setProcessChannelMode(QProcess::MergedChannels);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, proc](int code, QProcess::ExitStatus) {
+                if (m_previewProc == proc && m_previewPoll) m_previewPoll->stop();
+                if (code != 0) {
+                    const QByteArray out = proc->readAll().trimmed();
                     if (!out.isEmpty())
                         qWarning("[VirtualChannels] preview mpv exited %d: %s",
                                  code, out.constData());
                 }
             });
-    m_previewProc->start(mpvBin, args);
+    proc->start(mpvBin, args);
 
     if (!m_previewPoll) {
         m_previewPoll = new QTimer(this);
-        m_previewPoll->setInterval(80);
+        m_previewPoll->setInterval(100);
         connect(m_previewPoll, &QTimer::timeout, this, &VirtualChannelsBackend::pollPreviewFrames);
     }
     m_previewPoll->start();
@@ -1098,24 +1109,35 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
 
 void VirtualChannelsBackend::stop_preview_video() {
     if (m_previewPoll) m_previewPoll->stop();
+    const QString oldDir  = m_previewDir;
+    const QString oldSock = m_previewIpcPath;
+    m_previewDir.clear();
+    m_previewIpcPath.clear();
+
     if (m_previewProc) {
-        if (m_previewProc->state() != QProcess::NotRunning) {
-            m_previewProc->terminate();
-            if (!m_previewProc->waitForFinished(250)) {
-                m_previewProc->kill();
-                m_previewProc->waitForFinished(250);
-            }
-        }
-        m_previewProc->deleteLater();
+        QProcess *oldProc = m_previewProc;
         m_previewProc = nullptr;
-    }
-    if (!m_previewDir.isEmpty()) {
-        QDir(m_previewDir).removeRecursively();
-        m_previewDir.clear();
-    }
-    if (!m_previewIpcPath.isEmpty()) {
-        QFile::remove(m_previewIpcPath);
-        m_previewIpcPath.clear();
+        oldProc->disconnect(this);
+        if (oldProc->state() != QProcess::NotRunning) {
+            // Non-blocking teardown: never stall the Qt GUI thread with waitForFinished().
+            connect(oldProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    oldProc, [oldProc, oldDir, oldSock](int, QProcess::ExitStatus) {
+                        if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+                        if (!oldSock.isEmpty()) QFile::remove(oldSock);
+                        oldProc->deleteLater();
+                    });
+            oldProc->terminate();
+            QTimer::singleShot(300, oldProc, [oldProc]() {
+                if (oldProc->state() != QProcess::NotRunning) oldProc->kill();
+            });
+        } else {
+            oldProc->deleteLater();
+            if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+            if (!oldSock.isEmpty()) QFile::remove(oldSock);
+        }
+    } else {
+        if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+        if (!oldSock.isEmpty()) QFile::remove(oldSock);
     }
     if (!m_previewFrame.isEmpty()) {
         m_previewFrame.clear();
