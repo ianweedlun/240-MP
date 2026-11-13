@@ -579,6 +579,7 @@ FocusScope {
     }
 
     OptionList {
+        id: options
         anchors.fill: parent
         focus: true
         iconSource: sourcesRoot.moduleIcon

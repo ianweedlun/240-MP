@@ -4294,11 +4294,6 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
                                   || kind == QLatin1String("tvcollections"))
                                      ? QStringLiteral("tv") : QStringLiteral("movies");
             QVariantList rows = m_libraryDb.presence(subjectKind, chan, 60);
-            // Plex carries TV networks in Studio rather than a separate
-            // network tag, so when library.db has no "network" rows on the tv
-            // side, join against the tv "studio" rows instead.
-            if (networkKind && rows.isEmpty())
-                rows = m_libraryDb.presence(QStringLiteral("studio"), QStringLiteral("tv"), 60);
             if (networkKind && !rows.isEmpty()) {
                 TVDBNetworkResolver *res = resolver();
                 if (res) {
