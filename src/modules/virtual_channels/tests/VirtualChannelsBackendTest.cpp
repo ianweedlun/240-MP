@@ -1941,6 +1941,12 @@ void testSpecialNumbersNeverCollide() {
         VirtualChannelsBackend b(fw.data(), fw.data());
         checkEq(b.guide_channel_number(), 0, "the guide keeps 0");
         checkEq(b.weather_channel_number(), 1, "the weather moves off it");
+        bool hasGuideOnDial = false;
+        for (const QVariant &v : b.list_channels()) {
+            if (v.toMap().value(QStringLiteral("special")).toString() == QLatin1String("guide"))
+                hasGuideOnDial = true;
+        }
+        check(!hasGuideOnDial, "built-in guide channel is absent from zap dial and manage list");
     }
 }
 

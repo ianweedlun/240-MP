@@ -3883,14 +3883,6 @@ QVariantList VirtualChannelsBackend::list_channels() {
         rows.push_back(m);
     }
 
-    QVariantMap guide;
-    guide["number"]      = guide_channel_number();
-    guide["name"]        = QStringLiteral("Guide");
-    guide["source"]      = QStringLiteral("built-in");
-    guide["hasSchedule"] = true;
-    guide["special"]     = QStringLiteral("guide");
-    rows.push_back(guide);
-
     if (weather_channel_enabled()) {
         QVariantMap wx;
         wx["number"]      = weather_channel_number();
