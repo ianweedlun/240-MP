@@ -196,6 +196,7 @@ FocusScope {
 
     function refreshNowPlaying() {
         if (!showDetail) { nowPlaying = ({}); detailFor = -1; return }
+        if (autoScroll && detailFor >= 0) return
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
