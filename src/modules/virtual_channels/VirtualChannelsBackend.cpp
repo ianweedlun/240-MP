@@ -772,7 +772,10 @@ bool VirtualChannelsBackend::requestPlexUrl(const Slot &s, qint64 offsetMs,
         return false;
     }
 
-    if (s.partKey.isEmpty()) {
+    const QString quality = plexVideoQuality();
+    const bool needForceCheck = transcodeAllowed && quality != QLatin1String("auto");
+    const QString forceKey = s.ref + QLatin1Char('|') + quality;
+    if (s.partKey.isEmpty() || (needForceCheck && !m_plexForceTranscodeByRef.contains(forceKey))) {
         if (m_plex->metaObject()->indexOfMethod("load_item_detail(QString)") < 0) {
             qWarning("[VirtualChannels] Plex backend cannot resolve a part key");
             return false;
@@ -795,9 +798,11 @@ bool VirtualChannelsBackend::requestPlexUrl(const Slot &s, qint64 offsetMs,
         applyTrackChoice(QString(), {}, {}, QString(), QString());
         m_plexPartId.clear();
     }
+    const bool allowTranscode = transcodeAllowed
+        && (quality == QLatin1String("auto") || m_plexForceTranscodeByRef.value(forceKey, false));
     const QString sessionId = QStringLiteral("vchan-%1").arg(nowMs());
     const bool ok = askPlexForStream(s.ref, s.partKey, sessionId, offsetMs,
-                                     transcodeAllowed);
+                                     allowTranscode);
     if (ok) m_urlTimer->start();
     return ok;
 }
@@ -933,7 +938,14 @@ void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     // set, and every programme after its first airing. A part that did not say
     // what it shows is not second-guessed, and a write still in flight from a
     // press is not repeated.
-    if (plexWillTranscode(m_plexPendingTranscodeOk)) {
+    const QString quality = plexVideoQuality();
+    const bool itemForceTranscode = d.value(QStringLiteral("forceTranscode"), false).toBool();
+    m_plexForceTranscodeByRef.insert(ref + QLatin1Char('|') + quality, itemForceTranscode);
+    const bool allowTranscode = m_plexPendingTranscodeOk
+        && (quality == QLatin1String("auto")
+            || (m_previewChannel >= 0 ? itemForceTranscode : true));
+
+    if (m_previewChannel < 0 && plexWillTranscode(allowTranscode)) {
         const QString wantAudio = streamIdAt(m_audioStreams, m_audioIndex);
         const QString wantSubtitle =
             m_preferredSubtitleId.isEmpty() ? QStringLiteral("0") : m_preferredSubtitleId;
@@ -953,7 +965,7 @@ void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     const QString sessionId = QStringLiteral("vchan-%1").arg(nowMs());
     m_urlTimer->start();
     askPlexForStream(d.value("ratingKey").toString(), partKey, sessionId,
-                     m_plexPendingOffsetMs, m_plexPendingTranscodeOk);
+                     m_plexPendingOffsetMs, allowTranscode);
 }
 
 void VirtualChannelsBackend::preview_stream(int channelNumber) {
@@ -976,13 +988,21 @@ void VirtualChannelsBackend::preview_stream(int channelNumber) {
     m_urlDescriptor   = QVariantMap{};
 
     const bool asked = (s.src == SlotSource::Plex)
-                       ? requestPlexUrl(s, 0, /*transcodeAllowed*/ false)
+                       ? requestPlexUrl(s, m_previewPosition, /*transcodeAllowed*/ true)
                        : requestServerUrl(s);
     if (!asked) cancel_preview_stream();
 }
 
 void VirtualChannelsBackend::cancel_preview_stream() {
     stop_preview_video();
+    if (m_previewPing) m_previewPing->stop();
+    if (m_previewTranscodeActive && !m_plexTranscodeSession.isEmpty() && m_plex
+        && m_plex->metaObject()->indexOfMethod("stop_transcode(QString)") >= 0) {
+        QMetaObject::invokeMethod(m_plex, "stop_transcode",
+                                  Q_ARG(QString, m_plexTranscodeSession));
+        m_plexTranscodeSession.clear();
+    }
+    m_previewTranscodeActive = false;
     if (m_previewChannel < 0) return;
     m_previewChannel  = -1;
     m_previewSlot     = -1;
@@ -1023,26 +1043,36 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
         return;
     }
 
-    QString baseTmp = QStringLiteral("/dev/shm");
-    if (!QFileInfo(baseTmp).isDir() || !QFileInfo(baseTmp).isWritable())
-        baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    QString baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (baseTmp.isEmpty() || !QFileInfo(baseTmp).isDir() || !QFileInfo(baseTmp).isWritable())
+        baseTmp = QStringLiteral("/tmp");
 
     const qint64 pid = QCoreApplication::applicationPid();
-    m_previewDir = QStringLiteral("%1/240mp_preview_%2").arg(baseTmp).arg(pid);
+    const quint64 seq = ++m_previewSeq;
+    m_previewDir = QStringLiteral("%1/240mp_preview_%2_%3").arg(baseTmp).arg(pid).arg(seq);
     QDir(m_previewDir).removeRecursively();
     QDir().mkpath(m_previewDir);
-    m_previewIpcPath = QStringLiteral("%1/240mp_preview_ipc_%2.sock").arg(baseTmp).arg(pid);
+    m_previewIpcPath = QStringLiteral("%1/240mp_preview_ipc_%2_%3.sock").arg(baseTmp).arg(pid).arg(seq);
     QFile::remove(m_previewIpcPath);
 
     const int volPct = qBound(0, qRound(volume * 100.0), 100);
+    // Drop frames down to 15 fps *before* scaling so we don't software-scale
+    // 24-60 fps only to discard extras. When muted (--no-audio), vo=image has
+    // no clock and runs untimed at 300%+ CPU unless throttled by realtime.
+    QString vf = QStringLiteral("fps=15,scale=320:240:force_original_aspect_ratio=decrease:flags=fast_bilinear");
+    if (volPct <= 0) vf += QStringLiteral(",realtime");
+
     QStringList args;
     args << QStringLiteral("--no-config")
          << QStringLiteral("--no-terminal")
          << QStringLiteral("--really-quiet")
-         << QStringLiteral("--vf=scale=320:240:force_original_aspect_ratio=decrease,fps=10")
+         << QStringLiteral("--vd-lavc-threads=2")
+         << QStringLiteral("--demuxer-max-bytes=4M")
+         << QStringLiteral("--cache-secs=4")
+         << QStringLiteral("--vf=") + vf
          << QStringLiteral("--vo=image")
          << QStringLiteral("--vo-image-format=jpg")
-         << QStringLiteral("--vo-image-jpeg-quality=80")
+         << QStringLiteral("--vo-image-jpeg-quality=75")
          << QStringLiteral("--vo-image-outdir=") + m_previewDir
          << QStringLiteral("--input-ipc-server=") + m_previewIpcPath;
     if (volPct <= 0) {
@@ -1055,23 +1085,24 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
         args << QStringLiteral("--start=") + QString::number(positionMs / 1000.0, 'f', 3);
     args << url;
 
-    m_previewProc = new QProcess(this);
-    m_previewProc->setProcessChannelMode(QProcess::MergedChannels);
-    connect(m_previewProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this](int code, QProcess::ExitStatus) {
-                if (m_previewPoll) m_previewPoll->stop();
-                if (code != 0 && m_previewProc) {
-                    const QByteArray out = m_previewProc->readAll().trimmed();
+    QProcess *proc = new QProcess(this);
+    m_previewProc = proc;
+    proc->setProcessChannelMode(QProcess::MergedChannels);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, proc](int code, QProcess::ExitStatus) {
+                if (m_previewProc == proc && m_previewPoll) m_previewPoll->stop();
+                if (code != 0) {
+                    const QByteArray out = proc->readAll().trimmed();
                     if (!out.isEmpty())
                         qWarning("[VirtualChannels] preview mpv exited %d: %s",
                                  code, out.constData());
                 }
             });
-    m_previewProc->start(mpvBin, args);
+    proc->start(mpvBin, args);
 
     if (!m_previewPoll) {
         m_previewPoll = new QTimer(this);
-        m_previewPoll->setInterval(80);
+        m_previewPoll->setInterval(65);
         connect(m_previewPoll, &QTimer::timeout, this, &VirtualChannelsBackend::pollPreviewFrames);
     }
     m_previewPoll->start();
@@ -1079,24 +1110,35 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
 
 void VirtualChannelsBackend::stop_preview_video() {
     if (m_previewPoll) m_previewPoll->stop();
+    const QString oldDir  = m_previewDir;
+    const QString oldSock = m_previewIpcPath;
+    m_previewDir.clear();
+    m_previewIpcPath.clear();
+
     if (m_previewProc) {
-        if (m_previewProc->state() != QProcess::NotRunning) {
-            m_previewProc->terminate();
-            if (!m_previewProc->waitForFinished(250)) {
-                m_previewProc->kill();
-                m_previewProc->waitForFinished(250);
-            }
-        }
-        m_previewProc->deleteLater();
+        QProcess *oldProc = m_previewProc;
         m_previewProc = nullptr;
-    }
-    if (!m_previewDir.isEmpty()) {
-        QDir(m_previewDir).removeRecursively();
-        m_previewDir.clear();
-    }
-    if (!m_previewIpcPath.isEmpty()) {
-        QFile::remove(m_previewIpcPath);
-        m_previewIpcPath.clear();
+        oldProc->disconnect(this);
+        if (oldProc->state() != QProcess::NotRunning) {
+            // Non-blocking teardown: never stall the Qt GUI thread with waitForFinished().
+            connect(oldProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    oldProc, [oldProc, oldDir, oldSock](int, QProcess::ExitStatus) {
+                        if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+                        if (!oldSock.isEmpty()) QFile::remove(oldSock);
+                        oldProc->deleteLater();
+                    });
+            oldProc->terminate();
+            QTimer::singleShot(300, oldProc, [oldProc]() {
+                if (oldProc->state() != QProcess::NotRunning) oldProc->kill();
+            });
+        } else {
+            oldProc->deleteLater();
+            if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+            if (!oldSock.isEmpty()) QFile::remove(oldSock);
+        }
+    } else {
+        if (!oldDir.isEmpty()) QDir(oldDir).removeRecursively();
+        if (!oldSock.isEmpty()) QFile::remove(oldSock);
     }
     if (!m_previewFrame.isEmpty()) {
         m_previewFrame.clear();
@@ -1107,27 +1149,35 @@ void VirtualChannelsBackend::stop_preview_video() {
 void VirtualChannelsBackend::set_preview_volume(double volume) {
     if (m_previewIpcPath.isEmpty() || !m_previewProc ||
         m_previewProc->state() != QProcess::Running) return;
-    QLocalSocket sock;
-    sock.connectToServer(m_previewIpcPath);
-    if (!sock.waitForConnected(100)) return;
     const int volPct = qBound(0, qRound(volume * 100.0), 100);
-    const QByteArray cmd1 = QJsonDocument(QJsonObject{
-        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
-                                              QStringLiteral("volume"), volPct}}
-    }).toJson(QJsonDocument::Compact) + '\n';
-    const QByteArray cmd2 = QJsonDocument(QJsonObject{
-        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
-                                              QStringLiteral("mute"), volPct <= 0}}
-    }).toJson(QJsonDocument::Compact) + '\n';
-    sock.write(cmd1);
-    sock.write(cmd2);
-    sock.flush();
-    sock.waitForBytesWritten(50);
+    auto *sock = new QLocalSocket(this);
+    connect(sock, &QLocalSocket::connected, sock, [sock, volPct]() {
+        const QByteArray cmd1 = QJsonDocument(QJsonObject{
+            {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                                  QStringLiteral("volume"), volPct}}
+        }).toJson(QJsonDocument::Compact) + '\n';
+        const QByteArray cmd2 = QJsonDocument(QJsonObject{
+            {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                                  QStringLiteral("mute"), volPct <= 0}}
+        }).toJson(QJsonDocument::Compact) + '\n';
+        sock->write(cmd1);
+        sock->write(cmd2);
+        sock->disconnectFromServer();
+    });
+    connect(sock, &QLocalSocket::disconnected, sock, &QObject::deleteLater);
+    connect(sock, &QLocalSocket::errorOccurred, sock, &QObject::deleteLater);
+    sock->connectToServer(m_previewIpcPath);
 }
 
 void VirtualChannelsBackend::pollPreviewFrames() {
     if (m_previewDir.isEmpty()) return;
     QDir dir(m_previewDir);
+    if (!dir.exists()) {
+        qWarning("[VirtualChannels] preview dir disappeared (%s) — recreating",
+                 qPrintable(m_previewDir));
+        QDir().mkpath(m_previewDir);
+        return;
+    }
     const QStringList files = dir.entryList({QStringLiteral("*.jpg")}, QDir::Files, QDir::Name);
     if (files.size() < 2) return;
     // Second-to-last frame is guaranteed completely written by mpv; purge older ones.
@@ -1144,13 +1194,40 @@ void VirtualChannelsBackend::pollPreviewFrames() {
 bool VirtualChannelsBackend::deliverPreviewUrl(const QString &url, const QString &token) {
     if (m_previewChannel < 0) return false;
     const int ch = m_previewChannel;
-    const qint64 pos = m_previewPosition;
+    const bool transcoded = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty())
+                            || url.contains(QLatin1String("master.m3u8"));
+    const qint64 pos = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty())
+                       ? 0 : m_previewPosition;
+    m_previewTranscodeActive = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty());
+    if (m_previewTranscodeActive) {
+        if (!m_previewPing) {
+            m_previewPing = new QTimer(this);
+            m_previewPing->setInterval(30000);
+            connect(m_previewPing, &QTimer::timeout, this, [this]() {
+                if (!m_previewTranscodeActive || m_plexTranscodeSession.isEmpty() || !m_plex) {
+                    m_previewPing->stop();
+                    return;
+                }
+                if (m_plex->metaObject()->indexOfMethod("ping_transcode(QString)") >= 0) {
+                    QMetaObject::invokeMethod(m_plex, "ping_transcode",
+                                              Q_ARG(QString, m_plexTranscodeSession));
+                }
+            });
+        }
+        m_previewPing->start();
+    } else if (m_previewPing) {
+        m_previewPing->stop();
+    }
     m_previewChannel  = -1;
     m_previewSlot     = -1;
     m_previewPosition = 0;
     m_urlPending      = false;
     if (m_urlTimer) m_urlTimer->stop();
-    if (url.isEmpty()) return true;
+    if (url.isEmpty()) {
+        m_previewTranscodeActive = false;
+        return true;
+    }
+    Q_UNUSED(transcoded);
 
     QString full = url;
     if (!token.isEmpty()) {
@@ -2174,7 +2251,12 @@ void VirtualChannelsBackend::regenerate(int channelNumber) {
     // selection is shuffled. Films do not sit on a clock -- a two-hour film on
     // a half-hour grid is a card holding the remainder every time.
     if (isMovieChannel(o)) {
-        def.order       = playsAPlaylist(o) ? Ordering::AsListed : Ordering::Shuffle;
+        if (playsAPlaylist(o)) {
+            def.order = Ordering::AsListed;
+        } else {
+            const Ordering req = orderingFromString(o.value(QLatin1String("order")).toString());
+            def.order = (req == Ordering::Broadcast) ? Ordering::Broadcast : Ordering::Shuffle;
+        }
         def.gridMinutes = 0;
     }
 
@@ -3767,17 +3849,10 @@ void VirtualChannelsBackend::onPresenceReady(const QString &provider,
 }
 
 // The walk is the module's own setting: the shelves are what the add-flow
-// offers from, but a viewer who turns it off keeps the catalog path and pays
-// no listing cost at launch. Anything but the word off means walk.
+// Always walk the library shelves at launch so presence counts and metadata
+// stay current without exposing a manual toggle in settings.
 bool VirtualChannelsBackend::libraryWalkEnabled() const {
-    QFile f(m_dataRoot + QStringLiteral("/config.json"));
-    if (!f.open(QIODevice::ReadOnly))
-        return true;
-    const QJsonObject modules = QJsonDocument::fromJson(f.readAll()).object()
-                                    .value(QLatin1String("modules")).toObject();
-    const QString mode = modules.value(QLatin1String(kModuleId)).toObject()
-                             .value(QLatin1String("library_walk")).toString();
-    return mode.trimmed() != QStringLiteral("off");
+    return true;
 }
 
 // What the shelves can actually air, in the shape the add-flow's option rows
@@ -4258,29 +4333,61 @@ void VirtualChannelsBackend::browseFail(const QString &reason) {
 // Movie slots
 // ---------------------------------------------------------------------------
 
+QString VirtualChannelsBackend::bundled_logos_dir() const {
+    const QString rel = QStringLiteral("/modules/virtual_channels/assets/logos");
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        m_appRoot.isEmpty() ? QString() : m_appRoot + rel,
+        appDir + QStringLiteral("/../share/240mp") + rel,
+        appDir + QStringLiteral("/../Resources") + rel,
+        appDir + rel,
+    };
+    for (const QString &dir : candidates) {
+        if (!dir.isEmpty() && QDir(dir).exists())
+            return dir;
+    }
+    return QString();
+}
+
 QVariantList VirtualChannelsBackend::list_logos() {
     QVariantList out;
     QDir dir(logos_dir());
-    if (!dir.exists()) {
+    if (!dir.exists())
         QDir().mkpath(logos_dir());
-        return out;
-    }
 
     static const QStringList kPatterns = { QStringLiteral("*.png"),  QStringLiteral("*.gif"),
                                            QStringLiteral("*.jpg"),  QStringLiteral("*.jpeg"),
                                            QStringLiteral("*.webp"), QStringLiteral("*.bmp") };
-    const QFileInfoList files = dir.entryInfoList(kPatterns, QDir::Files, QDir::Name);
-    for (const QFileInfo &fi : files) {
-        if (!isSafeLogoName(fi.fileName())) {
-            qWarning("[VirtualChannels] skipping logo '%s' — letters, digits, spaces and "
-                     "._()- only", qPrintable(fi.fileName()));
-            continue;
+    QSet<QString> seen;
+    auto scanDir = [&](const QDir &d, bool bundled) {
+        if (!d.exists()) return;
+        const QFileInfoList files = d.entryInfoList(kPatterns, QDir::Files, QDir::Name);
+        for (const QFileInfo &fi : files) {
+            if (!isSafeLogoName(fi.fileName())) {
+                qWarning("[VirtualChannels] skipping logo '%s' — letters, digits, spaces and "
+                         "._()- only", qPrintable(fi.fileName()));
+                continue;
+            }
+            const QString key = fi.fileName().toLower();
+            if (seen.contains(key)) continue;
+            seen.insert(key);
+            out.append(QVariantMap{
+                {"name",     fi.completeBaseName()},
+                {"file",     fi.fileName()},
+                {"animated", fi.suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0},
+                {"bundled",  bundled}});
         }
-        out.append(QVariantMap{
-            {"name",     fi.completeBaseName()},
-            {"file",     fi.fileName()},
-            {"animated", fi.suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0}});
-    }
+    };
+
+    scanDir(dir, false);
+    const QString bundledDir = bundled_logos_dir();
+    if (!bundledDir.isEmpty())
+        scanDir(QDir(bundledDir), true);
+
+    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("name")).toString()
+                   .compare(b.toMap().value(QStringLiteral("name")).toString(), Qt::CaseInsensitive) < 0;
+    });
     return out;
 }
 
@@ -4292,8 +4399,142 @@ QString VirtualChannelsBackend::logo_path(const QString &file) const {
         return QString();
     }
     const QString full = logos_dir() + QLatin1Char('/') + file;
-    if (!QFileInfo(full).isFile()) return QString();
-    return full;
+    if (QFileInfo(full).isFile()) return full;
+    const QString bundledDir = bundled_logos_dir();
+    if (!bundledDir.isEmpty()) {
+        const QString bundled = bundledDir + QLatin1Char('/') + file;
+        if (QFileInfo(bundled).isFile()) return bundled;
+    }
+    return QString();
+}
+
+static QString normalizeLogoSubject(const QString &raw) {
+    QString s = raw.trimmed().toLower();
+    s.replace(QLatin1Char('&'), QLatin1String(" and "));
+    QString out;
+    out.reserve(s.size());
+    bool prevSpace = true;
+    for (const QChar ch : s) {
+        if (ch.isLetterOrNumber()) {
+            out.append(ch);
+            prevSpace = false;
+        } else if (!prevSpace) {
+            out.append(QLatin1Char(' '));
+            prevSpace = true;
+        }
+    }
+    return out.trimmed();
+}
+
+QString VirtualChannelsBackend::preset_logo_for_subject(int kind, const QString &name) const {
+    if (kind != static_cast<int>(SubjectKind::Network))
+        return QString();
+    const QString norm = normalizeLogoSubject(name);
+    if (norm.isEmpty()) return QString();
+
+    static const QHash<QString, QString> kAliases = {
+        {QStringLiteral("abc"), QStringLiteral("abc.png")},
+        {QStringLiteral("american broadcasting company"), QStringLiteral("abc.png")},
+        {QStringLiteral("cbs"), QStringLiteral("cbs.png")},
+        {QStringLiteral("nbc"), QStringLiteral("nbc.png")},
+        {QStringLiteral("fox"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox broadcasting"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox broadcasting company"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox television"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox television studios"), QStringLiteral("fox.png")},
+        {QStringLiteral("the cw"), QStringLiteral("the-cw.png")},
+        {QStringLiteral("cw"), QStringLiteral("the-cw.png")},
+        {QStringLiteral("pbs"), QStringLiteral("pbs.png")},
+        {QStringLiteral("hbo"), QStringLiteral("hbo.png")},
+        {QStringLiteral("home box office"), QStringLiteral("hbo.png")},
+        {QStringLiteral("showtime"), QStringLiteral("showtime.png")},
+        {QStringLiteral("amc"), QStringLiteral("amc.png")},
+        {QStringLiteral("amc studios"), QStringLiteral("amc.png")},
+        {QStringLiteral("fx"), QStringLiteral("fx.png")},
+        {QStringLiteral("fx networks"), QStringLiteral("fx.png")},
+        {QStringLiteral("fx productions"), QStringLiteral("fx.png")},
+        {QStringLiteral("comedy central"), QStringLiteral("comedy-central.png")},
+        {QStringLiteral("cartoon network"), QStringLiteral("cartoon-network.png")},
+        {QStringLiteral("cartoon network studios"), QStringLiteral("cartoon-network.png")},
+        {QStringLiteral("adult swim"), QStringLiteral("adult-swim.png")},
+        {QStringLiteral("williams street"), QStringLiteral("adult-swim.png")},
+        {QStringLiteral("nickelodeon"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon productions"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon animation"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon animation studio"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("cnn"), QStringLiteral("cnn.png")},
+        {QStringLiteral("espn"), QStringLiteral("espn.png")},
+        {QStringLiteral("discovery"), QStringLiteral("discovery.png")},
+        {QStringLiteral("discovery channel"), QStringLiteral("discovery.png")},
+        {QStringLiteral("syfy"), QStringLiteral("syfy.png")},
+        {QStringLiteral("sci fi"), QStringLiteral("syfy.png")},
+        {QStringLiteral("bbc"), QStringLiteral("bbc.png")},
+        {QStringLiteral("bbc studios"), QStringLiteral("bbc.png")},
+        {QStringLiteral("bbc studios natural history unit"), QStringLiteral("bbc.png")},
+        {QStringLiteral("channel 4"), QStringLiteral("channel-4.png")},
+        {QStringLiteral("channel 4 television"), QStringLiteral("channel-4.png")},
+        {QStringLiteral("hanna barbera"), QStringLiteral("hanna-barbera.png")},
+        {QStringLiteral("hanna barbera cartoons"), QStringLiteral("hanna-barbera.png")},
+        {QStringLiteral("disney"), QStringLiteral("disney.png")},
+        {QStringLiteral("disney channel"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney pictures"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney productions"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney animation"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney animation studios"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney feature animation"), QStringLiteral("disney.png")},
+        {QStringLiteral("warner bros"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros television"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros pictures"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros animation"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner brothers"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("paramount"), QStringLiteral("paramount.png")},
+        {QStringLiteral("paramount television"), QStringLiteral("paramount.png")},
+        {QStringLiteral("paramount pictures"), QStringLiteral("paramount.png")},
+        {QStringLiteral("universal"), QStringLiteral("universal.png")},
+        {QStringLiteral("universal television"), QStringLiteral("universal.png")},
+        {QStringLiteral("universal pictures"), QStringLiteral("universal.png")},
+        {QStringLiteral("20th century fox"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("20th century fox television"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("20th century studios"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("twentieth century fox"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("columbia"), QStringLiteral("columbia.png")},
+        {QStringLiteral("columbia pictures"), QStringLiteral("columbia.png")},
+        {QStringLiteral("sony pictures"), QStringLiteral("columbia.png")},
+        {QStringLiteral("sony pictures television"), QStringLiteral("columbia.png")},
+        {QStringLiteral("marvel"), QStringLiteral("marvel.png")},
+        {QStringLiteral("marvel studios"), QStringLiteral("marvel.png")},
+        {QStringLiteral("marvel entertainment"), QStringLiteral("marvel.png")},
+        {QStringLiteral("pixar"), QStringLiteral("pixar.png")},
+        {QStringLiteral("pixar animation studios"), QStringLiteral("pixar.png")},
+        {QStringLiteral("lucasfilm"), QStringLiteral("lucasfilm.png")},
+        {QStringLiteral("lucasfilm ltd"), QStringLiteral("lucasfilm.png")},
+        {QStringLiteral("dreamworks"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks animation"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks pictures"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks skg"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("mgm"), QStringLiteral("mgm.png")},
+        {QStringLiteral("metro goldwyn mayer"), QStringLiteral("mgm.png")},
+        {QStringLiteral("new line cinema"), QStringLiteral("new-line-cinema.png")},
+        {QStringLiteral("new line"), QStringLiteral("new-line-cinema.png")},
+        {QStringLiteral("studio ghibli"), QStringLiteral("studio-ghibli.png")},
+        {QStringLiteral("ghibli"), QStringLiteral("studio-ghibli.png")},
+        {QStringLiteral("toho"), QStringLiteral("toho.png")},
+        {QStringLiteral("lionsgate"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("lionsgate films"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("lions gate"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("miramax"), QStringLiteral("miramax.png")},
+        {QStringLiteral("miramax films"), QStringLiteral("miramax.png")},
+        {QStringLiteral("a24"), QStringLiteral("a24.png")},
+    };
+
+    QString candidate = kAliases.value(norm);
+    if (candidate.isEmpty()) {
+        QString slug = norm;
+        slug.replace(QLatin1Char(' '), QLatin1Char('-'));
+        candidate = slug + QStringLiteral(".png");
+    }
+    return logo_path(candidate).isEmpty() ? QString() : candidate;
 }
 
 // ---------------------------------------------------------------------------
@@ -4636,6 +4877,10 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
             if (QFileInfo::exists(absRoot + QLatin1Char('/') + QLatin1String(c.second)))
                 ch[QLatin1String(c.first)] = QJsonArray{ QLatin1String(c.second) };
     }
+
+    const QString autoLogo = preset_logo_for_subject(kind, wanted);
+    if (!autoLogo.isEmpty())
+        ch["logo"] = autoLogo;
 
     QString err;
     if (!appendChannel(ch, &err)) {

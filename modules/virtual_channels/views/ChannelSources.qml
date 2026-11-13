@@ -25,104 +25,45 @@ FocusScope {
     // presented, with the logo last because it is the one row a channel can go
     // without; then the things that act on the channel itself.
     readonly property var rows: {
-        var r = ["source", "kind"]
+        var r = ["source"]
+
+        if (!isPreset) {
+            r.push("kind")
+        }
 
         if (isMovies) {
-            // A film channel takes its running order from where the films come
-            // from, so it carries no order row and no timing row: films do not
-            // sit on a clock. Movie Slots is gone too -- booking a film to a
-            // time says nothing when every programme is already a film.
-            // Local files have no playlists, genres or collections: a film is a
-            // file under movies/. Offering those rows would be offering a
-            // server's furniture to a folder.
-            const presetHere = cfg.preset !== "" && cfg.preset !== undefined
-            if (cfg.source === "local") {
-                r.push("films")
-            } else {
-                if (!presetHere || fromPlaylist) r.push("filmsfrom")
-                if (fromPlaylist) {
-                    if (cfg.supportsPlaylists) r.push("playlists")
-                } else {
-                    r.push("films")
-                    // A preset channel gets its content from its recipe — rows
-                    // for fields it does not carry would be rows offering the
-                    // viewer to hand-build beside a flow that already built.
-                    // Hand-built channels keep the rows: that is how they get
-                    // ticked.
-                    if (!presetHere || countOf("genres") > 0) r.push("genres")
-                    if (!presetHere || countOf("collections") > 0) r.push("collections")
-                    if (countOf("studios") > 0) r.push("studios")
-                }
+            r.push("films")
+            if (!isPreset) {
+                if (countOf("genres") > 0) r.push("genres")
+                if (countOf("collections") > 0) r.push("collections")
+                if (countOf("studios") > 0) r.push("studios")
+                if (cfg.supportsPlaylists && countOf("playlists") > 0) r.push("playlists")
             }
-            // Shows left behind by a channel that used to be a TV one. Shown so
-            // that nothing airs which the screen is not admitting to.
-            if (countOf("match") > 0) r.push("series")
-            r.push("ads")
-            r.push("breaks")
+            r.push("order")
             r.push("logo")
             r.push("rebuild")
-            // A preset channel can run its recipe again — after the viewer has
-            // taken shows out, that puts back what the library has added since.
-            if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
+            if (isPreset) r.push("seed")
             r.push("rename")
             r.push("delete")
-            console.log("[presetflow] builder rows:", r.join(","),
-                        "preset:", cfg.preset !== undefined ? cfg.preset : "",
-                        "off:", countOf("presetOff"),
-                        "ch:", channelNumber,
-                        "genres:", countOf("genres"), "studios:", countOf("studios"),
-                        "collections:", countOf("collections"))
             return r
         }
 
-        r.push("timing")
-        // Blocks are managed on a screen of their own, reached from a row of
-        // its own -- the way movie slots are. A row that both cycles and opens
-        // is a row nothing else in the app is.
-        if (onADayPlan) r.push("blocks")
-
-        // On blocks, each block names what it plays and carries its own
-        // bumpers, so the pools are not read at all -- offering them here would
-        // be a second place to say what airs, and the quieter of the two would
-        // be the one that lied.
-        const presetHere = cfg.preset !== "" && cfg.preset !== undefined
-        if (!onADayPlan) {
-            if (cfg.source === "local") {
-                r.push("series")
-            } else if (cfg.source !== undefined) {
-                r.push("series")
-                // Films on a TV channel are not offered, but if a channel has them
-                // -- from being a film channel once -- they air, so they are shown.
-                if (countOf("films") > 0)  r.push("films")
-                if (countOf("genres") > 0) r.push("genres")
-                // Same hide as the movie side: a preset channel that does not
-                // carry collections has no collections row.
-                if (!presetHere || countOf("collections") > 0)
-                    r.push("collections")
-                if (cfg.supportsPlaylists && (!presetHere || countOf("playlists") > 0))
-                    r.push("playlists")
-            }
-            // Blocks say when everything airs, so booking a film to a time and
-            // choosing an order are both the plan's to decide. Hide Movie Slots
-            // on TV presets unless slots already exist.
-            if (!presetHere || sourcesRoot.slotCount > 0)
-                r.push("slots")
-            r.push("order")
+        r.push("series")
+        if (!isPreset) {
+            if (countOf("films") > 0) r.push("films")
+            if (countOf("genres") > 0) r.push("genres")
+            if (countOf("collections") > 0) r.push("collections")
+            if (cfg.supportsPlaylists && countOf("playlists") > 0) r.push("playlists")
         }
-        // How much plays between programmes is only this row's to say when
-        // nothing else is deciding it. On a clock the gap decides, whether
-        // the channel is on blocks or not.
-        if (sourcesRoot.gridMinutes === 0) r.push("ads")
-        r.push("breaks")
+        r.push("order")
         r.push("logo")
         r.push("rebuild")
-        // A preset channel can run its recipe again — after the viewer has
-        // taken shows out, that puts back what the library has added since.
-        if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
+        if (isPreset) r.push("seed")
         r.push("rename")
         r.push("delete")
         return r
     }
+    readonly property bool isPreset: cfg.preset !== "" && cfg.preset !== undefined
     readonly property int rowCount: rows.length
     readonly property var sources: cfg.available || ["local"]
 
@@ -294,9 +235,13 @@ FocusScope {
             return sourcesRoot.interstitialSources() === 0 ? "NONE" : "0 CLIPS"
         }
         case "order":
-            return sourcesRoot.order === "shuffle" ? "SHUFFLE"
-                 : sourcesRoot.order === "interleaved" ? "INTERLEAVED"
-                                                       : "BROADCAST"
+            if (sourcesRoot.isMovies) {
+                return sourcesRoot.order === "broadcast" ? "BY RELEASE YEAR" : "SHUFFLE"
+            }
+            return sourcesRoot.order === "broadcast"   ? "BY AIRDATE"
+                 : sourcesRoot.order === "marathon"    ? "MARATHON"
+                 : sourcesRoot.order === "shuffle"     ? "SHUFFLE"
+                                                       : "ROTATING"
         case "blocks": {
             var b = sourcesRoot.blockCount
             return b === 0 ? "NONE" : (b === 1 ? "1 BLOCK" : b + " BLOCKS")
@@ -346,11 +291,19 @@ FocusScope {
         case "genres":      return "Every film on " + server + " of these "
                                    + sourcesRoot.genreWord.toLowerCase() + ". Add one and the channel follows the library as it grows."
         case "logo":        return "The mark this channel flies in the corner, and how it is drawn. Anything not set here uses the global defaults under Channel Logo in Channels settings."
-        case "order":       return sourcesRoot.order === "shuffle"
-                                   ? "Series take turns, and everything plays once before anything repeats."
-                                 : sourcesRoot.order === "interleaved"
-                                   ? "Series take turns, each keeping its own place — a short one comes round again while a long one plays on."
-                                   : "Everything airs in the order it first did, oldest first, whichever show it belongs to."
+        case "order":
+            if (sourcesRoot.isMovies) {
+                return sourcesRoot.order === "broadcast"
+                       ? "Airs films chronologically by release year."
+                       : "Airs films in random order across the channel."
+            }
+            return sourcesRoot.order === "broadcast"
+                   ? "Airs episodes chronologically by original airdate."
+                 : sourcesRoot.order === "marathon"
+                   ? "Plays each series in full before moving to the next."
+                 : sourcesRoot.order === "shuffle"
+                   ? "Random episodes across all selected shows."
+                   : "Shows take turns, each in episode order."
         case "blocks":      return "The day, block by block: this show at this hour, then that one."
         case "timing":      return sourcesRoot.onADayPlan
                                    ? "A day laid out as blocks — this show at this hour, then that one."
@@ -373,8 +326,7 @@ FocusScope {
 
     function cycles(i) {
         var r = rows[i]
-        return r === "source" || r === "order" || r === "timing" || r === "ads"
-               || r === "kind" || r === "filmsfrom"
+        return r === "source" || r === "order" || r === "kind"
     }
 
     function step(delta) {
@@ -388,43 +340,20 @@ FocusScope {
             else { status = ""; reload() }
             return
         }
-        if (r === "filmsfrom") {
-            var nextFrom = sourcesRoot.fromPlaylist ? "selection" : "playlist"
-            if (!virtualChannelsBackend.set_channel_films_from(channelNumber, nextFrom))
-                status = "Could not change where the films come from"
-            else { status = ""; reload() }
-            return
-        }
         if (r === "order") {
-            var next = order === "broadcast" ? "interleaved"
-                     : order === "interleaved" ? "shuffle"
-                                               : "broadcast"
+            var next
+            if (sourcesRoot.isMovies) {
+                next = (order === "broadcast") ? "shuffle" : "broadcast"
+            } else {
+                next = (order === "interleaved") ? "shuffle"
+                     : (order === "shuffle")     ? "broadcast"
+                     : (order === "broadcast")   ? "marathon"
+                                                 : "interleaved"
+            }
             if (!virtualChannelsBackend.set_channel_order(channelNumber, next))
                 status = "Could not change the order"
             else { status = ""; reload() }
             return
-        }
-        if (r === "timing") {
-            // Free run, the grids, then blocks: one more stop on a row that
-            // already asks how a channel keeps time, rather than a row of its
-            // own that every channel would have to scroll past.
-            var stops = gridChoices.concat(["day_plan"])
-            var at = sourcesRoot.onADayPlan ? gridChoices.length
-                                            : Math.max(0, gridChoices.indexOf(gridMinutes))
-            var next = stops[(at + delta + stops.length) % stops.length]
-            var ok = next === "day_plan"
-                     ? virtualChannelsBackend.set_channel_schedule(channelNumber, "day_plan")
-                     : (virtualChannelsBackend.set_channel_schedule(channelNumber, "free")
-                        && virtualChannelsBackend.set_channel_grid(channelNumber, next))
-            if (!ok) status = "Could not change the schedule"
-            else { status = ""; reload() }
-            return
-        }
-        if (r === "ads") {
-            var n = Math.max(0, Math.min(4, adsPerBreak + delta))
-            if (!virtualChannelsBackend.set_channel_ads(channelNumber, n))
-                status = "Could not change the breaks"
-            else { status = ""; reload() }
         }
     }
 
@@ -432,34 +361,29 @@ FocusScope {
         if (building) return
         var row = rows[i]
 
-        if (row === "blocks") {
-            if (sourcesRoot.planCount === 0) {
-                // Nothing to open yet, so make the day the viewer just asked
-                // for: one block, one slot of the grid, waiting to be told what
-                // it plays.
-                // Three days to plan, and all of them empty: a day with no
-                // blocks in it is a day of breaks, which is what a channel
-                // that has just been switched over should air.
-                var seed = [
-                    { name: "WEEKDAYS", gridMinutes: 30, days: [1, 2, 3, 4, 5], blocks: [] },
-                    { name: "SATURDAY", gridMinutes: 30, days: [6],             blocks: [] },
-                    { name: "SUNDAY",   gridMinutes: 30, days: [7],             blocks: [] }
-                ]
-                if (!virtualChannelsBackend.set_channel_plans(channelNumber, seed)) {
-                    status = "Could not start the blocks"
-                    return
-                }
-                reload()
-            }
-            navigateTo("PlanEdit.qml", {
+        if (row === "rebuild") {
+            building = true
+            status = "Building…"
+            virtualChannelsBackend.regenerate(channelNumber)
+            return
+        }
+        if (row === "seed") {
+            // The recipe runs against the connected sources again; the picks
+            // land through onPresetSeeded, which reloads the counts here.
+            building = true
+            status = "Seeding…"
+            virtualChannelsBackend.seed_preset_channel(channelNumber)
+            return
+        }
+        if (row === "source") { cycleSource(1); return }
+        if (row === "logo") {
+            navigateTo("LogoPicker.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
-                channelName:   sourcesRoot.channelName,
-                planIndex:     0
+                title: sourcesRoot.channelName
             }, { currentIndex: sourcesRoot.current })
             return
         }
-
         if (row === "rename") {
             appCore.save_setting(moduleId, "rename_buffer", "")
             navigateTo("TextEntry.qml", {
@@ -479,46 +403,6 @@ FocusScope {
             }
             if (virtualChannelsBackend.delete_channel(channelNumber)) goBack()
             else status = "Could not remove this channel"
-            return
-        }
-
-        if (row === "rebuild") {
-            building = true
-            status = "Building…"
-            virtualChannelsBackend.regenerate(channelNumber)
-            return
-        }
-        if (row === "seed") {
-            // The recipe runs against the connected sources again; the picks
-            // land through onPresetSeeded, which reloads the counts here.
-            building = true
-            status = "Seeding…"
-            virtualChannelsBackend.seed_preset_channel(channelNumber)
-            return
-        }
-        if (row === "source") { cycleSource(1); return }
-        if (row === "logo") {
-            navigateTo("LogoSettings.qml", {
-                moduleId:      sourcesRoot.moduleId,
-                channelNumber: sourcesRoot.channelNumber,
-                title: sourcesRoot.channelName
-            }, { currentIndex: sourcesRoot.current })
-            return
-        }
-        if (row === "breaks") {
-            navigateTo("Interstitials.qml", {
-                moduleId:      sourcesRoot.moduleId,
-                channelNumber: sourcesRoot.channelNumber,
-                channelName:   sourcesRoot.channelName
-            }, { currentIndex: sourcesRoot.current })
-            return
-        }
-        if (row === "slots") {
-            navigateTo("Bookings.qml", {
-                moduleId:      sourcesRoot.moduleId,
-                channelNumber: sourcesRoot.channelNumber,
-                channelName:   sourcesRoot.channelName
-            }, { currentIndex: sourcesRoot.current })
             return
         }
 

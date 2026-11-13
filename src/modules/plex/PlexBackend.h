@@ -25,6 +25,7 @@ public:
                                           const QString &sessionId);
     Q_INVOKABLE QString  video_quality() const;
     Q_INVOKABLE void     stop_transcode(const QString &sessionId);
+    Q_INVOKABLE void     ping_transcode(const QString &sessionId);
 
     // Auth flow
     Q_INVOKABLE void start_pin_auth();

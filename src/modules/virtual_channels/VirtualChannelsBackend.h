@@ -201,7 +201,9 @@ public:
 
     Q_INVOKABLE QVariantList list_logos();
     Q_INVOKABLE QString logos_dir() const { return m_dataRoot + QStringLiteral("/logos"); }
+    Q_INVOKABLE QString bundled_logos_dir() const;
     Q_INVOKABLE QString logo_path(const QString &file) const;
+    Q_INVOKABLE QString preset_logo_for_subject(int kind, const QString &name) const;
 
     // The local library index (one SQLite file): what the shelves can actually
     // air. The add-flow's option lists read this instead of guessing categories
@@ -657,6 +659,8 @@ private:
 
     qint64  m_plexPendingOffsetMs = 0;
     bool    m_plexPendingTranscodeOk = false;
+    QHash<QString, bool> m_plexForceTranscodeByRef;
+    bool    m_previewTranscodeActive = false;
     bool    requestServerUrl(const vchan::Slot &s, bool chooseTracks = false);
     bool    askServerForStream(const vchan::Slot &s);
     void    applyTrackChoice(const QString &ref, const QVariantList &audio,
@@ -669,9 +673,11 @@ private:
     qint64  m_previewPosition = 0;
     QProcess *m_previewProc   = nullptr;
     QTimer   *m_previewPoll   = nullptr;
+    QTimer   *m_previewPing   = nullptr;
     QString   m_previewDir;
     QString   m_previewIpcPath;
     QString   m_previewFrame;
+    quint64   m_previewSeq = 0;
     void      pollPreviewFrames();
     QObject *serverBackend(vchan::SlotSource src) const;
     vchan::SlotSource m_serverPendingSrc = vchan::SlotSource::Local;

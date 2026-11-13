@@ -4,6 +4,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Virtual channels: Guide video previews respect media-server transcode settings & stay smooth
+- **Plex / Jellyfin / Emby Guide previews**: `preview_stream()` now passes `m_previewPosition` and `transcodeAllowed = true` and honors `PlexBackend`'s resolution-aware `forceTranscode` decision (only transcoding items above the configured Video Quality threshold, starting at the live offset), while cleaning up active preview transcode sessions on channel change (`cancel_preview_stream`).
+- **Non-blocking preview teardown & real-time pacing**: replaced synchronous `waitForFinished()` in `stop_preview_video()` with async process teardown + per-launch `/dev/shm` directories (eliminating Guide navigation freezes), and moved `fps=8` before `scale=320:240` with `realtime` pacing when muted (`--no-audio`) so `mpv --vo=image` no longer runs untimed at 300%+ CPU.
+
+### Changed — Virtual channels: streamlined settings & couch navigation
+- **Settings → CHANNELS simplified**: trimmed `manifest.json` down to 7 couch-essential rows: `Enabled`, `Manage Channels`, `Media Folder`, `Weather Channel`, `Auto-Scroll Guide` (simple ON/OFF toggle, replacing the 5-state idle menu), `Channel Preview`, and `Guide Music`. Cut background technical knobs (`Schedule Ahead`, `Scan Library at Start`, section headers).
+- **Manage Channels / ChannelSources cleaned up**: streamlined per-channel settings down to core essentials (`Source`, `Type` on custom channels, `Shows` / `Films`, `Order`, `Logo`, `Rebuild`, `Seed From Recipe`, `Rename`, `Delete`).
+- **New couch-friendly Order modes**:
+  - **TV channels**: `Rotating` (shows take turns in episode order), `Shuffle` (random across all shows), `By Airdate` (chronological by original airdate), and `Marathon` (play each series in full before moving to the next).
+  - **Movie channels**: `Shuffle` and `By Release Year` (chronological by release date).
+- **Deadweight shed**: deleted 11 unused/abandoned complex desktop scheduler QML subviews (`PlanEdit`, `BlockEdit`, `Bookings`, `BookingEdit`, `BookingDays`, `Interstitials`, `SourceIdents`, `IdentLevels`, `BannerSettings`, `PoolEditor`, `SourcePick`).
+
+### Added — Virtual channels: bundled preset network & studio logos (Unit D)
+- **Auto-branded preset channels**: creating a TV Network or Movie Studio preset channel now automatically assigns a matching corner logo (`set_channel_logo` / `preset_logo_for_subject`), using a normalized alias table that maps `library.db` studio/network variants (e.g. `Warner Bros. Television` → `warner-bros.png`, `Williams Street` → `adult-swim.png`) to canonical marks.
+- **38 monochrome white/transparent PNG logos** (`modules/virtual_channels/assets/logos/*.png`), rendered from Wikimedia Commons Public Domain SVGs and attributed in `THANKS.md` (covering major US TV networks, animation/cable brands, and movie studios present in `library.db`).
+- **Seamless user override**: `list_logos()` and `logo_path()` resolve `<dataRoot>/logos` first and fall back to the bundled `assets/logos/` directory, so user-dropped files override bundled marks by filename and bundled marks remain selectable in `LogoPicker`.
+- Test surface: new `testPresetLogos()` in `VirtualChannelsBackendTest` verifying bundled fallback, user override precedence, deduplicated `list_logos()`, alias normalization, and `create_preset_channel()` auto-branding (network/studio only, never Genre). Full suite **14/14 green**.
+
 ### Added — CHANNELS: the dial reads its shelves
 - **Local library index + launch walk**: the module looks its shelves over once at start ("Scan Library at Start", on by default in the new Shelves section), so the add-on lists offer only what is actually watchable — ordered by how many titles carry each category, count beside every row ("12 shows") — instead of an alphabetic catalog list of things nobody owns. A fresh app, an un-scanned app, and a viewer who turns it off keep the old lists byte for byte. A server that stays offline keeps its last-known lineup instead of darkening its channels; boxset shelves contribute their real counts; a genre nobody has stops being offered rather than sitting at a stale count.
 - **Network questions the shelves answer skip TheTVDB**: a show the walk saw a network for answers from the catalog's own network listing, so a seed pays zero searches for it — cold or warm, across boots. Answers TheTVDB does provide are taught back into the index, so a seed never re-pays a question it already asked.

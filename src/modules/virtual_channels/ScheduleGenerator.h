@@ -47,7 +47,7 @@ struct BreakPack {
 // Broadcast without the sort: it airs the pool in the order the pool arrived,
 // which is what a playlist means. A film channel is given it by the backend
 // rather than the viewer -- the sources screen has no ordering row.
-enum class Ordering { Broadcast, Shuffle, Interleaved, AsListed };
+enum class Ordering { Broadcast, Shuffle, Interleaved, AsListed, Marathon };
 
 // One stretch of a day plan: what it draws on, and for how long.
 //

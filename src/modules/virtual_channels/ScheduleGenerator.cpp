@@ -164,6 +164,7 @@ Ordering orderingFromString(const QString &s) {
     const QString v = s.trimmed().toLower();
     if (v == QLatin1String("shuffle"))     return Ordering::Shuffle;
     if (v == QLatin1String("interleaved")) return Ordering::Interleaved;
+    if (v == QLatin1String("marathon"))    return Ordering::Marathon;
     if (v == QLatin1String("as_listed"))   return Ordering::AsListed;
     // "sequential" is what channels written before this said. It sorted by
     // series title, which nobody chose on purpose, so it reads as broadcast.
@@ -174,6 +175,7 @@ QString orderingToString(Ordering o) {
     switch (o) {
     case Ordering::Shuffle:     return QStringLiteral("shuffle");
     case Ordering::Interleaved: return QStringLiteral("interleaved");
+    case Ordering::Marathon:    return QStringLiteral("marathon");
     case Ordering::AsListed:    return QStringLiteral("as_listed");
     case Ordering::Broadcast:   break;
     }
@@ -316,12 +318,25 @@ QVector<Slot> generateSlots(const ChannelDef &def, qint64 startMs,
     // programme, so the channel carries on from where it actually was.
     QVector<int> broadcastOrder(progCount);
     int resumeAired = 0;
-    if (def.order == Ordering::Broadcast || def.order == Ordering::AsListed) {
+    if (def.order == Ordering::Broadcast || def.order == Ordering::AsListed
+        || def.order == Ordering::Marathon) {
         for (int i = 0; i < progCount; ++i) broadcastOrder[i] = i;
         // AsListed keeps the pool's own order, which is the order a playlist
         // was written in. Sorting it would throw away the one thing it carries.
-        if (def.order == Ordering::Broadcast)
+        if (def.order == Ordering::Broadcast) {
             std::sort(broadcastOrder.begin(), broadcastOrder.end(), airedBefore);
+        } else if (def.order == Ordering::Marathon) {
+            std::sort(broadcastOrder.begin(), broadcastOrder.end(), [&programmes](int lhs, int rhs) {
+                const MediaItem &a = programmes[lhs];
+                const MediaItem &b = programmes[rhs];
+                const int bySeries = a.series.localeAwareCompare(b.series);
+                if (bySeries != 0) return bySeries < 0;
+                if (a.seasonNo  != b.seasonNo)  return a.seasonNo  < b.seasonNo;
+                if (a.episodeNo != b.episodeNo) return a.episodeNo < b.episodeNo;
+                if (a.airMs != 0 && b.airMs != 0 && a.airMs != b.airMs) return a.airMs < b.airMs;
+                return a.ref < b.ref;
+            });
+        }
         // A schedule written before marks existed carries only the count, which
         // says the same thing as long as the pool has not changed since.
         resumeAired = int(rotation % progCount);
@@ -493,7 +508,8 @@ QVector<Slot> generateSlots(const ChannelDef &def, qint64 startMs,
             const QVector<int> &turn = groups[s];
             return programmes[turn[(resume[s] + taken[s]) % turn.size()]];
         }
-        if (def.order == Ordering::Broadcast || def.order == Ordering::AsListed)
+        if (def.order == Ordering::Broadcast || def.order == Ordering::AsListed
+            || def.order == Ordering::Marathon)
             return programmes[broadcastOrder[int((resumeAired + placedHere) % progCount)]];
 
         const qint64 pass = rotation / progCount;
