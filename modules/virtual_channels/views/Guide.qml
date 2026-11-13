@@ -28,9 +28,11 @@ FocusScope {
     property string previewMode: "VIDEO"
 
     property int masterVolume: 100
+    property bool guideMusicOn: false
 
     readonly property bool previewAudible:
-        previewShowsVideo && previewLoader.item !== null && previewLoader.item.active
+        !guideMusicOn && previewShowsVideo
+        && previewLoader.item !== null && previewLoader.item.active
         && previewLoader.item.canPlayAudio
 
     onPreviewAudibleChanged: applyDuck()
@@ -46,7 +48,7 @@ FocusScope {
     readonly property int audibleVolume: volumeOsd.muted ? 0 : masterVolume
 
     function applyVolume() {
-        if (previewLoader.item) previewLoader.item.volume = audibleVolume
+        if (previewLoader.item) previewLoader.item.volume = guideMusicOn ? 0 : audibleVolume
         if (weatherBackend)
             weatherBackend.set_music_volume(audibleVolume)
     }
@@ -322,6 +324,8 @@ FocusScope {
             var wasPlaying = weatherBackend.musicPlaying
             weatherBackend.startMusic()
             musicStartedHere = !wasPlaying && weatherBackend.musicPlaying
+            guideMusicOn = weatherBackend.musicPlaying
+            applyVolume()
             if (!weatherBackend.musicPlaying)
                 status = "Music needs the Weather module's Music setting on"
         }
@@ -557,7 +561,7 @@ FocusScope {
                 asynchronous: true
                 onLoaded: {
                     item.finished.connect(guideRoot.followSchedule)
-                    item.volume = guideRoot.masterVolume
+                    item.volume = guideRoot.guideMusicOn ? 0 : guideRoot.audibleVolume
                 }
                 active: guideRoot.previewShowsVideo
                 source: "ChannelPreview.qml"
