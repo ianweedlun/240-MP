@@ -104,6 +104,7 @@ FocusScope {
     property string previewImage: ""
     property int previewSlot: -1
     property bool previewStarted: false
+    property bool previewingWeather: false
 
     Timer {
         id: previewFollow
@@ -139,6 +140,16 @@ FocusScope {
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { stopPreview(); return }
         var row = rows[i]
+        if (row.viewPath === weatherView) {
+            if (!previewShowsPicture) return
+            previewingWeather = true
+            previewStarted = true
+            previewImage = ""
+            if (previewLoader.item) previewLoader.item.clear()
+            if (virtualChannelsBackend) virtualChannelsBackend.cancel_preview_stream()
+            return
+        }
+        previewingWeather = false
         if (row.isSpecial) { stopPreview(); return }
 
         if (!previewShowsPicture) return
@@ -175,6 +186,7 @@ FocusScope {
         dwellChannel = -1
         previewSlot = -1
         previewStarted = false
+        previewingWeather = false
         // Also runs from Component.onDestruction, by which point the context
         // property is gone.
         if (virtualChannelsBackend) virtualChannelsBackend.cancel_preview_stream()
@@ -188,8 +200,17 @@ FocusScope {
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
         detailFor = row.number
-        nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
-                                   : virtualChannelsBackend.now_next(row.number)
+        if (row.viewPath === weatherView) {
+            nowPlaying = ({
+                valid: true,
+                series: "WEATHER CHANNEL",
+                title: "Local Forecast",
+                desc: "Live local conditions, extended forecast and almanac."
+            })
+        } else {
+            nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
+                                       : virtualChannelsBackend.now_next(row.number)
+        }
     }
 
     function refreshDetail() {
@@ -205,8 +226,17 @@ FocusScope {
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
         detailFor = row.number
-        nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
-                                   : virtualChannelsBackend.now_next(row.number)
+        if (row.viewPath === weatherView) {
+            nowPlaying = ({
+                valid: true,
+                series: "WEATHER CHANNEL",
+                title: "Local Forecast",
+                desc: "Live local conditions, extended forecast and almanac."
+            })
+        } else {
+            nowPlaying = row.isSpecial ? ({ valid: false, message: row.name })
+                                       : virtualChannelsBackend.now_next(row.number)
+        }
     }
 
     function runLabel(ms) {
@@ -238,11 +268,6 @@ FocusScope {
         // so what channel up and down will land on is what the grid shows.
         var all = []
         for (var i = 0; i < real.length; i++) all.push(real[i])
-        all.push({ number: virtualChannelsBackend.guide_channel_number(),
-                   name: "Guide", isSpecial: true, viewPath: "",
-                   blocks: [{ startMs: fromMs, durMs: spanMs,
-                              title: "TV Guide", series: "",
-                              ep: "", onNow: true }] })
         if (toggleOn("channels.weather", false))
             all.push({ number: virtualChannelsBackend.weather_channel_number(),
                        name: "Weather", isSpecial: true,
@@ -549,7 +574,10 @@ FocusScope {
             width: visible ? Math.min(parent.width * 0.5, height * 4 / 3) : 0
             clip: true
 
-            Rectangle { anchors.fill: parent; color: "black" }
+            Rectangle {
+                anchors.fill: parent
+                color: guideRoot.previewingWeather ? root.surfaceColor : "black"
+            }
 
             Image {
                 id: previewStill
@@ -574,6 +602,39 @@ FocusScope {
                 onStatusChanged: {
                     if (status === Loader.Error)
                         console.log("[guide] no video preview available; showing the still instead")
+                }
+            }
+
+            Item {
+                id: wxPreviewHost
+                anchors.fill: parent
+                visible: guideRoot.previewingWeather && wxPreviewLoader.status === Loader.Ready
+                clip: true
+
+                Item {
+                    width: root.sw
+                    height: root.sh
+                    transformOrigin: Item.TopLeft
+                    scale: Math.min(wxPreviewHost.width / Math.max(1, root.sw),
+                                    wxPreviewHost.height / Math.max(1, root.sh))
+
+                    Loader {
+                        id: wxPreviewLoader
+                        anchors.fill: parent
+                        focus: false
+                        readonly property bool wantWeather:
+                            guideRoot.showDetail && guideRoot.previewShowsPicture
+                            && guideRoot.previewingWeather
+                        onWantWeatherChanged: {
+                            if (wantWeather) {
+                                setSource(Qt.resolvedUrl("../../weather/views/Weather.qml"), {
+                                    "navParams": { previewMode: true, moduleId: "com.240mp.weather" }
+                                })
+                            } else {
+                                setSource("")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -680,6 +741,7 @@ FocusScope {
             Item {
                 id: progress
                 visible: guideRoot.nowPlaying && guideRoot.nowPlaying.valid === true
+                         && Number(guideRoot.nowPlaying.durMs) > 0
                 anchors.top: runLine.visible ? runLine.bottom : epLine.bottom
                 anchors.topMargin: root.sh * 0.012
                 anchors.left: parent.left

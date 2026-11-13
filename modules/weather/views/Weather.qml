@@ -29,21 +29,21 @@ FocusScope {
 
     property bool twelveHour: false
 
-    focus: true
+    readonly property bool isPreview: !!(navParams && navParams.previewMode)
+    readonly property string wxModuleId:
+        (navParams && navParams.moduleId) ? navParams.moduleId
+        : (typeof moduleRoot !== "undefined" && moduleRoot ? moduleRoot.moduleId : "com.240mp.weather")
+
+    focus: !isPreview
 
     Component.onCompleted: {
         var cfg = appCore.get_settings()
-        var mod = (cfg.modules && cfg.modules[moduleRoot.moduleId]) || {}
+        var mod = (cfg.modules && cfg.modules[wxModuleId]) || {}
         twelveHour = (mod.hours_format || "24-hour").indexOf("12") === 0
         // parseInt stops at the space, so "30 SEC" -> 30.
         screenTimeMs = (parseInt(mod.screen_time || "10") || 10) * 1000
 
-        // Suppress the screen saver for as long as this view is up. The module
-        // IS a screen saver — a rotating display you leave running — so letting
-        // the saver paint over it would be actively wrong. The flag is
-        // mpv-named because playback was its first user; it is the app's
-        // general "something is already owning the screen" signal.
-        idleTracker.mpvActive = true
+        if (!isPreview && idleTracker) idleTracker.mpvActive = true
 
         // Absent means enabled, matching MultiSelectSettings.qml, which defaults
         // an option to true when config has no entry for it.
@@ -51,12 +51,14 @@ FocusScope {
         rebuildRing()
 
         weatherBackend.start()
-        // No-op when the Music setting is off, so the view doesn't have to read
-        // the setting a second time.
-        weatherBackend.startMusic()
+        if (!isPreview) {
+            // No-op when the Music setting is off, so the view doesn't have to read
+            // the setting a second time.
+            weatherBackend.startMusic()
 
-        // Allow volume keys to reach QML for weather music volume control.
-        inputManager.setInterceptMediaKeys(false)
+            // Allow volume keys to reach QML for weather music volume control.
+            inputManager.setInterceptMediaKeys(false)
+        }
     }
 
     property var chosenDisplays: ({})
@@ -84,12 +86,14 @@ FocusScope {
     }
 
     Component.onDestruction: {
-        if (idleTracker) {
-            idleTracker.mpvActive = false
-            idleTracker.resetActivity()
+        if (!isPreview) {
+            if (idleTracker) {
+                idleTracker.mpvActive = false
+                idleTracker.resetActivity()
+            }
+            // Restore media key interception for mpv playback.
+            inputManager.setInterceptMediaKeys(true)
         }
-        // Restore media key interception for mpv playback.
-        inputManager.setInterceptMediaKeys(true)
     }
 
     function advance(step) {
