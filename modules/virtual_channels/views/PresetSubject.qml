@@ -39,14 +39,15 @@ FocusScope {
     // kinds below keep only the matching Plex library type; the legacy
     // "collections" union stays for the source browser, which still wants both.
     readonly property string catalogKind:
-        studioMovie ? "studio"
+        subjectRoot.recipe === "network"
+            ? (subjectRoot.wants === "movies" ? "studio" : "tvstudios")
         : subjectRoot.recipe === "collection"
             ? (subjectRoot.wants === "movies" ? "moviecollections" : "tvcollections")
             : (subjectRoot.recipe === "genre" && subjectRoot.wants === "movies")
                 ? "moviegenres"
                 : recipe
     readonly property string subjectWord:
-        studioMovie ? "Studio"
+        subjectRoot.recipe === "network" ? "Studio"
         : recipe.charAt(0).toUpperCase() + recipe.slice(1)
 
     property var rows: []

@@ -29,7 +29,7 @@ FocusScope {
     // the backend's load_catalog / create_preset_channel keys on.
     readonly property var recipes: [
         { value: "genre",      label: "By Genre" },
-        { value: "network",    label: "By Network" },
+        { value: "network",    label: "By Studio" },
         { value: "collection", label: "By Collection" }
     ]
 
@@ -37,7 +37,7 @@ FocusScope {
         "First say what the channel airs — shows or films. The category then "
         + "fills it with everything of that kind the library has."
     readonly property string blurb:
-        "A preset builds a whole channel from a category — a network, a genre, or a "
+        "A preset builds a whole channel from a category — a studio, a genre, or a "
         + "collection — instead of one folder or series. Pick the category, then the "
         + "specific one."
 

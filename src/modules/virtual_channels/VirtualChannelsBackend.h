@@ -436,6 +436,7 @@ private:
     QStringList m_pgMatch;
     QStringList m_pgShowIds;
     QStringList m_pgGenres;
+    QStringList m_pgStudios;
     // How many things carry each label being browsed, so a picker can show it.
     QHash<QString, int> m_browseTally;
     // Cached "shows"/"movies" browse lists per source ("plex:shows", etc.) so
@@ -519,7 +520,8 @@ private:
     void plexEnumStart(int channelNumber, const vchan::ChannelDef &def,
                        const QString &library, const QStringList &match,
                        const QStringList &showIds = {},
-                       const QStringList &genres = {});
+                       const QStringList &genres = {},
+                       const QStringList &studios = {});
     bool plexExcluded(const QString &ratingKey, bool isSeason) const;
     bool plexItemToMedia(const QVariantMap &m, vchan::MediaItem *out) const;
     void plexEnumNext();

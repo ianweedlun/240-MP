@@ -2473,7 +2473,8 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
                                            const QString &library,
                                            const QStringList &match,
                                            const QStringList &showIds,
-                                           const QStringList &genres) {
+                                           const QStringList &genres,
+                                           const QStringList &studios) {
     if (!m_plex) { plexEnumFail(QStringLiteral("Plex is not available")); return; }
 
     m_pgChannel     = channelNumber;
@@ -2482,6 +2483,7 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
     m_pgMatch       = match;
     m_pgShowIds     = showIds;
     m_pgGenres      = genres;
+    m_pgStudios     = studios;
     m_pgSections.clear();
     m_pgShows.clear();
     m_pgSeasons.clear();
@@ -2770,7 +2772,7 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
     // from here as well would sweep the library in behind them.
     const bool takesWholeLibrary =
         m_pgMatch.isEmpty() && m_pgShowIds.isEmpty() && m_pgGenres.isEmpty()
-        && m_pgCollections.isEmpty() && m_pgPlaylists.isEmpty();
+        && m_pgStudios.isEmpty() && m_pgCollections.isEmpty() && m_pgPlaylists.isEmpty();
 
     if (m_seedActive) {
         QVariantList showsCache;
@@ -2804,6 +2806,18 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
             const QStringList genres = m.value("genres").toStringList();
             for (const QString &want : std::as_const(m_pgGenres)) {
                 for (const QString &has : genres) {
+                    if (has.compare(want, Qt::CaseInsensitive) == 0) {
+                        wanted = true;
+                        break;
+                    }
+                }
+                if (wanted) break;
+            }
+        }
+        if (!wanted && !m_pgStudios.isEmpty()) {
+            const QStringList studios = m.value("studios").toStringList();
+            for (const QString &want : std::as_const(m_pgStudios)) {
+                for (const QString &has : studios) {
                     if (has.compare(want, Qt::CaseInsensitive) == 0) {
                         wanted = true;
                         break;
@@ -3197,7 +3211,8 @@ void VirtualChannelsBackend::plexApptNext() {
         m_pgPlaylists       = job.playlists;
         m_pgExcludeSeasons  = job.excludeSeasons;
         m_pgExcludeEpisodes = job.excludeEpisodes;
-        plexEnumStart(m_genChannel, m_genDef, job.library, job.match, job.showIds, job.genres);
+        plexEnumStart(m_genChannel, m_genDef, job.library, job.match, job.showIds,
+                      job.genres, job.studios);
         return;
     }
 
@@ -4283,7 +4298,8 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
                                 || kind == QLatin1String("moviegenres"));
         const bool collectionKind = (kind == QLatin1String("moviecollections")
                                      || kind == QLatin1String("tvcollections"));
-        const bool studioKind = (kind == QLatin1String("studio"));
+        const bool studioKind = (kind == QLatin1String("studio")
+                                 || kind == QLatin1String("tvstudios"));
         if (networkKind || genreKind || collectionKind || studioKind) {
             const QString subjectKind = networkKind ? QStringLiteral("network")
                                   : (studioKind ? QStringLiteral("studio")
@@ -4291,6 +4307,7 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
                                                                   : QStringLiteral("genre")));
             const QString chan = (kind == QLatin1String("genre")
                                   || kind == QLatin1String("network")
+                                  || kind == QLatin1String("tvstudios")
                                   || kind == QLatin1String("tvcollections"))
                                      ? QStringLiteral("tv") : QStringLiteral("movies");
             QVariantList rows = m_libraryDb.presence(subjectKind, chan, 60);
@@ -4341,9 +4358,13 @@ void VirtualChannelsBackend::load_catalog(const QString &kind) {
     // Studios have no list endpoint anywhere — TheTVDB's company list is a
     // different name space. The library IS the answer: browse the films and
     // tally the studios they carry, Plex first, then the other servers.
-    if (kind == QStringLiteral("studio")) {
+    if (kind == QLatin1String("studio") || kind == QLatin1String("tvstudios")) {
         if (!m_plex && !m_jellyfin && !m_emby) {
             emit catalogFailed(kind, "No media server connected"); return;
+        }
+        if (kind == QLatin1String("tvstudios")) {
+            emit catalogFailed(kind, "Library index is still building — try again in a moment");
+            return;
         }
         if (browse_busy()){ emit catalogFailed(kind, "Media server is busy"); return; }
         m_catalogPending = kind;
@@ -4434,17 +4455,15 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     // TV networks have no server-side filter, so their shows are resolved later
     // by a TheTVDB-backed generator (needs the stored apikey); the recipe is
     // recorded under `preset` above for that generator to rebuild from.
-    const bool movieWants = wants.trimmed().toLower() == QLatin1String("movies");
-    const bool studioMovie
-        = movieWants && kind == static_cast<int>(SubjectKind::Network);
+    const bool studioPreset = (kind == static_cast<int>(SubjectKind::Network));
     if (kind == static_cast<int>(SubjectKind::Collection)
      || kind == static_cast<int>(SubjectKind::Genre)
-     || studioMovie) {
+     || studioPreset) {
         const QString field
             = kind == static_cast<int>(SubjectKind::Collection)
                 ? QStringLiteral("collections")
-                : studioMovie ? QStringLiteral("studios")
-                              : QStringLiteral("genres");
+                : studioPreset ? QStringLiteral("studios")
+                               : QStringLiteral("genres");
         SlotSource defaultSrc = SlotSource::Plex;
         if (!sourceSignedIn(m_plex)) {
             if      (sourceSignedIn(m_jellyfin)) defaultSrc = SlotSource::Jellyfin;
@@ -4519,19 +4538,13 @@ void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
 
     const QString subject = preset.value(QLatin1String("name")).toString().trimmed();
     const int presetKind = presetKindOf(preset);
-    // A movie channel built "by network" means STUDIO: every server carries
-    // studio strings on its films (Plex's Studio attribute, Jellyfin's Studios,
-    // Emby's Studio), so the recipe rides into the blocks as a server-side
-    // filter like genres do. Only TV networks need the TheTVDB resolver.
-    const bool movieChannel = o.value(QLatin1String("kind")).toString()
-                                  == QLatin1String("movies");
-    const bool network = presetKind == int(SubjectKind::Network) && !movieChannel;
+    // Both TV and movie "by studio" presets (SubjectKind::Network = 1) filter
+    // server-side by studios across Plex, Jellyfin, and Emby — no TheTVDB needed.
     const QString field = presetKind == int(SubjectKind::Collection)
                               ? QStringLiteral("collections")
-                              : (network ? QStringLiteral("genres")
-                                         : (presetKind == int(SubjectKind::Network)
-                                              ? QStringLiteral("studios")
-                                              : QStringLiteral("genres")));
+                              : (presetKind == int(SubjectKind::Network)
+                                     ? QStringLiteral("studios")
+                                     : QStringLiteral("genres"));
 
     QJsonArray channels = readChannels();
     bool found = false;
@@ -4539,15 +4552,11 @@ void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
         QJsonObject c = channels[i].toObject();
         if (c.value(QLatin1String("number")).toInt(-1) != channelNumber) continue;
         c.remove(QLatin1String("programmes"));
-        // A TV network has no server-side filter: with nothing written the block
-        // reads as "everything", and the harvest keeps only the shows TheTVDB
-        // says belong to that network.
         for (const SlotSource src : { SlotSource::Plex, SlotSource::Jellyfin, SlotSource::Emby }) {
             if (!(src == SlotSource::Plex ? bool(m_plex)
                               : (m_server && m_server->available(src))))
                 continue;
             QJsonObject block = c.value(sourceBlockName(src)).toObject();
-            if (network) { c.insert(sourceBlockName(src), block); continue; }
             block[field] = QJsonArray{ subject };
             c.insert(sourceBlockName(src), block);
         }
@@ -4583,36 +4592,14 @@ void VirtualChannelsBackend::finishSeeding() {
                                          : QJsonObject::fromVariantMap(raw);
     const QJsonObject preset = o.value(QLatin1String("preset")).toObject();
     const bool movies = isMovieChannel(o);
-    // TV networks alone need the resolver; a movie "network" is a studio and
-    // was already filtered server-side by the block's studios.
-    const bool network = presetKindOf(preset)
-                         == int(SubjectKind::Network) && !movies;
-
-    // The harvest: one entry per show (per film on a movie channel), in the
-    // order the sources answered. A network recipe keeps only what TheTVDB
-    // resolves to that network.
-    TVDBNetworkResolver *res = network ? resolver() : nullptr;
-    if (network && !res) {
-        emit presetSeeded(channelNumber, false,
-                          QStringLiteral("TheTVDB apikey is not set — a \"by network\" "
-                                         "preset cannot tell its shows apart"));
-        return;
-    }
-    const QString wantedNetwork = preset.value(QLatin1String("id")).toString().trimmed();
 
     QJsonArray picks;
     QSet<QString> seen;
-    int harvestTried = 0, identityRefused = 0;
+    int harvestTried = 0;
     for (const MediaItem &m : std::as_const(m_genDef.programmes)) {
         const QString name = movies ? m.title : (m.series.isEmpty() ? m.title : m.series);
         if (name.trimmed().isEmpty()) continue;
         ++harvestTried;
-        if (network && res) {
-            if (res->networkIdFor(m).trimmed() != wantedNetwork) {
-                ++identityRefused;
-                continue;
-            }
-        }
         const QString key = name.trimmed().toLower();
         if (seen.contains(key)) continue;
         seen.insert(key);
@@ -4623,10 +4610,8 @@ void VirtualChannelsBackend::finishSeeding() {
         e["preset"] = recipeKey;
         picks.append(e);
     }
-    qInfo("[VirtualChannels] seed harvest: %d tried, %d refused by network identity, %d unique picks"
-          " (network seeds pay one TheTVDB search per tried title, cached across seeds)",
-          harvestTried, identityRefused, seen.size());
-    if (res) res->saveCache();   // lookups paid this seed persist to disk
+    qInfo("[VirtualChannels] seed harvest: %d tried, %lld unique picks",
+          harvestTried, static_cast<long long>(seen.size()));
 
     QJsonArray channels = readChannels();
     bool found = false;

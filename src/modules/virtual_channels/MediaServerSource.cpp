@@ -367,10 +367,11 @@ void MediaServerSource::genNext() {
             QString wantType;
             if (m_req.wants != Request::Wants::Anything)
                 wantType = QString(wantsFilms(m_req.wants) ? kMovie : kEpisode);
-            // A genre lives on the SERIES item, not on its episodes, so the
-            // episode scan can only narrow by show once it has seen the show
-            // rows themselves. Ask for both when a genre filter is in play.
-            if (!m_req.genres.isEmpty() && wantType == QString(kEpisode)) {
+            // A genre or studio lives on the SERIES item, not on its episodes,
+            // so the episode scan can only narrow by show once it has seen the
+            // show rows themselves. Ask for both when either filter is in play.
+            if ((!m_req.genres.isEmpty() || !m_req.studios.isEmpty())
+                && wantType == QString(kEpisode)) {
                 wantType = QStringLiteral("Series,Episode");
             }
             if (!callBackend("load_items", { lib, wantType, QStringLiteral("SortName") }))
@@ -628,17 +629,27 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
         // pass below keeps every episode of a collected show — whole series in,
         // never episode-by-episode cherry-picking.
         QSet<QString> genreShows;
-        if (!m_req.genres.isEmpty() && !wantsFilms(m_req.wants)) {
+        if ((!m_req.genres.isEmpty() || !m_req.studios.isEmpty())
+            && !wantsFilms(m_req.wants)) {
             for (const QVariant &sv : list) {
                 const QVariantMap sm = sv.toMap();
                 if (sm.value(QStringLiteral("type")).toString() != QLatin1String("series"))
                     continue;
-                for (const QString &g : sm.value(QStringLiteral("genres")).toStringList()) {
-                    if (listContainsCI(m_req.genres, g)) {
-                        genreShows.insert(sm.value(QStringLiteral("itemId")).toString());
-                        break;
+                bool matched = m_req.genres.isEmpty();
+                if (!matched) {
+                    for (const QString &g : sm.value(QStringLiteral("genres")).toStringList()) {
+                        if (listContainsCI(m_req.genres, g)) { matched = true; break; }
                     }
                 }
+                if (matched && !m_req.studios.isEmpty()) {
+                    bool studioOk = false;
+                    for (const QString &s : sm.value(QStringLiteral("studios")).toStringList()) {
+                        if (listContainsCI(m_req.studios, s)) { studioOk = true; break; }
+                    }
+                    matched = studioOk;
+                }
+                if (matched)
+                    genreShows.insert(sm.value(QStringLiteral("itemId")).toString());
             }
         }
         for (const QVariant &v : list) {
@@ -680,7 +691,7 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
                 const QString seriesId = m.value(QStringLiteral("seriesId")).toString();
                 if (!m_expandingSeries
                     && (!m_req.match.isEmpty() || !m_req.showIds.isEmpty()
-                        || !m_req.genres.isEmpty())) {
+                        || !m_req.genres.isEmpty() || !m_req.studios.isEmpty())) {
                     const bool byId   = !seriesId.isEmpty()
                                         && m_req.showIds.contains(seriesId);
                     const bool byName = listContainsCI(m_req.match, mi.series);

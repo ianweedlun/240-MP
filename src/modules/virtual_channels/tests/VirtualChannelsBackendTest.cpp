@@ -1388,14 +1388,15 @@ void testPresetChannelsWireTheirContent() {
     checkStr(genreItems.at(0).toString(), "Action",
              "it is the exact subject the viewer picked");
 
-    // Network (kind 1): no server-side network filter exists, so nothing is
-    // wired here — the recipe under `preset` is what a TheTVDB-backed generator
-    // rebuilds from later. The channel still exists and is named for the subject.
+    // Studio (kind 1, TV): wired into the source block's `studios` filter,
+    // same as movie studios — no TheTVDB resolver needed.
     const int net = b.create_preset_channel(1, "389", "AMC");
-    check(net > 0, "a network preset channel is created");
+    check(net > 0, "a studio preset channel is created");
     const QJsonObject netRec = fx.read(net);
-    check(!netRec.contains(QStringLiteral("plex")),
-          "network wires no source block (no server-side network filter)");
+    check(netRec.value(QStringLiteral("plex")).toObject()
+              .value(QStringLiteral("studios")).toArray()
+              .contains(QStringLiteral("AMC")),
+          "tv studio wires into plex.studios");
     checkStr(netRec.value(QStringLiteral("preset")).toObject()
                  .value(QStringLiteral("name")).toString(), "AMC",
              "the recipe is recorded for the later generator");
@@ -1433,17 +1434,17 @@ void testPresetChannelsSurfaceInBuilder() {
     checkStr(gc.value(QStringLiteral("preset")).toString(), "Action",
              "the recipe is named in the builder config");
 
-    // A network preset: no server-side filter exists, so at creation the
-    // channel carries only its recipe — the builder offers the seed row.
+    // A TV studio preset (kind 1): carries its studio filter in the block.
     const int net = b.create_preset_channel(1, "389", "AMC");
-    check(net > 0, "a network preset channel is created");
+    check(net > 0, "a tv studio preset channel is created");
     const QVariantMap nc = b.channel_source_config(net);
     check(nc.value(QStringLiteral("match")).toStringList().isEmpty(),
-          "a fresh network preset has no picks yet");
+          "a fresh studio preset has no picks yet");
     checkStr(nc.value(QStringLiteral("preset")).toString(), "AMC",
              "the recipe alone is what the builder needs to seed from");
-    check(nc.value(QStringLiteral("studios")).toStringList().isEmpty(),
-          "network presets carry no studio filters");
+    check(nc.value(QStringLiteral("studios")).toStringList()
+              .contains(QStringLiteral("AMC")),
+          "tv studio presets carry their studio filter");
 
     // The same ask on a movie channel means studio: Plex carries the string on
     // films, so the recipe rides straight into the block — no resolver needed.
@@ -2286,15 +2287,21 @@ void testAllRecipesFilterByLibraryDb() {
     db.close();
 
     VirtualChannelsBackend b(fx.data(), fx.data(), nullptr);
-    QVariantList movieGenres;
+    QVariantList movieGenres, tvStudios;
     QObject::connect(&b, &VirtualChannelsBackend::catalogReady, &b,
                      [&](const QString &kind, const QVariantList &opts) {
                          if (kind == QLatin1String("moviegenres")) movieGenres = opts;
+                         if (kind == QLatin1String("tvstudios"))   tvStudios = opts;
                      });
     b.load_catalog(QStringLiteral("moviegenres"));
     checkEq(movieGenres.size(), 1, "moviegenres returns only movie-side genres from library.db");
     checkStr(movieGenres.value(0).toMap().value(QStringLiteral("label")).toString(),
              QStringLiteral("Sci-Fi"), "moviegenres returns Sci-Fi, not TV Comedy");
+
+    b.load_catalog(QStringLiteral("tvstudios"));
+    checkEq(tvStudios.size(), 1, "tvstudios returns only tv-side studios from library.db");
+    checkStr(tvStudios.value(0).toMap().value(QStringLiteral("label")).toString(),
+             QStringLiteral("NBC"), "tvstudios returns NBC, not movie 20th Century Fox");
 }
 
 int runVirtualChannelsBackendTests() {
