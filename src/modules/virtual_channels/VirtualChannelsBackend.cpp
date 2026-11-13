@@ -4258,29 +4258,61 @@ void VirtualChannelsBackend::browseFail(const QString &reason) {
 // Movie slots
 // ---------------------------------------------------------------------------
 
+QString VirtualChannelsBackend::bundled_logos_dir() const {
+    const QString rel = QStringLiteral("/modules/virtual_channels/assets/logos");
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        m_appRoot.isEmpty() ? QString() : m_appRoot + rel,
+        appDir + QStringLiteral("/../share/240mp") + rel,
+        appDir + QStringLiteral("/../Resources") + rel,
+        appDir + rel,
+    };
+    for (const QString &dir : candidates) {
+        if (!dir.isEmpty() && QDir(dir).exists())
+            return dir;
+    }
+    return QString();
+}
+
 QVariantList VirtualChannelsBackend::list_logos() {
     QVariantList out;
     QDir dir(logos_dir());
-    if (!dir.exists()) {
+    if (!dir.exists())
         QDir().mkpath(logos_dir());
-        return out;
-    }
 
     static const QStringList kPatterns = { QStringLiteral("*.png"),  QStringLiteral("*.gif"),
                                            QStringLiteral("*.jpg"),  QStringLiteral("*.jpeg"),
                                            QStringLiteral("*.webp"), QStringLiteral("*.bmp") };
-    const QFileInfoList files = dir.entryInfoList(kPatterns, QDir::Files, QDir::Name);
-    for (const QFileInfo &fi : files) {
-        if (!isSafeLogoName(fi.fileName())) {
-            qWarning("[VirtualChannels] skipping logo '%s' — letters, digits, spaces and "
-                     "._()- only", qPrintable(fi.fileName()));
-            continue;
+    QSet<QString> seen;
+    auto scanDir = [&](const QDir &d, bool bundled) {
+        if (!d.exists()) return;
+        const QFileInfoList files = d.entryInfoList(kPatterns, QDir::Files, QDir::Name);
+        for (const QFileInfo &fi : files) {
+            if (!isSafeLogoName(fi.fileName())) {
+                qWarning("[VirtualChannels] skipping logo '%s' — letters, digits, spaces and "
+                         "._()- only", qPrintable(fi.fileName()));
+                continue;
+            }
+            const QString key = fi.fileName().toLower();
+            if (seen.contains(key)) continue;
+            seen.insert(key);
+            out.append(QVariantMap{
+                {"name",     fi.completeBaseName()},
+                {"file",     fi.fileName()},
+                {"animated", fi.suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0},
+                {"bundled",  bundled}});
         }
-        out.append(QVariantMap{
-            {"name",     fi.completeBaseName()},
-            {"file",     fi.fileName()},
-            {"animated", fi.suffix().compare(QLatin1String("gif"), Qt::CaseInsensitive) == 0}});
-    }
+    };
+
+    scanDir(dir, false);
+    const QString bundledDir = bundled_logos_dir();
+    if (!bundledDir.isEmpty())
+        scanDir(QDir(bundledDir), true);
+
+    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("name")).toString()
+                   .compare(b.toMap().value(QStringLiteral("name")).toString(), Qt::CaseInsensitive) < 0;
+    });
     return out;
 }
 
@@ -4292,8 +4324,142 @@ QString VirtualChannelsBackend::logo_path(const QString &file) const {
         return QString();
     }
     const QString full = logos_dir() + QLatin1Char('/') + file;
-    if (!QFileInfo(full).isFile()) return QString();
-    return full;
+    if (QFileInfo(full).isFile()) return full;
+    const QString bundledDir = bundled_logos_dir();
+    if (!bundledDir.isEmpty()) {
+        const QString bundled = bundledDir + QLatin1Char('/') + file;
+        if (QFileInfo(bundled).isFile()) return bundled;
+    }
+    return QString();
+}
+
+static QString normalizeLogoSubject(const QString &raw) {
+    QString s = raw.trimmed().toLower();
+    s.replace(QLatin1Char('&'), QLatin1String(" and "));
+    QString out;
+    out.reserve(s.size());
+    bool prevSpace = true;
+    for (const QChar ch : s) {
+        if (ch.isLetterOrNumber()) {
+            out.append(ch);
+            prevSpace = false;
+        } else if (!prevSpace) {
+            out.append(QLatin1Char(' '));
+            prevSpace = true;
+        }
+    }
+    return out.trimmed();
+}
+
+QString VirtualChannelsBackend::preset_logo_for_subject(int kind, const QString &name) const {
+    if (kind != static_cast<int>(SubjectKind::Network))
+        return QString();
+    const QString norm = normalizeLogoSubject(name);
+    if (norm.isEmpty()) return QString();
+
+    static const QHash<QString, QString> kAliases = {
+        {QStringLiteral("abc"), QStringLiteral("abc.png")},
+        {QStringLiteral("american broadcasting company"), QStringLiteral("abc.png")},
+        {QStringLiteral("cbs"), QStringLiteral("cbs.png")},
+        {QStringLiteral("nbc"), QStringLiteral("nbc.png")},
+        {QStringLiteral("fox"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox broadcasting"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox broadcasting company"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox television"), QStringLiteral("fox.png")},
+        {QStringLiteral("fox television studios"), QStringLiteral("fox.png")},
+        {QStringLiteral("the cw"), QStringLiteral("the-cw.png")},
+        {QStringLiteral("cw"), QStringLiteral("the-cw.png")},
+        {QStringLiteral("pbs"), QStringLiteral("pbs.png")},
+        {QStringLiteral("hbo"), QStringLiteral("hbo.png")},
+        {QStringLiteral("home box office"), QStringLiteral("hbo.png")},
+        {QStringLiteral("showtime"), QStringLiteral("showtime.png")},
+        {QStringLiteral("amc"), QStringLiteral("amc.png")},
+        {QStringLiteral("amc studios"), QStringLiteral("amc.png")},
+        {QStringLiteral("fx"), QStringLiteral("fx.png")},
+        {QStringLiteral("fx networks"), QStringLiteral("fx.png")},
+        {QStringLiteral("fx productions"), QStringLiteral("fx.png")},
+        {QStringLiteral("comedy central"), QStringLiteral("comedy-central.png")},
+        {QStringLiteral("cartoon network"), QStringLiteral("cartoon-network.png")},
+        {QStringLiteral("cartoon network studios"), QStringLiteral("cartoon-network.png")},
+        {QStringLiteral("adult swim"), QStringLiteral("adult-swim.png")},
+        {QStringLiteral("williams street"), QStringLiteral("adult-swim.png")},
+        {QStringLiteral("nickelodeon"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon productions"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon animation"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("nickelodeon animation studio"), QStringLiteral("nickelodeon.png")},
+        {QStringLiteral("cnn"), QStringLiteral("cnn.png")},
+        {QStringLiteral("espn"), QStringLiteral("espn.png")},
+        {QStringLiteral("discovery"), QStringLiteral("discovery.png")},
+        {QStringLiteral("discovery channel"), QStringLiteral("discovery.png")},
+        {QStringLiteral("syfy"), QStringLiteral("syfy.png")},
+        {QStringLiteral("sci fi"), QStringLiteral("syfy.png")},
+        {QStringLiteral("bbc"), QStringLiteral("bbc.png")},
+        {QStringLiteral("bbc studios"), QStringLiteral("bbc.png")},
+        {QStringLiteral("bbc studios natural history unit"), QStringLiteral("bbc.png")},
+        {QStringLiteral("channel 4"), QStringLiteral("channel-4.png")},
+        {QStringLiteral("channel 4 television"), QStringLiteral("channel-4.png")},
+        {QStringLiteral("hanna barbera"), QStringLiteral("hanna-barbera.png")},
+        {QStringLiteral("hanna barbera cartoons"), QStringLiteral("hanna-barbera.png")},
+        {QStringLiteral("disney"), QStringLiteral("disney.png")},
+        {QStringLiteral("disney channel"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney pictures"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney productions"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney animation"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney animation studios"), QStringLiteral("disney.png")},
+        {QStringLiteral("walt disney feature animation"), QStringLiteral("disney.png")},
+        {QStringLiteral("warner bros"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros television"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros pictures"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner bros animation"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("warner brothers"), QStringLiteral("warner-bros.png")},
+        {QStringLiteral("paramount"), QStringLiteral("paramount.png")},
+        {QStringLiteral("paramount television"), QStringLiteral("paramount.png")},
+        {QStringLiteral("paramount pictures"), QStringLiteral("paramount.png")},
+        {QStringLiteral("universal"), QStringLiteral("universal.png")},
+        {QStringLiteral("universal television"), QStringLiteral("universal.png")},
+        {QStringLiteral("universal pictures"), QStringLiteral("universal.png")},
+        {QStringLiteral("20th century fox"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("20th century fox television"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("20th century studios"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("twentieth century fox"), QStringLiteral("20th-century-fox.png")},
+        {QStringLiteral("columbia"), QStringLiteral("columbia.png")},
+        {QStringLiteral("columbia pictures"), QStringLiteral("columbia.png")},
+        {QStringLiteral("sony pictures"), QStringLiteral("columbia.png")},
+        {QStringLiteral("sony pictures television"), QStringLiteral("columbia.png")},
+        {QStringLiteral("marvel"), QStringLiteral("marvel.png")},
+        {QStringLiteral("marvel studios"), QStringLiteral("marvel.png")},
+        {QStringLiteral("marvel entertainment"), QStringLiteral("marvel.png")},
+        {QStringLiteral("pixar"), QStringLiteral("pixar.png")},
+        {QStringLiteral("pixar animation studios"), QStringLiteral("pixar.png")},
+        {QStringLiteral("lucasfilm"), QStringLiteral("lucasfilm.png")},
+        {QStringLiteral("lucasfilm ltd"), QStringLiteral("lucasfilm.png")},
+        {QStringLiteral("dreamworks"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks animation"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks pictures"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("dreamworks skg"), QStringLiteral("dreamworks.png")},
+        {QStringLiteral("mgm"), QStringLiteral("mgm.png")},
+        {QStringLiteral("metro goldwyn mayer"), QStringLiteral("mgm.png")},
+        {QStringLiteral("new line cinema"), QStringLiteral("new-line-cinema.png")},
+        {QStringLiteral("new line"), QStringLiteral("new-line-cinema.png")},
+        {QStringLiteral("studio ghibli"), QStringLiteral("studio-ghibli.png")},
+        {QStringLiteral("ghibli"), QStringLiteral("studio-ghibli.png")},
+        {QStringLiteral("toho"), QStringLiteral("toho.png")},
+        {QStringLiteral("lionsgate"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("lionsgate films"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("lions gate"), QStringLiteral("lionsgate.png")},
+        {QStringLiteral("miramax"), QStringLiteral("miramax.png")},
+        {QStringLiteral("miramax films"), QStringLiteral("miramax.png")},
+        {QStringLiteral("a24"), QStringLiteral("a24.png")},
+    };
+
+    QString candidate = kAliases.value(norm);
+    if (candidate.isEmpty()) {
+        QString slug = norm;
+        slug.replace(QLatin1Char(' '), QLatin1Char('-'));
+        candidate = slug + QStringLiteral(".png");
+    }
+    return logo_path(candidate).isEmpty() ? QString() : candidate;
 }
 
 // ---------------------------------------------------------------------------
@@ -4636,6 +4802,10 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
             if (QFileInfo::exists(absRoot + QLatin1Char('/') + QLatin1String(c.second)))
                 ch[QLatin1String(c.first)] = QJsonArray{ QLatin1String(c.second) };
     }
+
+    const QString autoLogo = preset_logo_for_subject(kind, wanted);
+    if (!autoLogo.isEmpty())
+        ch["logo"] = autoLogo;
 
     QString err;
     if (!appendChannel(ch, &err)) {
