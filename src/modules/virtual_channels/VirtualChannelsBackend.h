@@ -673,6 +673,7 @@ private:
     qint64  m_previewPosition = 0;
     QProcess *m_previewProc   = nullptr;
     QTimer   *m_previewPoll   = nullptr;
+    QTimer   *m_previewPing   = nullptr;
     QString   m_previewDir;
     QString   m_previewIpcPath;
     QString   m_previewFrame;

@@ -995,6 +995,7 @@ void VirtualChannelsBackend::preview_stream(int channelNumber) {
 
 void VirtualChannelsBackend::cancel_preview_stream() {
     stop_preview_video();
+    if (m_previewPing) m_previewPing->stop();
     if (m_previewTranscodeActive && !m_plexTranscodeSession.isEmpty() && m_plex
         && m_plex->metaObject()->indexOfMethod("stop_transcode(QString)") >= 0) {
         QMetaObject::invokeMethod(m_plex, "stop_transcode",
@@ -1055,10 +1056,10 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
     QFile::remove(m_previewIpcPath);
 
     const int volPct = qBound(0, qRound(volume * 100.0), 100);
-    // Drop frames down to 8 fps *before* scaling so we don't software-scale
-    // 24-60 fps only to discard most of them. When muted (--no-audio), vo=image
-    // has no clock and runs untimed at 300%+ CPU unless throttled by realtime.
-    QString vf = QStringLiteral("fps=8,scale=320:240:force_original_aspect_ratio=decrease:flags=fast_bilinear");
+    // Drop frames down to 15 fps *before* scaling so we don't software-scale
+    // 24-60 fps only to discard extras. When muted (--no-audio), vo=image has
+    // no clock and runs untimed at 300%+ CPU unless throttled by realtime.
+    QString vf = QStringLiteral("fps=15,scale=320:240:force_original_aspect_ratio=decrease:flags=fast_bilinear");
     if (volPct <= 0) vf += QStringLiteral(",realtime");
 
     QStringList args;
@@ -1101,7 +1102,7 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
 
     if (!m_previewPoll) {
         m_previewPoll = new QTimer(this);
-        m_previewPoll->setInterval(100);
+        m_previewPoll->setInterval(65);
         connect(m_previewPoll, &QTimer::timeout, this, &VirtualChannelsBackend::pollPreviewFrames);
     }
     m_previewPoll->start();
@@ -1148,22 +1149,24 @@ void VirtualChannelsBackend::stop_preview_video() {
 void VirtualChannelsBackend::set_preview_volume(double volume) {
     if (m_previewIpcPath.isEmpty() || !m_previewProc ||
         m_previewProc->state() != QProcess::Running) return;
-    QLocalSocket sock;
-    sock.connectToServer(m_previewIpcPath);
-    if (!sock.waitForConnected(100)) return;
     const int volPct = qBound(0, qRound(volume * 100.0), 100);
-    const QByteArray cmd1 = QJsonDocument(QJsonObject{
-        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
-                                              QStringLiteral("volume"), volPct}}
-    }).toJson(QJsonDocument::Compact) + '\n';
-    const QByteArray cmd2 = QJsonDocument(QJsonObject{
-        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
-                                              QStringLiteral("mute"), volPct <= 0}}
-    }).toJson(QJsonDocument::Compact) + '\n';
-    sock.write(cmd1);
-    sock.write(cmd2);
-    sock.flush();
-    sock.waitForBytesWritten(50);
+    auto *sock = new QLocalSocket(this);
+    connect(sock, &QLocalSocket::connected, sock, [sock, volPct]() {
+        const QByteArray cmd1 = QJsonDocument(QJsonObject{
+            {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                                  QStringLiteral("volume"), volPct}}
+        }).toJson(QJsonDocument::Compact) + '\n';
+        const QByteArray cmd2 = QJsonDocument(QJsonObject{
+            {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                                  QStringLiteral("mute"), volPct <= 0}}
+        }).toJson(QJsonDocument::Compact) + '\n';
+        sock->write(cmd1);
+        sock->write(cmd2);
+        sock->disconnectFromServer();
+    });
+    connect(sock, &QLocalSocket::disconnected, sock, &QObject::deleteLater);
+    connect(sock, &QLocalSocket::errorOccurred, sock, &QObject::deleteLater);
+    sock->connectToServer(m_previewIpcPath);
 }
 
 void VirtualChannelsBackend::pollPreviewFrames() {
@@ -1190,6 +1193,25 @@ bool VirtualChannelsBackend::deliverPreviewUrl(const QString &url, const QString
     const qint64 pos = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty())
                        ? 0 : m_previewPosition;
     m_previewTranscodeActive = (m_serverPendingSrc == SlotSource::Plex && !m_plexTranscodeSession.isEmpty());
+    if (m_previewTranscodeActive) {
+        if (!m_previewPing) {
+            m_previewPing = new QTimer(this);
+            m_previewPing->setInterval(30000);
+            connect(m_previewPing, &QTimer::timeout, this, [this]() {
+                if (!m_previewTranscodeActive || m_plexTranscodeSession.isEmpty() || !m_plex) {
+                    m_previewPing->stop();
+                    return;
+                }
+                if (m_plex->metaObject()->indexOfMethod("ping_transcode(QString)") >= 0) {
+                    QMetaObject::invokeMethod(m_plex, "ping_transcode",
+                                              Q_ARG(QString, m_plexTranscodeSession));
+                }
+            });
+        }
+        m_previewPing->start();
+    } else if (m_previewPing) {
+        m_previewPing->stop();
+    }
     m_previewChannel  = -1;
     m_previewSlot     = -1;
     m_previewPosition = 0;

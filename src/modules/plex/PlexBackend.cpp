@@ -2997,6 +2997,18 @@ void PlexBackend::stop_transcode(const QString &sessionId) {
     });
 }
 
+void PlexBackend::ping_transcode(const QString &sessionId) {
+    if (sessionId.isEmpty()) return;
+    QString uri = serverUrl(), token = serverToken();
+    QUrl url(uri + "/video/:/transcode/universal/ping");
+    QUrlQuery q;
+    q.addQueryItem("session", sessionId);
+    q.addQueryItem("X-Plex-Client-Identifier", clientId());
+    url.setQuery(q);
+    auto *reply = plexGet(url, token);
+    connect(reply, &QNetworkReply::finished, reply, &QObject::deleteLater);
+}
+
 void PlexBackend::stop_live_session(const QString &sessionId) {
     QString uri = serverUrl(), token = serverToken();
     // Stop the universal transcode consuming the tuner. Also report the timeline
