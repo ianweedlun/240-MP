@@ -394,6 +394,14 @@ void WeatherBackend::startMusic() {
         return;
     }
 
+    if (!m_musicVolumeOverridden) {
+        const QJsonValue volSetting = moduleConfig()[QStringLiteral("music_volume")];
+        QString volStr = volSetting.toString(QStringLiteral("50%"));
+        bool ok = false;
+        int volume = volStr.replace('%', "").toInt(&ok);
+        if (ok) m_musicVolume = qBound(0, volume, 100);
+    }
+
     QStringList args;
     args << QStringLiteral("--no-video")
          << QStringLiteral("--loop-playlist=inf")
@@ -402,6 +410,7 @@ void WeatherBackend::startMusic() {
          << QStringLiteral("--shuffle")
          << QStringLiteral("--no-terminal")
          << QStringLiteral("--really-quiet")
+         << QStringLiteral("--volume=%1").arg(m_musicDucked ? 0 : m_musicVolume)
          << QStringLiteral("--input-ipc-server=%1").arg(m_musicSocketPath)
          // Load media-keys script for volume OSD bar and key handling
          << QStringLiteral("--script=%1").arg(m_appRoot + "/scripts/mpv-media-keys.lua")
@@ -429,13 +438,14 @@ void WeatherBackend::startMusic() {
         m_musicIpc = new QLocalSocket(this);
         connect(m_musicIpc, &QLocalSocket::connected, this, [this]() {
             m_musicConnect->stop();
-            // Apply saved volume once IPC is ready.
-            const QJsonValue volSetting = moduleConfig()[QStringLiteral("music_volume")];
-            QString volStr = volSetting.toString(QStringLiteral("50%"));
-            bool ok = false;
-            int volume = volStr.replace('%', "").toInt(&ok);
-            if (ok)
-                m_musicVolume = volume;
+            if (!m_musicVolumeOverridden) {
+                const QJsonValue volSetting = moduleConfig()[QStringLiteral("music_volume")];
+                QString volStr = volSetting.toString(QStringLiteral("50%"));
+                bool ok = false;
+                int volume = volStr.replace('%', "").toInt(&ok);
+                if (ok)
+                    m_musicVolume = qBound(0, volume, 100);
+            }
             m_musicApplied = m_musicDucked ? 0.0 : double(m_musicVolume);
             applyMusicVolume();
         });
@@ -458,6 +468,7 @@ void WeatherBackend::startMusic() {
 
 void WeatherBackend::set_music_volume(int percent) {
     m_musicVolume = qBound(0, percent, 100);
+    m_musicVolumeOverridden = true;
     if (!m_musicDucked) startMusicFade(m_musicVolume, 0);
 }
 
@@ -522,6 +533,7 @@ void WeatherBackend::stopMusic() {
         p->deleteLater();
     }
     m_musicPaused = false;
+    m_musicVolumeOverridden = false;
     emit musicStateChanged();
 }
 

@@ -898,7 +898,7 @@ FocusScope {
                 color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, 0.13)
             }
 
-            // 1px grid hairlines on top (z: 2) so selected row keeps identical borders.
+            // Crisp 1px hairlines on top (z: 2) so selected row keeps identical borders.
             Rectangle { z: 2; x: 0; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
             Rectangle { z: 2; x: guideRoot.channelColW - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
             Rectangle { z: 2; x: parent.width - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
