@@ -311,7 +311,7 @@ FocusScope {
         if (autoVal !== undefined && String(autoVal) !== "") {
             autoScrollEnabled = toggleOn("guide.autoscroll", true)
             autoScroll = false
-            resumeSeconds = autoScrollEnabled ? 30 : 0
+            resumeSeconds = autoScrollEnabled ? 5 : 0
         } else {
             var idling = appCore.get_setting(guideRoot.moduleId, "guide.idling")
             if (idling !== undefined && String(idling) !== "") {
