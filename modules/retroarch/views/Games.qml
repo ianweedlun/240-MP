@@ -30,19 +30,78 @@ FocusScope {
     readonly property bool showPreview: thumbDisplay !== "OFF"
     readonly property bool previewOnLeft: thumbDisplay === "LEFT"
 
+    // --- Alphabet quick scroll state & helpers -------------------------------
+    property bool letterNavActive: false
+    property var letterIndex: []
+    readonly property bool showLetterNav: letterIndex.length > 1
+    readonly property real letterColW: root.sw * 0.0328125 // 21px on 640w
+    readonly property real letterMargin: root.sw * 0.02 // ~13px margin
+
+    function bucket(text) {
+        var ch = text.charAt(0).toUpperCase()
+        return (ch >= 'A' && ch <= 'Z') ? ch : '#'
+    }
+
+    function sortKey(item) {
+        var t = ((item && item.name) || "").trim()
+        var articles = ["the ", "a ", "an "]
+        var lower = t.toLowerCase()
+        for (var i = 0; i < articles.length; i++) {
+            if (lower.indexOf(articles[i]) === 0) {
+                t = t.substring(articles[i].length)
+                break
+            }
+        }
+        return bucket(t)
+    }
+
+    function buildLetterIndex(gameArr) {
+        if (!gameArr || gameArr.length === 0) return []
+        var seen = {}
+        var result = []
+        for (var i = 0; i < gameArr.length; i++) {
+            var letter = sortKey(gameArr[i])
+            if (!seen[letter]) {
+                seen[letter] = true
+                result.push({ letter: letter, firstIndex: i })
+            }
+        }
+        result.sort(function(a, b) {
+            if (a.letter === '#') return -1
+            if (b.letter === '#') return 1
+            return a.letter < b.letter ? -1 : 1
+        })
+        return result
+    }
+
+    function syncLetterToGame() {
+        if (letterIndex.length === 0 || !gameList.model) return
+        var cur = gameList.model[gameList.currentIndex]
+        if (!cur) return
+        var curLetter = sortKey(cur)
+        for (var i = 0; i < letterIndex.length; i++) {
+            if (letterIndex[i].letter === curLetter) {
+                letterList.currentIndex = i
+                break
+            }
+        }
+        letterList.positionViewAtIndex(letterList.currentIndex, ListView.Contain)
+    }
+
     // --- Zone geometry -------------------------------------------------------
-    // One defined zone per side: the panel gets a fixed column and the list
-    // occupies the rest, so boxart can never sit on top of text (the old
-    // conditional-anchors-plus-explicit-width setup let the two fight).
+    // Letter index is always pinned to the far right when active/visible.
+    readonly property real letterX: root.sw - root.sw * 0.125 - letterColW
+    readonly property real rightBoundary: showLetterNav ? (letterX - letterMargin) : (root.sw - root.sw * 0.115625)
+
     readonly property real panelW: root.sw * 0.22
     readonly property real panelX: previewOnLeft ? root.sw * 0.125
-                                                 : root.sw - root.sw * 0.125 - panelW
+                                                 : rightBoundary - panelW
     readonly property real listX: (showPreview && previewOnLeft)
         ? panelX + panelW + root.sw * 0.015625
         : root.sw * 0.115625
     readonly property real listRight: (showPreview && !previewOnLeft)
         ? panelX - root.sw * 0.015625
-        : root.sw - root.sw * 0.115625
+        : rightBoundary
 
     signal goBack()
     focus: true
@@ -136,11 +195,20 @@ FocusScope {
         keyNavigationEnabled: true
         clip: true
         focus: true
+        opacity: gamesRoot.letterNavActive ? 0.3 : 1.0
 
         Keys.onReturnPressed: {
             var game = model[currentIndex]
             if (!game) return
             retroarchBackend.launchGame(game, navParams.systemId)
+        }
+
+        Keys.onRightPressed: {
+            if (gamesRoot.showLetterNav && gamesRoot.letterIndex.length > 0) {
+                gamesRoot.syncLetterToGame()
+                gamesRoot.letterNavActive = true
+                letterList.forceActiveFocus()
+            }
         }
 
         delegate: Item {
@@ -156,13 +224,14 @@ FocusScope {
                 Rectangle {
                     color: root.accentColor
                     anchors.fill: rowText
-                    visible: gameList.currentIndex === index
+                    visible: gameList.currentIndex === index && !gamesRoot.letterNavActive
                 }
 
                 Text {
                     id: rowText
                     text: modelData.name
-                    color: gameList.currentIndex === index ? root.surfaceColor : root.primaryColor
+                    color: (gameList.currentIndex === index && !gamesRoot.letterNavActive)
+                           ? root.surfaceColor : root.primaryColor
                     font.family: root.globalFont
                     font.capitalization: Font.AllUppercase
                     anchors.verticalCenter: parent.verticalCenter
@@ -196,16 +265,19 @@ FocusScope {
             if (currentIndex > 0) currentIndex--
             else currentIndex = count - 1
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
+            gamesRoot.syncLetterToGame()
         }
         Keys.onDownPressed: {
             if (count === 0) return
             if (currentIndex < count - 1) currentIndex++
             else currentIndex = 0
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
+            gamesRoot.syncLetterToGame()
         }
         onRowSelected: function(index) {
             if (previewLoader.item)
                 previewLoader.item.game = ensureThumbnail(model[index])
+            gamesRoot.syncLetterToGame()
         }
     }
 
@@ -222,10 +294,93 @@ FocusScope {
         source: "GamePreview.qml"
     }
 
+    // Letter navigation panel (Plex parity)
+    ListView {
+        id: letterList
+        model: gamesRoot.letterIndex
+        visible: gamesRoot.showLetterNav
+        opacity: gamesRoot.letterNavActive ? 1.0 : 0.3
+        x: gamesRoot.letterX
+        anchors.top: gameList.top
+        width: gamesRoot.letterColW
+        height: gameList.height
+        clip: true
+        focus: false
+
+        Keys.onUpPressed: {
+            if (count === 0) return
+            if (currentIndex > 0) {
+                currentIndex--
+            } else {
+                currentIndex = count - 1
+                letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
+            }
+            gameList.currentIndex = gamesRoot.letterIndex[currentIndex].firstIndex
+            gameList.positionViewAtIndex(gameList.currentIndex, ListView.Beginning)
+        }
+
+        Keys.onDownPressed: {
+            if (count === 0) return
+            if (currentIndex < count - 1) {
+                currentIndex++
+            } else {
+                currentIndex = 0
+                letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
+            }
+            gameList.currentIndex = gamesRoot.letterIndex[currentIndex].firstIndex
+            gameList.positionViewAtIndex(gameList.currentIndex, ListView.Beginning)
+        }
+
+        Keys.onReturnPressed: {
+            gamesRoot.letterNavActive = false
+            gameList.forceActiveFocus()
+        }
+
+        Keys.onLeftPressed: {
+            gamesRoot.letterNavActive = false
+            gameList.forceActiveFocus()
+        }
+
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                gamesRoot.letterNavActive = false
+                gameList.forceActiveFocus()
+                event.accepted = true
+            }
+        }
+
+        delegate: Item {
+            width: letterList.width
+            height: root.sh * 0.04375 //21
+
+            Rectangle {
+                color: root.accentColor
+                anchors.fill: parent
+                visible: letterList.currentIndex === index && gamesRoot.letterNavActive
+            }
+
+            Text {
+                text: modelData.letter
+                color: (letterList.currentIndex === index && gamesRoot.letterNavActive)
+                       ? root.surfaceColor : root.primaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                font.pixelSize: root.sh * 0.0354167 //17
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                rightPadding: root.sw * 0.009375 //6
+                topPadding: root.sh * 0.0041667 //2
+                bottomPadding: root.sh * 0.00625 //3
+            }
+        }
+    }
+
     // Footer
     Text {
         id: footer
-        text: root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.select + ":PLAY"
+        text: gamesRoot.showLetterNav
+              ? root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.browse + ":BROWSE " + root.hints.select + ":PLAY"
+              : root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.select + ":PLAY"
         color: root.tertiaryColor
         font.family: root.globalFont
         anchors.bottom: parent.bottom
@@ -246,11 +401,13 @@ FocusScope {
     Component.onCompleted: {
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
+        gamesRoot.letterIndex = gamesRoot.buildLetterIndex(games)
         gamesRoot.listLoaded = true
         if (games.length > 0) {
             var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
             gameList.currentIndex = Math.min(restore, games.length - 1)
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
+            gamesRoot.syncLetterToGame()
             if (previewLoader.item)
                 previewLoader.item.game = ensureThumbnail(games[gameList.currentIndex])
         }
