@@ -96,7 +96,7 @@ FocusScope {
         // the default-and-exceptions list. Bumps and commercials have no such
         // thing and go straight to their pool.
         if (row === "intros" || row === "outros") {
-            navigateTo("modules/virtual_channels/views/IdentLevels.qml", {
+            navigateTo("IdentLevels.qml", {
                 moduleId:      interRoot.moduleId,
                 channelNumber: interRoot.channelNumber,
                 channelName:   interRoot.channelName,
@@ -105,7 +105,7 @@ FocusScope {
             return
         }
 
-        navigateTo("modules/virtual_channels/views/PoolEditor.qml", {
+        navigateTo("PoolEditor.qml", {
             moduleId:      interRoot.moduleId,
             channelNumber: interRoot.channelNumber,
             channelName:   interRoot.channelName,

@@ -459,6 +459,43 @@ int runMediaServerSourceTests() {
         }
     }
 
+    section("media server: films by studio");
+    {
+        FakeMediaServer fake;
+        fake.libraries = QVariantList{
+            FakeMediaServer::library("mv1", "MOVIES", "movies"),
+        };
+        fake.itemsFor["mv1|Movie"] = QVariantList{
+            FakeMediaServer::movie("s1", "TOP GUN", 6600000.0,
+                                   { QStringLiteral("Action") },
+                                   { QStringLiteral("Paramount") }),
+            FakeMediaServer::movie("s2", "DIE HARD", 6600000.0,
+                                   { QStringLiteral("Action") },
+                                   { QStringLiteral("Fox") }),
+        };
+
+        MediaServerSource src;
+        src.setBackend(SlotSource::Jellyfin, &fake);
+        {
+            Result r; r.attach(&src);
+            check(src.browse(SlotSource::Jellyfin, "moviestudios", ""),
+                  "studio browse starts");
+            checkEq(r.browseItems.size(), 2, "each studio offered once");
+            checkStr(r.browseItems.first().toMap().value("label").toString(),
+                     QStringLiteral("Fox"), "studios come back sorted");
+        }
+        {
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src      = SlotSource::Jellyfin;
+            req.wants    = MediaServerSource::Request::Wants::Films;
+            req.studios  = QStringList{ QStringLiteral("paramount") };
+            check(src.enumerate(req), "studio enumeration starts");
+            checkEq(r.items.size(), 1, "only the film carrying that studio");
+            checkStr(r.items.first().ref, QStringLiteral("s1"), "and it is the right one");
+        }
+    }
+
     section("media server: a break takes whatever the pool holds");
     {
         FakeMediaServer fake;
@@ -556,6 +593,233 @@ int runMediaServerSourceTests() {
             check(r.failed, "losing the backend mid-request fails cleanly");
             check(!src.available(SlotSource::Jellyfin), "and the source becomes unavailable");
             check(!src.busy(), "and is idle");
+        }
+    }
+
+    {
+        section("media server: a genre enumerates whole shows, not episodes");
+        {
+            FakeMediaServer fake;
+            fake.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+            const auto showItem = [](const QString &id, const QString &title,
+                                     const QStringList &genres) {
+                QVariantList g;
+                for (const QString &x : genres) g.append(x);
+                return QVariantMap{{"itemId", id}, {"type", "series"},
+                                   {"title", title}, {"genres", g}};
+            };
+            fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+                showItem("s1", "Cartoon Classics", QStringList{ QStringLiteral("Comedy") }),
+                showItem("s2", "Case Files", QStringList{ QStringLiteral("Documentary") }),
+                FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                FakeMediaServer::episode("e2", "s1", "Cartoon Classics", 1, 2, 60000),
+                FakeMediaServer::episode("e9", "s2", "Case Files", 1, 1, 60000),
+            };
+            MediaServerSource src;
+            src.setBackend(SlotSource::Jellyfin, &fake);
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src    = SlotSource::Jellyfin;
+            req.genres = QStringList{ QStringLiteral("comedy") };
+            check(src.enumerate(req), "starts");
+            check(r.finished && !r.failed, "the enumeration completes");
+            checkEq(r.items.size(), 2,
+                    "the Comedy show's two episodes are all in — whole series, "
+                    "never episode-by-episode, and the Documentary show stays out");
+            bool askedForShows = false;
+            for (const QString &c : fake.calls)
+                if (c == QStringLiteral("load_items(tv1,Series,Episode)"))
+                    askedForShows = true;
+            check(askedForShows,
+                  "a genre scan asks for the show rows beside the episodes");
+
+            // Torture: match and genre ride the same OR road — both roads air
+            // their own shows and neither poisons the other.
+            {
+                FakeMediaServer fake2;
+                fake2.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+                fake2.itemsFor["tv1|Series,Episode"] = QVariantList{
+                    QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                                {"title", "Cartoon Classics"},
+                                {"genres", QVariantList{ QStringLiteral("Comedy") }}},
+                    QVariantMap{{"itemId", "s2"}, {"type", "series"},
+                                {"title", "Case Files"},
+                                {"genres", QVariantList{ QStringLiteral("Documentary") }}},
+                    FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                    FakeMediaServer::episode("e9", "s2", "Case Files", 1, 1, 60000),
+                };
+                MediaServerSource src2;
+                src2.setBackend(SlotSource::Jellyfin, &fake2);
+                Result r2; r2.attach(&src2);
+                MediaServerSource::Request req2;
+                req2.src    = SlotSource::Jellyfin;
+                req2.match  = QStringList{ QStringLiteral("Case Files") };
+                req2.genres = QStringList{ QStringLiteral("comedy") };
+                check(src2.enumerate(req2), "starts");
+                check(r2.finished && !r2.failed, "completes");
+                checkEq(r2.items.size(), 2,
+                        "match road AND genre road both contribute — OR, not AND");
+            }
+        }
+    }
+
+    {
+        section("media server: a presence walk reports the shelves, both sides");
+        struct PresenceResult {
+            bool done = false;
+            bool failed = false;
+            QString provider;
+            QVector<vchan::LibraryRecord> records;
+            QVariantList rows;
+            void attach(MediaServerSource *src) {
+                QObject::connect(src, &MediaServerSource::presenceReady,
+                                 [this](const QString &p,
+                                        const QVector<vchan::LibraryRecord> &recs,
+                                        const QVariantList &rows) {
+                                     done = true; provider = p; records = recs;
+                                     this->rows = rows;
+                                 });
+                QObject::connect(src, &MediaServerSource::enumerationFailed,
+                                 [this](const QString &r) { failed = true; reason = r; });
+            }
+            QString reason;
+        };
+
+        FakeMediaServer fake;
+        fake.libraries = QVariantList{
+            FakeMediaServer::library("tv1", "TV", "tvshows"),
+            FakeMediaServer::library("mv1", "MOVIES", "movies"),
+        };
+        fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+            QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                       {"title", "Cartoon Classics"},
+                       {"genres", QVariantList{ QStringLiteral("Comedy") }},
+                       {"networks", QVariantList{ QStringLiteral("Toon Net") }}},
+            QVariantMap{{"itemId", "s2"}, {"type", "series"},
+                       {"title", "Case Files"},
+                       {"genres", QVariantList{ QStringLiteral("Documentary") }}},
+            // Episode rows carry none of the walked fields, so the walk drops
+            // them — a tv tally built over episodes would double-count shows.
+            FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+            FakeMediaServer::episode("e2", "s2", "Case Files", 1, 1, 60000),
+        };
+        fake.itemsFor["mv1|Movie"] = QVariantList{
+            QVariantMap{{"itemId", "m1"}, {"type", "movie"},
+                       {"title", "Big Trip"},
+                       {"genres", QVariantList{ QStringLiteral("Action") }},
+                       {"studios", QVariantList{ QStringLiteral("Fox") }}},
+            QVariantMap{{"itemId", "m2"}, {"type", "movie"},
+                       {"title", "Big Trip Two"}},
+        };
+        fake.itemsFor["mv1|BoxSet"] = QVariantList{
+            QVariantMap{{"itemId", "bs1"}, {"type", "boxset"},
+                       {"title", "Big Trip Collection"}, {"leafCount", 2}},
+        };
+
+        MediaServerSource src;
+        src.setBackend(SlotSource::Jellyfin, &fake);
+        PresenceResult pr; pr.attach(&src);
+        check(src.presence(SlotSource::Jellyfin, {}, QStringLiteral("tv")),
+              "the tv side starts");
+        check(pr.done && !pr.failed, "the tv side completes");
+        checkStr(pr.provider, QStringLiteral("Jellyfin"), "one shot per source");
+        checkEq(pr.records.size(), 2, "show rows only — episodes carry no fields and stay out");
+        check(pr.records[0].title == QStringLiteral("Cartoon Classics")
+                  && pr.records[0].genres.contains(QStringLiteral("Comedy"))
+                  && pr.records[0].networks.contains(QStringLiteral("Toon Net")),
+              "and the show rows bring what a tv channel is programmed by");
+        check(fake.calls.contains("load_items(tv1,Series,Episode)"),
+              "the tv pass asks for both row kinds");
+
+        MediaServerSource src2;
+        src2.setBackend(SlotSource::Jellyfin, &fake);
+        PresenceResult pr2; pr2.attach(&src2);
+        check(src2.presence(SlotSource::Jellyfin, {}, QStringLiteral("movies")),
+              "the movie side starts");
+        check(pr2.done && !pr2.failed, "the movie side completes");
+        checkEq(pr2.records.size(), 2, "film rows only");
+        check(pr2.records[0].studios.contains(QStringLiteral("Fox")),
+              "and film rows bring the studios a movie channel is programmed by");
+        checkEq(pr2.rows.size(), 1, "the boxset shelf answers as its own row");
+        const QVariantMap shelf = pr2.rows.first().toMap();
+        check(shelf.value(QStringLiteral("kind")).toString() == QStringLiteral("collection")
+                  && shelf.value(QStringLiteral("value")).toString()
+                      == QStringLiteral("Big Trip Collection")
+                  && shelf.value(QStringLiteral("count")).toInt() == 2
+                  && shelf.value(QStringLiteral("channel")).toString()
+                      == QStringLiteral("movies"),
+              "named, counted off the shelf, and kept on the movie side");
+        check(fake.calls.indexOf("load_items(mv1,BoxSet)")
+                  < fake.calls.indexOf("load_items(mv1,Movie)"),
+              "the shelf listing runs before that library's film pass");
+    }
+
+    {
+        section("media server: genre tortures — empties and exclusions at show level");
+        {
+            FakeMediaServer fake;
+            fake.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+            fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+                QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                            {"title", "Cartoon Classics"},
+                            {"genres", QVariantList{ QStringLiteral("Comedy") }}},
+                FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                FakeMediaServer::episode("e2", "s1", "Cartoon Classics", 1, 2, 60000),
+                FakeMediaServer::episode("e3", "s1", "Cartoon Classics", 2, 1, 60000),
+            };
+            MediaServerSource src;
+            src.setBackend(SlotSource::Jellyfin, &fake);
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src    = SlotSource::Jellyfin;
+            req.genres = QStringList{ QStringLiteral("nonexistent") };
+            check(src.enumerate(req), "starts");
+            check(r.finished && !r.failed, "the scan completes");
+            checkEq(r.items.size(), 0,
+                    "no show carries the genre — the screen goes dark, nothing leaks through");
+        }
+        {
+            FakeMediaServer fake;
+            fake.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+            fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+                QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                            {"title", "Cartoon Classics"},
+                            {"genres", QVariantList{ QStringLiteral("Comedy") }}},
+                FakeMediaServer::episode("e1", "s1", "Cartoon Classics", 1, 1, 60000),
+                FakeMediaServer::episode("e2", "s1", "Cartoon Classics", 1, 2, 60000),
+                FakeMediaServer::episode("e3", "s1", "Cartoon Classics", 2, 1, 60000),
+            };
+            MediaServerSource src;
+            src.setBackend(SlotSource::Jellyfin, &fake);
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src    = SlotSource::Jellyfin;
+            req.genres = QStringList{ QStringLiteral("comedy") };
+            req.excludeSeasons.insert(MediaServerSource::seasonKey("s1", 1));
+            check(src.enumerate(req), "starts");
+            check(r.finished && !r.failed, "completes");
+            checkEq(r.items.size(), 1,
+                    "the genre show's first season is cut by the exclusion — season 2 still airs");
+        }
+        {
+            FakeMediaServer fake;
+            fake.libraries = QVariantList{ FakeMediaServer::library("tv1", "TV", "tvshows") };
+            fake.itemsFor["tv1|Series,Episode"] = QVariantList{
+                QVariantMap{{"itemId", "s1"}, {"type", "series"},
+                            {"title", "Mystery Train"},
+                            {"genres", QVariantList{}}},
+                FakeMediaServer::episode("e1", "s1", "Mystery Train", 1, 1, 60000),
+            };
+            MediaServerSource src;
+            src.setBackend(SlotSource::Jellyfin, &fake);
+            Result r; r.attach(&src);
+            MediaServerSource::Request req;
+            req.src    = SlotSource::Jellyfin;
+            req.genres = QStringList{ QStringLiteral("comedy") };
+            check(src.enumerate(req), "starts");
+            check(r.finished && !r.failed, "completes");
+            checkEq(r.items.size(), 0,
+                    "an un-genred show row never joins a genre channel on an empty list");
         }
     }
 

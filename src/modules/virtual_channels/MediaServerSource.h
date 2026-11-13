@@ -1,6 +1,7 @@
 #pragma once
 #include "ChannelSchedule.h"
 #include "ScheduleGenerator.h"
+#include "LibraryDb.h"
 
 #include <QObject>
 #include <QSet>
@@ -26,9 +27,11 @@ public:
         // The picked series' ItemIds, where the picker stored them. A series
         // matched by id survives being renamed on the server.
         QStringList   showIds;
-        QStringList   titles;
-        QStringList   genres;
-        QStringList   collections;
+        QStringList titles;
+        QStringList genres;
+        // Movie filters: the studio strings each server carries per film.
+        QStringList studios;
+        QStringList collections;
         QSet<QString> excludeSeasons;
         QSet<QString> excludeEpisodes;
         enum class Wants { Episodes, Films, Anything };
@@ -39,14 +42,27 @@ public:
     explicit MediaServerSource(QObject *parent = nullptr);
 
     void setBackend(SlotSource src, QObject *backend);
+    void setPresencePlex(QObject *plex);   // presence walks only — never the browse machine
     QObject *backend(SlotSource src) const;
-    bool available(SlotSource src) const { return backend(src) != nullptr; }
+    bool available(SlotSource src) const {
+        return src == SlotSource::Plex ? m_presencePlex != nullptr
+                                       : backend(src) != nullptr;
+    }
     bool busy() const;
 
     bool enumerate(const Request &req);
     static bool wantsFilms(Request::Wants w) { return w == Request::Wants::Films; }
 
     bool browse(SlotSource src, const QString &kind, const QString &parentKey);
+
+    // The launch walk that feeds the library index. One call per side of the
+    // dial: "tv" walks the series rows (where genres/networks/studios live —
+    // a genre belongs to a show, never to an individual episode) and "movies"
+    // walks the film rows plus the boxset rows naming which collections exist.
+    // Raw per-title metadata comes out here; the dedup and tallies are the
+    // index's job, because two servers both carrying Comedy is one shelf on
+    // screen.
+    bool presence(SlotSource src, const QStringList &libraries, const QString &side);
 
     void cancel();
 
@@ -62,6 +78,12 @@ signals:
     void enumerationFailed(const QString &reason);
     void browseReady(const QString &kind, const QVariantList &items);
     void browseFailed(const QString &kind, const QString &reason);
+    // One shot per side per source: what the shelves hold (title rows with the
+    // fields the server carried) plus the collection rows the boxset listing
+    // reported with their shelf counts. The index merges across sources.
+    void presenceReady(const QString &provider,
+                       const QVector<vchan::LibraryRecord> &records,
+                       const QVariantList &collectionRows);
 
 private slots:
     void onLibrariesLoaded(const QVariant &libraries);
@@ -78,6 +100,8 @@ private:
         GenBoxsets,
         GenBoxsetChildren,
         GenItems,
+        PresenceLibraries,
+        PresenceItems,
         BrowseLibraries,
         BrowseSeries,
         BrowseMovies,
@@ -88,6 +112,11 @@ private:
 
     QObject *m_jellyfin = nullptr;
     QObject *m_emby     = nullptr;
+    // Presence walks only: the browse machine never grew a Plex transport
+    // (its guard test says so), so the launch walk holds Plex in its own
+    // slot and pages it with Plex's verbs. Handing Plex to the browse
+    // machine would route browsing through methods it does not have.
+    QObject *m_presencePlex = nullptr;
     QObject *m_active   = nullptr;
     Stage    m_stage    = Stage::Idle;
     QTimer  *m_timer    = nullptr;
@@ -118,9 +147,21 @@ private:
     void  fail(const QString &reason);
     void  browseNextLibrary();
     void  finishBrowse();
+    void  presenceNextLibrary();
+    void  presenceFinish();
     void  reset();
     bool  fromActive() const;
     QStringList eligibleLibraries(const QVariant &libraries, bool films,
                                   const QStringList &wanted) const;
+
+    // The presence walk's own state: which side of the dial it is reading and
+    // what it has collected so far. Kept apart from the schedule walk's
+    // because the two answer different questions and must not mix.
+    bool        m_presence = false;
+    QString     m_presenceSide;
+    int         m_presencePhase = 0;     // 0 = boxsets first (movies), 1 = rows
+    QSet<QString> m_presenceSeenShows;   // Plex's section pass repeats the show on every episode row
+    QVector<LibraryRecord> m_presenceRecords;
+    QVariantList m_presenceSubjectRows;
 };
 }

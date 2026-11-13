@@ -34,6 +34,7 @@
       "label": "Weather Channel",
       "type": "toggle",
       "default": "OFF",
+      "requires_module": "com.240mp.weather",
       "description": "Put the weather station on the dial as a channel of its own."
     },
     {
@@ -44,6 +45,17 @@
       "options_slot": "get_schedule_days_options",
       "default": "2",
       "description": "How far ahead every channel is built. Topped up nightly and at startup."
+    },
+    {
+      "type": "section",
+      "label": "Shelves"
+    },
+    {
+      "key": "library_walk",
+      "label": "Scan Library at Start",
+      "type": "toggle",
+      "default": "ON",
+      "description": "Look over the shelves once at start so the add-on lists show what is actually watchable, with counts. Shows whose networks the shelves know skip TheTVDB. Turn it off to keep the old catalog lists and pay no start-up scan."
     },
     {
       "type": "section",
@@ -80,6 +92,7 @@
       "label": "Guide Music",
       "type": "toggle",
       "default": "OFF",
+      "requires_module": "com.240mp.weather",
       "description": "Play the Weather module's music over the guide. Needs its Music setting on."
     }
   ]

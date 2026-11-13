@@ -35,16 +35,23 @@ FocusScope {
             // Local files have no playlists, genres or collections: a film is a
             // file under movies/. Offering those rows would be offering a
             // server's furniture to a folder.
+            const presetHere = cfg.preset !== "" && cfg.preset !== undefined
             if (cfg.source === "local") {
                 r.push("films")
             } else {
-                r.push("filmsfrom")
+                if (!presetHere || fromPlaylist) r.push("filmsfrom")
                 if (fromPlaylist) {
                     if (cfg.supportsPlaylists) r.push("playlists")
                 } else {
                     r.push("films")
-                    r.push("genres")
-                    r.push("collections")
+                    // A preset channel gets its content from its recipe — rows
+                    // for fields it does not carry would be rows offering the
+                    // viewer to hand-build beside a flow that already built.
+                    // Hand-built channels keep the rows: that is how they get
+                    // ticked.
+                    if (!presetHere || countOf("genres") > 0) r.push("genres")
+                    if (!presetHere || countOf("collections") > 0) r.push("collections")
+                    if (countOf("studios") > 0) r.push("studios")
                 }
             }
             // Shows left behind by a channel that used to be a TV one. Shown so
@@ -54,8 +61,17 @@ FocusScope {
             r.push("breaks")
             r.push("logo")
             r.push("rebuild")
+            // A preset channel can run its recipe again — after the viewer has
+            // taken shows out, that puts back what the library has added since.
+            if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
             r.push("rename")
             r.push("delete")
+            console.log("[presetflow] builder rows:", r.join(","),
+                        "preset:", cfg.preset !== undefined ? cfg.preset : "",
+                        "off:", countOf("presetOff"),
+                        "ch:", channelNumber,
+                        "genres:", countOf("genres"), "studios:", countOf("studios"),
+                        "collections:", countOf("collections"))
             return r
         }
 
@@ -69,15 +85,9 @@ FocusScope {
         // bumpers, so the pools are not read at all -- offering them here would
         // be a second place to say what airs, and the quieter of the two would
         // be the one that lied.
+        const presetHere = cfg.preset !== "" && cfg.preset !== undefined
         if (!onADayPlan) {
             if (cfg.source === "local") {
-                // Local files are a library like any other source: the two things a
-                // media folder can hold, straight off this screen. There is no
-                // intermediate list, and no offer to add from a server the channel
-                // is not sourced from.
-                // Films are not a pool: they are booked into Movie Slots, which is
-                // the row below. A flat list of films would air them as ordinary
-                // programmes and duplicate that mechanism.
                 r.push("series")
             } else if (cfg.source !== undefined) {
                 r.push("series")
@@ -85,12 +95,18 @@ FocusScope {
                 // -- from being a film channel once -- they air, so they are shown.
                 if (countOf("films") > 0)  r.push("films")
                 if (countOf("genres") > 0) r.push("genres")
-                r.push("collections")
-                if (cfg.supportsPlaylists) r.push("playlists")
+                // Same hide as the movie side: a preset channel that does not
+                // carry collections has no collections row.
+                if (!presetHere || countOf("collections") > 0)
+                    r.push("collections")
+                if (cfg.supportsPlaylists && (!presetHere || countOf("playlists") > 0))
+                    r.push("playlists")
             }
             // Blocks say when everything airs, so booking a film to a time and
-            // choosing an order are both the plan's to decide.
-            r.push("slots")
+            // choosing an order are both the plan's to decide. Hide Movie Slots
+            // on TV presets unless slots already exist.
+            if (!presetHere || sourcesRoot.slotCount > 0)
+                r.push("slots")
             r.push("order")
         }
         // How much plays between programmes is only this row's to say when
@@ -100,6 +116,9 @@ FocusScope {
         r.push("breaks")
         r.push("logo")
         r.push("rebuild")
+        // A preset channel can run its recipe again — after the viewer has
+        // taken shows out, that puts back what the library has added since.
+        if (cfg.preset !== "" && cfg.preset !== undefined) r.push("seed")
         r.push("rename")
         r.push("delete")
         return r
@@ -145,6 +164,10 @@ FocusScope {
         adsPerBreak = timing.adsPerBreak
         order       = timing.order
         if (current >= rowCount) current = rowCount - 1
+        options.refresh()
+        console.log("[presetflow] reload done: ch:", channelNumber,
+                    "kind:", cfg.kind === undefined ? "unset" : cfg.kind,
+                    "films:", countOf("films"))
     }
 
     function cycleSource(direction) {
@@ -205,6 +228,7 @@ FocusScope {
         case "genres":       return sourcesRoot.genreWord
         case "series":       return "Series"
         case "collections":  return "Collections"
+        case "studios":      return "Studios"
         case "playlists":    return "Playlists"
         case "slots":        return "Movie Slots"
         case "logo":         return "Logo"
@@ -214,6 +238,9 @@ FocusScope {
         case "ads":          return "Per Break"
         case "breaks":       return "Breaks"
         case "rebuild":      return building ? "Building…" : "Build Channel"
+        case "seed":         return cfg.presetOff > 0
+                                   ? "Seed From Recipe · " + cfg.presetOff + " OFF"
+                                   : "Seed From Recipe"
         case "rename":       return "Rename"
         case "delete":       return sourcesRoot.armedToDelete ? "Delete — Press Again" : "Delete Channel"
         }
@@ -235,6 +262,12 @@ FocusScope {
             if (g === 0) return "NONE"
             return g === 1 ? String((cfg.genres || [])[0]).toUpperCase()
                            : g + " " + sourcesRoot.genreWord.toUpperCase()
+        }
+        case "studios": {
+            var st = countOf("studios")
+            if (st === 0) return "NONE"
+            return st === 1 ? String((cfg.studios || [])[0]).toUpperCase()
+                            : st + " STUDIOS"
         }
         case "series": {
             var n = countOf("match")
@@ -296,6 +329,7 @@ FocusScope {
         // playlist arrives whole and cannot.
         case "series":      return "Shows picked one by one. Open one to switch off seasons or episodes you don't want."
         case "collections": return "A group kept on " + server + ", added whole — everything in it airs, even shows not ticked in Series."
+        case "studios":     return "Every film on " + server + " that these studios made — pick one, and the library fills itself with its films."
         case "playlists":   return "A list kept on " + server + ", added whole. Change it there and this channel follows on its next rebuild."
         case "slots":       return "Movies at fixed times, each drawing on its own set of movies."
         case "kind":        return sourcesRoot.isMovies
@@ -326,6 +360,9 @@ FocusScope {
         case "ads":         return "How many things play between programs, after the outro."
         case "breaks":      return "What plays between programs: intros, bumps, commercials and outros."
         case "rebuild":     return "Build the schedule so source changes actually air."
+        case "seed":       return "Refresh this channel's pool from its recipe to add new library matches. Already seeded on creation; anything you removed stays out — "
+                                  + (cfg.presetOff > 0 ? cfg.presetOff + " is switched off here."
+                                                      : "nothing is.")
         case "rename":      return "Change what this channel is called."
         case "delete":      return sourcesRoot.armedToDelete
                                    ? "Press again to remove this channel, or move away to keep it."
@@ -414,7 +451,7 @@ FocusScope {
                 }
                 reload()
             }
-            navigateTo("modules/virtual_channels/views/PlanEdit.qml", {
+            navigateTo("PlanEdit.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName,
@@ -425,7 +462,7 @@ FocusScope {
 
         if (row === "rename") {
             appCore.save_setting(moduleId, "rename_buffer", "")
-            navigateTo("modules/virtual_channels/views/TextEntry.qml", {
+            navigateTo("TextEntry.qml", {
                 moduleId: sourcesRoot.moduleId,
                 settingKey: "rename_buffer",
                 title: "Name Channel " + sourcesRoot.channelNumber,
@@ -451,9 +488,17 @@ FocusScope {
             virtualChannelsBackend.regenerate(channelNumber)
             return
         }
+        if (row === "seed") {
+            // The recipe runs against the connected sources again; the picks
+            // land through onPresetSeeded, which reloads the counts here.
+            building = true
+            status = "Seeding…"
+            virtualChannelsBackend.seed_preset_channel(channelNumber)
+            return
+        }
         if (row === "source") { cycleSource(1); return }
         if (row === "logo") {
-            navigateTo("modules/virtual_channels/views/LogoSettings.qml", {
+            navigateTo("LogoSettings.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 title: sourcesRoot.channelName
@@ -461,7 +506,7 @@ FocusScope {
             return
         }
         if (row === "breaks") {
-            navigateTo("modules/virtual_channels/views/Interstitials.qml", {
+            navigateTo("Interstitials.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName
@@ -469,7 +514,7 @@ FocusScope {
             return
         }
         if (row === "slots") {
-            navigateTo("modules/virtual_channels/views/Bookings.qml", {
+            navigateTo("Bookings.qml", {
                 moduleId:      sourcesRoot.moduleId,
                 channelNumber: sourcesRoot.channelNumber,
                 channelName:   sourcesRoot.channelName
@@ -477,12 +522,13 @@ FocusScope {
             return
         }
 
-        navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+        navigateTo("SourceBrowser.qml", {
             moduleId:      sourcesRoot.moduleId,
             channelNumber: sourcesRoot.channelNumber,
             kind: row === "series" ? "shows"
                 : row === "films"  ? "movies"
                 : row === "genres" ? "moviegenres"
+                : row === "studios" ? "moviestudios"
                                    : row,
             title: sourcesRoot.channelName
         }, { currentIndex: sourcesRoot.current })
@@ -507,6 +553,8 @@ FocusScope {
         var restore = navListState.currentIndex
         applyPendingRename()
         reload()
+        if (navParams.seedSummary && status === "")
+            status = "Seeded " + navParams.seedSummary + " — ready to Build Channel"
         if (restore !== undefined) current = Math.min(restore, rowCount - 1)
     }
 
@@ -522,9 +570,16 @@ FocusScope {
             sourcesRoot.status = (ok ? "Built: " : "Failed: ") + message
             sourcesRoot.reload()
         }
+        function onPresetSeeded(ch, ok, message) {
+            if (ch !== sourcesRoot.channelNumber) return
+            sourcesRoot.building = false
+            sourcesRoot.status = ok ? "Seeded: " + message : "Recipe found nothing: " + message
+            sourcesRoot.reload()
+        }
     }
 
     OptionList {
+        id: options
         anchors.fill: parent
         focus: true
         iconSource: sourcesRoot.moduleIcon

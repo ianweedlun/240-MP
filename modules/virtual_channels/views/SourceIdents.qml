@@ -160,7 +160,7 @@ FocusScope {
         }
         armedToClear = false
         appCore.save_setting(moduleId, "pool_buffer", "")
-        navigateTo("modules/virtual_channels/views/SourcePick.qml", {
+        navigateTo("SourcePick.qml", {
             moduleId:   identRoot.moduleId,
             source:     "local",
             settingKey: "pool_buffer",

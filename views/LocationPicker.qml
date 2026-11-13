@@ -28,8 +28,8 @@ FocusScope {
     property string notice: ""
     property real noticeUntil: 0
 
-    function currentLine() { return weatherBackend.primaryLocationLine() }
-    function looksLikeCoords(s) { return weatherBackend.looksLikeCoordinates(s) }
+    function currentLine() { return appCore.weatherPrimaryLocationLine() }
+    function looksLikeCoords(s) { return appCore.weatherLooksLikeCoordinates(s) }
 
     function actOnCell() {
         const glyph = locationPicker.glyphs[locationPicker.cell]

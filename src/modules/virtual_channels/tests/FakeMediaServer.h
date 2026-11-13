@@ -90,11 +90,13 @@ public:
                            {"duration", durationMs}};
     }
     static QVariantMap movie(const QString &id, const QString &title, double durationMs,
-                             const QStringList &genres = QStringList()) {
-        QVariantList g;
+                             const QStringList &genres = QStringList(),
+                             const QStringList &studios = QStringList()) {
+        QVariantList g, s;
         for (const QString &one : genres) g.append(one);
+        for (const QString &one : studios) s.append(one);
         return QVariantMap{{"itemId", id}, {"type", "movie"}, {"title", title},
-                           {"duration", durationMs}, {"genres", g}};
+                           {"duration", durationMs}, {"genres", g}, {"studios", s}};
     }
     static QVariantMap series(const QString &id, const QString &title) {
         return QVariantMap{{"itemId", id}, {"type", "series"}, {"title", title}};

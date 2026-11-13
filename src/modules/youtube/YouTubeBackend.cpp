@@ -935,7 +935,7 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
         m_sponsorFetching.remove(videoId);
         const qint64 start = m_sponsorStartMs.take(videoId);
         qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
-               qPrintable(videoId), static_cast<int>(segs.size()),
+               qPrintable(videoId), segs.size(),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
         emit sponsorReady(videoId);
         reply->deleteLater();
@@ -1143,9 +1143,6 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             m_warmChainKey.clear();
             pumpWarmQueue();
         }
-        // Same done-signal semantics: a Player cold-waiting here must not sit
-        // in its timeout cap for a resolve that will never come.
-        emit playbackResolveDone(videoId);
         return;
     }
 
@@ -1187,14 +1184,7 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
                 if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
                     expire = audioExpire;
             }
-            // Store gate = the read-side freshness check (same pure helper,
-            // same safety margin): an entry too short-lived to ever be served
-            // fresh is not stored at all, so the ready signal's pair check can
-            // never dead-end on a just-stored pair (member-gated short
-            // windows and clock skew were the reachable cases). Missing expire
-            // (live/manifest URLs) and expired-now stay uncached as before.
-            if (yturl::urlFresh(expire, QDateTime::currentMSecsSinceEpoch() / 1000,
-                                kUrlSafetyMarginS)) {
+            if (expire > QDateTime::currentMSecsSinceEpoch() / 1000) {
                 storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
                 emit playbackUrlReady(videoId);
                 stored = true;
@@ -1204,23 +1194,17 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
         qWarning("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
                qPrintable(videoId),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - startedMs),
-               static_cast<int>(urls.size()), stored ? 1 : 0);
-        // Resolve over, nothing usable: tell a waiting Player instead of making
-        // it sit out its full timeout cap and then pay ytdl_hook's re-resolve
-        // a second time (dead network / bot-gated / expired at store time).
-        if (!stored)
-            emit playbackResolveDone(videoId);
+               urls.size(), stored ? 1 : 0);
         finishUrlResolve(key);
         proc->deleteLater();
     });
     connect(proc, &QProcess::errorOccurred, this,
-            [this, proc, key, videoId](QProcess::ProcessError processError) {
+            [this, proc, key](QProcess::ProcessError processError) {
                 if (processError == QProcess::FailedToStart) {
                     // launch failure: no finished signal, so unwind bookkeeping here
                     qWarning("[Youtube] resolve fail err=failed-to-start");
                     m_resolveStartMs.remove(key);
                     finishUrlResolve(key);
-                    emit playbackResolveDone(videoId);
                     proc->deleteLater();
                 }
             });
@@ -1279,8 +1263,7 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
         ++queued;
     }
     if (queued > 0)
-        qWarning("[Youtube] warm queued=%d queue-size=%d", queued,
-                 static_cast<int>(m_warmQueue.size()));
+        qWarning("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
     // Pre-fetch segment windows for the whole list page so the first pick
     // already has them when the Player launches (~300 ms single GET each).
     for (const QString &id : videoIds)

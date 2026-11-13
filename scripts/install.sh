@@ -212,6 +212,7 @@ ExecStart=${LAUNCHER}
 Restart=on-failure
 RestartSec=5s
 RestartPreventExitStatus=10 12
+ExecStop=+/usr/local/bin/240mp-mark
 ExecStopPost=+/usr/local/bin/240mp-stop
 StandardOutput=journal
 StandardError=journal
@@ -220,26 +221,49 @@ StandardError=journal
 WantedBy=multi-user.target
 UNIT
 
-    # ExecStopPost helper: normal quit (exit 0) or a crash powers the Pi off as
-    # before; exit 10 means the user chose "Exit to Terminal", so instead spawn a
-    # login shell on tty1 (see views/Settings.qml). RestartPreventExitStatus=10 12
-    # keeps Restart=on-failure from relaunching the app over that shell.
-    # Exit 12 is "Reboot" from the Quit dialog: reboot instead of powering off
-    # (also listed in RestartPreventExitStatus so the app isn't relaunched mid-reboot).
-    # Exit 11 is "Apply & Restart" from the in-app updater (views/Update.qml):
-    # do nothing here — it's a failure status, so Restart=on-failure relaunches
-    # through the launcher, which applies the staged update before exec.
+    # ExecStop/ExecStopPost pair. %1 (the stop-command specifier) is ILLEGAL
+    # here — it only resolves on instantiated name@unit services; on 240mp.service
+    # systemd fails to parse the whole unit ("Failed to resolve unit specifiers
+    # in %1: Invalid slot" -> "has a bad unit file setting"), which is exactly the
+    # boot failure the owner hit. (ExecStopPre does NOT exist as a systemd
+    # directive — unknown keys are silently ignored; the stop-phase hook is
+    # ExecStop, which fires ONLY on system-initiated stops.) And EXIT_STATUS alone can't discriminate either:
+    # the app traps SIGTERM and exits 0, so a systemctl stop/restart/kill looks
+    # identical to an in-app quit. ExecStop runs ONLY on system-initiated
+    # stops, so 240mp-mark stamps /tmp/240mp-stop-marker; a fresh stamp (<=30s —
+    # the app's clean teardown can take a while) means "system stop": Pi stays
+    # powered. Otherwise the app's own exit code decides, as before:
+    # exit 0 (clean quit) or a crash powers the Pi off; exit 10 means the user
+    # chose "Exit to Terminal" (spawn a login shell on tty1, see views/Settings
+    # .qml; RestartPreventExitStatus=10 12 keeps Restart=on-failure from
+    # relaunching the app over that shell); exit 12 is "Reboot" from the Quit
+    # dialog (reboot instead of powering off); exit 11 is "Apply & Restart"
+    # from the in-app updater (views/Update.qml) — do nothing, Restart=on-failure
+    # relaunches through the launcher, which applies the staged update before exec.
+    sudo tee /usr/local/bin/240mp-mark > /dev/null << 'STOP_MARKER'
+#!/usr/bin/env bash
+# ExecStop: fires ONLY on a system-initiated stop/restart/kill (never on an
+# app-driven exit). Stamps the epoch so 240mp-stop can discriminate.
+sync
+date +%s > /tmp/240mp-stop-marker
+STOP_MARKER
+    sudo chmod +x /usr/local/bin/240mp-mark
+
     sudo tee /usr/local/bin/240mp-stop > /dev/null << 'STOP_HELPER'
 #!/usr/bin/env bash
-# Called by 240mp.service ExecStopPost. systemd sets $EXIT_STATUS to the app's exit code.
-if [ "${EXIT_STATUS:-}" = "10" ]; then
+# Called by 240mp.service ExecStopPost. Discriminates a system stop (fresh
+# 240mp-mark stamp) from an app-driven exit (EXIT_STATUS = the app's code).
+m="$(cat /tmp/240mp-stop-marker 2>/dev/null || echo 0)"
+if [ -f /tmp/240mp-stop-marker ] && [ "$(( $(date +%s) - m ))" -le 30 ]; then
+    echo "[240mp-stop] system stop/restart/kill: Pi stays powered"
+elif [ "${EXIT_STATUS:-}" = "10" ]; then
     systemctl start 240mp-terminal.service
 elif [ "${EXIT_STATUS:-}" = "11" ]; then
     :   # in-app update restart — Restart=on-failure brings the app back up
 elif [ "${EXIT_STATUS:-}" = "12" ]; then
     systemctl reboot
 else
-    systemctl poweroff
+    systemctl poweroff    # clean app quit (0) or a crash — power off as before
 fi
 STOP_HELPER
     sudo chmod +x /usr/local/bin/240mp-stop

@@ -171,12 +171,6 @@ signals:
     // launched on a cold cache: instead of paying ytdl_hook's re-resolve, it
     // waits (bounded) for this signal and then launches mpv on the direct pair.
     void playbackUrlReady(const QString &videoId);
-    // The same resolve ended with nothing usable stored: network dead, bot-gated
-    // 403, live/manifest source, or a signed window too short to ever serve.
-    // Pairs with playbackUrlReady — a Player waiting on the cold path stops
-    // waiting at once instead of burning the 15 s cap, then paying ytdl_hook's
-    // re-resolve a second time.
-    void playbackResolveDone(const QString &videoId);
     // Plan D: pairing card surfaced to the view (user code + where to type it),
     // the flow's outcome, and signed-in account lists (row model = the module's).
     void devicePairRequested(const QString &userCode, const QString &verificationUrl);

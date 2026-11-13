@@ -64,13 +64,22 @@ FocusScope {
                                         : (kind === "seasons" ? heading : "")
     // A block draws on the one thing it names, so that is what its tick means
     // and what "is this series on" asks about below it.
+    function indexOfCI(list, label) {
+        if (!list || !label) return -1
+        var needle = String(label).toLowerCase()
+        for (var i = 0; i < list.length; ++i)
+            if (String(list[i]).toLowerCase() === needle) return i
+        return -1
+    }
+
     readonly property bool seriesSelected: blockMode
-        ? (seriesName !== "" && seriesName === blockPick)
-        : (seriesName !== "" && (cfg.match || []).indexOf(seriesName) >= 0)
+        ? (seriesName !== "" && String(seriesName).toLowerCase() === String(blockPick).toLowerCase())
+        : (seriesName !== "" && indexOfCI(cfg.match, seriesName) >= 0)
     readonly property string listField: kind === "collections"  ? "collections"
                                       : kind === "playlists"    ? "playlists"
                                       : kind === "movies"       ? "films"
                                       : kind === "moviegenres"  ? "genres"
+                                      : kind === "moviestudios" ? "studios"
                                       : "match"
     readonly property bool canDescend: kind === "shows" || kind === "seasons"
 
@@ -115,7 +124,7 @@ FocusScope {
                                                  : (cfg.excludedEpisodes || [])
 
     function isOn(item) {
-        if (bookingMode) return bookingTitles.indexOf(item.label) >= 0
+        if (bookingMode) return indexOfCI(bookingTitles, item.label) >= 0
         if (isExclusionLevel) {
             if (!seriesSelected) return false
             // An episode of a season that is off is off with it, whatever the
@@ -123,9 +132,9 @@ FocusScope {
             if (kind === "episodes" && offSeasons.indexOf(parentKey) >= 0) return false
             return (kind === "seasons" ? offSeasons : offEpisodes).indexOf(item.id) < 0
         }
-        if (blockMode) return item.label === blockPick
+        if (blockMode) return String(item.label).toLowerCase() === String(blockPick).toLowerCase()
         var list = cfg[listField] || []
-        return list.indexOf(item.label) >= 0
+        return indexOfCI(list, item.label) >= 0
     }
 
     // On, but with some of what is under it switched off. A season keeps its
@@ -167,7 +176,7 @@ FocusScope {
 
         if (bookingMode) {
             var picked = bookingTitles.slice()
-            var where = picked.indexOf(item.label)
+            var where = indexOfCI(picked, item.label)
             if (where >= 0) picked.splice(where, 1)
             else            picked.push(item.label)
             if (!virtualChannelsBackend.set_booking_list(channelNumber, bookingIndex,
@@ -204,7 +213,7 @@ FocusScope {
             }
         } else {
             var list = (cfg[listField] || []).slice()
-            var at = list.indexOf(item.label)
+            var at = indexOfCI(list, item.label)
             if (at >= 0) list.splice(at, 1)
             else         list.push(item.label)
             if (!virtualChannelsBackend.set_channel_list(channelNumber, listField, list,
@@ -224,10 +233,11 @@ FocusScope {
         var refs = []
         for (var i = 0; i < list.length; ++i) {
             var ref = ""
-            if (picked && list[i] === picked.label) ref = String(picked.id || "")
+            var target = String(list[i]).toLowerCase()
+            if (picked && target === String(picked.label).toLowerCase()) ref = String(picked.id || "")
             else {
                 for (var j = 0; j < items.length; ++j)
-                    if (items[j].label === list[i]) { ref = String(items[j].id || ""); break }
+                    if (String(items[j].label).toLowerCase() === target) { ref = String(items[j].id || ""); break }
             }
             refs.push(ref)
         }
@@ -241,7 +251,7 @@ FocusScope {
     // show to it. Turning off the last thing airing at a level turns that level
     // off too, rather than leaving a show in the list with nothing to play.
     function selectSeries(list) {
-        if (list.indexOf(seriesName) < 0) list.push(seriesName)
+        if (indexOfCI(list, seriesName) < 0) list.push(seriesName)
         if (virtualChannelsBackend.set_channel_list(channelNumber, "match", list,
                                                     refsFor(list, null))) return true
         status = "Could not save"
@@ -249,7 +259,7 @@ FocusScope {
     }
 
     function dropSeries(list) {
-        var at = list.indexOf(seriesName)
+        var at = indexOfCI(list, seriesName)
         if (at >= 0) list.splice(at, 1)
         virtualChannelsBackend.set_channel_list(channelNumber, "match", list,
                                                 refsFor(list, null))
@@ -517,7 +527,7 @@ FocusScope {
 
     function descend(item) {
         if (!canDescend) return
-        navigateTo("modules/virtual_channels/views/SourceBrowser.qml", {
+        navigateTo("SourceBrowser.qml", {
             moduleId:      browserRoot.moduleId,
             channelNumber: browserRoot.channelNumber,
             kind: browserRoot.kind === "shows" ? "seasons" : "episodes",

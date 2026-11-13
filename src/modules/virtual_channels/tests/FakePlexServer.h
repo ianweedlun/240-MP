@@ -16,6 +16,9 @@ public:
 
     QStringList calls;
     QVariantMap detail;                       // what load_item_detail answers with
+    QVariantList libraries;                   // what load_libraries answers with
+    QHash<QString, QVariantList> libraryItems; // sectionId -> load_library_all items
+    QHash<QString, QVariantList> childrenByKey;// ratingKey -> load_children items
     QStringList transcodeSubtitleIds;         // subtitleId of each request_transcode
     QStringList transcodeAudioIds;            // audioId of each
 
@@ -26,6 +29,21 @@ public:
     Q_INVOKABLE void load_item_detail(const QString &ratingKey) {
         calls << QStringLiteral("load_item_detail:") + ratingKey;
         later([this] { emit itemLoaded(detail); });
+    }
+    Q_INVOKABLE void load_libraries() {
+        calls << QStringLiteral("load_libraries");
+        const QVariantList libs = libraries;
+        later([this, libs] { emit librariesLoaded(libs); });
+    }
+    Q_INVOKABLE void load_library_all(const QString &sectionId) {
+        calls << QStringLiteral("load_library_all:") + sectionId;
+        const QVariantList items = libraryItems.value(sectionId);
+        later([this, items] { emit itemsLoaded(items); });
+    }
+    Q_INVOKABLE void load_children(const QString &ratingKey) {
+        calls << QStringLiteral("load_children:") + ratingKey;
+        const QVariantList ch = childrenByKey.value(ratingKey);
+        later([this, ch] { emit childrenLoaded(ch); });
     }
     Q_INVOKABLE void build_stream_url(const QString &, const QString &, const QString &) {
         calls << QStringLiteral("build_stream_url");
@@ -58,6 +76,9 @@ public:
 
 signals:
     void itemLoaded(const QVariant &detail);
+    void librariesLoaded(const QVariant &libraries);
+    void itemsLoaded(const QVariant &items);
+    void childrenLoaded(const QVariant &items);
     void streamUrlReady(const QString &url, const QString &plexToken);
     void subtitleStreamSet(const QString &partId);
     void audioStreamSet(const QString &partId);

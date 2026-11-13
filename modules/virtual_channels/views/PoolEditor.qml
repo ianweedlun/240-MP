@@ -151,7 +151,7 @@ FocusScope {
 
         if (row.indexOf("add:") === 0) {
             appCore.save_setting(moduleId, "pool_buffer", "")
-            navigateTo("modules/virtual_channels/views/SourcePick.qml", {
+            navigateTo("SourcePick.qml", {
                 moduleId: poolRoot.moduleId,
                 source: row.substring(4),
                 settingKey: "pool_buffer",
