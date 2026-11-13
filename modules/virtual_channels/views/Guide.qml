@@ -884,7 +884,10 @@ FocusScope {
                                              && index === channelRows.currentIndex
 
             Rectangle {
-                anchors.fill: parent
+                x: 1
+                y: 0
+                width: guideRoot.channelColW - 1
+                height: parent.height - 1
                 color: parent.selected ? root.accentColor : "transparent"
             }
 

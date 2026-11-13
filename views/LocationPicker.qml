@@ -85,6 +85,24 @@ FocusScope {
         if (event.key === Qt.Key_Right) { locationPicker.move(Math.min(15, locationPicker.cell + 1)); event.accepted = true; return }
     }
 
+    // Current location from weather_location.txt so the viewer sees what is
+    // active before entering new coordinates.
+    Text {
+        text: {
+            var cur = locationPicker.currentLine()
+            return "CURRENT: " + (cur !== "" ? cur : "NOT SET")
+        }
+        color: root.primaryColor
+        font.family: root.globalFont
+        font.pixelSize: root.sh * 0.032
+        elide: Text.ElideRight
+        anchors.left: parent.left
+        anchors.leftMargin: root.sw * 0.125
+        anchors.right: parent.right
+        anchors.rightMargin: root.sw * 0.125
+        y: root.sh * 0.18
+    }
+
     // The dial: Repeater's delegates carry their own x/y and get inserted into
     // the parent directly (Repeater has no positioner); arithmetic placement is
     // the only reliable way to lay the 4x4 grid out in this Qt build. The
