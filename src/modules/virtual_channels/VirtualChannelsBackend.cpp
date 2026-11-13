@@ -1046,8 +1046,7 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
          << QStringLiteral("--vo-image-outdir=") + m_previewDir
          << QStringLiteral("--volume=") + QString::number(volPct)
          << QStringLiteral("--mute=") + (volPct <= 0 ? QStringLiteral("yes") : QStringLiteral("no"))
-         << QStringLiteral("--input-ipc-server=") + m_previewIpcPath
-         << QStringLiteral("--loop-file=inf");
+         << QStringLiteral("--input-ipc-server=") + m_previewIpcPath;
     if (positionMs > 0)
         args << QStringLiteral("--start=") + QString::number(positionMs / 1000.0, 'f', 3);
     args << url;
@@ -1055,8 +1054,14 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
     m_previewProc = new QProcess(this);
     m_previewProc->setProcessChannelMode(QProcess::MergedChannels);
     connect(m_previewProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this](int, QProcess::ExitStatus) {
+            this, [this](int code, QProcess::ExitStatus) {
                 if (m_previewPoll) m_previewPoll->stop();
+                if (code != 0 && m_previewProc) {
+                    const QByteArray out = m_previewProc->readAll().trimmed();
+                    if (!out.isEmpty())
+                        qWarning("[VirtualChannels] preview mpv exited %d: %s",
+                                 code, out.constData());
+                }
             });
     m_previewProc->start(mpvBin, args);
 

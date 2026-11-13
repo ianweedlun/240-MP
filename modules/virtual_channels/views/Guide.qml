@@ -68,9 +68,9 @@ FocusScope {
     property var nowPlaying: ({})
     property int  detailFor: -1
 
-    readonly property int previewSettleMs: 700
+    readonly property int previewSettleMs: 250
 
-    readonly property int previewDwellMs: 2500
+    readonly property int previewDwellMs: 400
 
     Timer {
         id: previewSettle
@@ -278,19 +278,19 @@ FocusScope {
             var opt = String(idling)
             if (opt.indexOf("Holds") === 0) {
                 autoScrollEnabled = opt.indexOf("Never") < 0
-                autoScroll = autoScrollEnabled
+                autoScroll = false
                 resumeSeconds = autoScrollEnabled
                                ? (opt.indexOf("1m") >= 0 ? 60
                                   : (opt.indexOf("5m") >= 0 ? 300 : 30))
                                : 0
             } else {
                 autoScrollEnabled = true
-                autoScroll = true
+                autoScroll = false
                 resumeSeconds = 5
             }
         } else {
             autoScrollEnabled = toggleOn("guide.autoscroll", true)
-            autoScroll = autoScrollEnabled
+            autoScroll = false
             var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
             if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
         }
@@ -306,6 +306,15 @@ FocusScope {
         volumeOsd.level = masterVolume
         applyVolume()
         refresh()
+        for (var k = 0; k < rows.length; k++) {
+            if (!rows[k].isSpecial) {
+                channelRows.currentIndex = k
+                break
+            }
+        }
+        refreshNowPlaying()
+        previewSettle.restart()
+        if (autoScrollEnabled && resumeSeconds > 0) idleTimer.restart()
 
         if (idleTracker) idleTracker.mpvActive = true
 
@@ -567,6 +576,27 @@ FocusScope {
             height: parent.height
 
             Text {
+                id: channelLine
+                text: {
+                    var i = channelRows.currentIndex
+                    if (guideRoot.rows.length > 0 && i >= 0) {
+                        var r = guideRoot.rows[i % guideRoot.rows.length]
+                        if (r) return "CH " + r.number + "  " + r.name
+                    }
+                    return ""
+                }
+                visible: text !== ""
+                color: root.accentColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                anchors.top: parent.top
+                anchors.left: parent.left
+                width: parent.width
+                elide: Text.ElideRight
+                font.pixelSize: root.sh * 0.026
+            }
+
+            Text {
                 id: seriesLine
                 text: {
                     var n = guideRoot.nowPlaying
@@ -576,13 +606,14 @@ FocusScope {
                 color: root.primaryColor
                 font.family: root.globalFont
                 font.capitalization: Font.AllUppercase
-                anchors.top: parent.top
+                anchors.top: channelLine.visible ? channelLine.bottom : parent.top
+                anchors.topMargin: channelLine.visible ? root.sh * 0.004 : 0
                 anchors.left: parent.left
                 width: parent.width
                 wrapMode: Text.WordWrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
-                font.pixelSize: root.sh * 0.040
+                font.pixelSize: root.sh * 0.036
             }
 
             Text {
@@ -777,19 +808,23 @@ FocusScope {
             Rectangle {
                 anchors.fill: parent
                 color: parent.selected ? root.accentColor : "transparent"
-                border.color: root.tertiaryColor
-                border.width: 1
             }
 
             Rectangle {
                 visible: !parent.selected
                 x: 1
-                y: 1
+                y: 0
                 width: guideRoot.channelColW - 1
-                height: parent.height - 2
+                height: parent.height - 1
                 property color baseColor: root.primaryColor
                 color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, 0.13)
             }
+
+            // 1px grid hairlines: left, right, bottom, and channel-column divider.
+            Rectangle { x: 0; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { x: guideRoot.channelColW - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { x: parent.width - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { x: 0; y: parent.height - 1; width: parent.width; height: 1; color: root.tertiaryColor }
 
             Text {
                 id: chNum
@@ -827,16 +862,18 @@ FocusScope {
                     readonly property int  snappedRight: Math.round(Math.min(guideRoot.timeAreaW, rawRight))
 
                     x: guideRoot.channelColW + snappedX
-                    y: 1
+                    y: 0
                     width: Math.max(0, snappedRight - snappedX - 1)
-                    height: parent.height - 2
+                    height: parent.height - 1
                     visible: width > 2
 
                     Rectangle {
                         anchors.fill: parent
                         color: modelData.onNow ? root.secondaryColor : root.surfaceColor
-                        border.color: root.tertiaryColor
-                        border.width: 1
+                    }
+                    Rectangle {
+                        x: parent.width - 1; y: 0; width: 1; height: parent.height
+                        color: root.tertiaryColor
                     }
 
                     Text {
