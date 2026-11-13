@@ -304,31 +304,36 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        // The consolidated single row. Old two-row configs still mean the same
-        // thing until the viewer uses the new one: read the new key first,
-        // fall back to the legacy pair.
-        var idling = appCore.get_setting(guideRoot.moduleId, "guide.idling")
-        var idlingSrc = "legacy"
-        if (idling !== undefined && String(idling) !== "") {
-            idlingSrc = "setting"
-            var opt = String(idling)
-            if (opt.indexOf("Holds") === 0) {
-                autoScrollEnabled = opt.indexOf("Never") < 0
-                autoScroll = false
-                resumeSeconds = autoScrollEnabled
-                               ? (opt.indexOf("1m") >= 0 ? 60
-                                  : (opt.indexOf("5m") >= 0 ? 300 : 30))
-                               : 0
+        // Simple ON/OFF auto-scroll toggle; keep legacy guide.idling as a
+        // fallback only if guide.autoscroll has never been set.
+        var autoVal = appCore.get_setting(guideRoot.moduleId, "guide.autoscroll")
+        var idlingSrc = "setting"
+        if (autoVal !== undefined && String(autoVal) !== "") {
+            autoScrollEnabled = toggleOn("guide.autoscroll", true)
+            autoScroll = false
+            resumeSeconds = autoScrollEnabled ? 5 : 0
+        } else {
+            var idling = appCore.get_setting(guideRoot.moduleId, "guide.idling")
+            if (idling !== undefined && String(idling) !== "") {
+                idlingSrc = "legacy"
+                var opt = String(idling)
+                if (opt.indexOf("Holds") === 0) {
+                    autoScrollEnabled = opt.indexOf("Never") < 0
+                    autoScroll = false
+                    resumeSeconds = autoScrollEnabled
+                                   ? (opt.indexOf("1m") >= 0 ? 60
+                                      : (opt.indexOf("5m") >= 0 ? 300 : 30))
+                                   : 0
+                } else {
+                    autoScrollEnabled = true
+                    autoScroll = false
+                    resumeSeconds = 5
+                }
             } else {
                 autoScrollEnabled = true
                 autoScroll = false
                 resumeSeconds = 5
             }
-        } else {
-            autoScrollEnabled = toggleOn("guide.autoscroll", true)
-            autoScroll = false
-            var rs = appCore.get_setting(guideRoot.moduleId, "guide.resume_seconds")
-            if (rs !== undefined && rs !== null && rs !== "") resumeSeconds = parseInt(rs) || 0
         }
         appCore.note_state("guide-idle",
                            "auto=" + (autoScrollEnabled ? "on" : "off") +

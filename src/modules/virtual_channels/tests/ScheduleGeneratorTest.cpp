@@ -1827,5 +1827,31 @@ int runScheduleGeneratorTests() {
         check(same, "slot for slot identical");
     }
 
+    section("generate: marathon plays each series in order before moving to the next");
+    {
+        check(orderingFromString("marathon") == Ordering::Marathon, "marathon parses");
+        check(orderingToString(Ordering::Marathon) == QStringLiteral("marathon"), "marathon formats");
+
+        ChannelDef d;
+        d.number = 1; d.name = "Marathon"; d.seed = 1;
+        d.horizonHours = 4.0;
+        d.gridMinutes = 0;
+        d.order = Ordering::Marathon;
+        MediaItem a1 = episodeIn("Alpha", "a1.mkv", 600000, 0); a1.seasonNo = 1; a1.episodeNo = 1;
+        MediaItem a2 = episodeIn("Alpha", "a2.mkv", 600000, 0); a2.seasonNo = 1; a2.episodeNo = 2;
+        MediaItem a3 = episodeIn("Alpha", "a3.mkv", 600000, 0); a3.seasonNo = 2; a3.episodeNo = 1;
+        MediaItem b1 = episodeIn("Beta",  "b1.mkv", 600000, 1); b1.seasonNo = 1; b1.episodeNo = 1;
+        MediaItem b2 = episodeIn("Beta",  "b2.mkv", 600000, 1); b2.seasonNo = 1; b2.episodeNo = 2;
+        // Deliberately scramble input order
+        d.programmes = { b2, a3, a1, b1, a2 };
+
+        const QVector<Slot> s = generateSlots(d, kBase);
+        check(s.size() >= 5, "all five episodes scheduled");
+        QStringList refs;
+        for (int i = 0; i < 5; ++i) refs << s[i].ref;
+        check(refs == QStringList({"a1.mkv", "a2.mkv", "a3.mkv", "b1.mkv", "b2.mkv"}),
+              "Alpha S1E1..S2E1 then Beta S1E1..S1E2");
+    }
+
     return 0;
 }

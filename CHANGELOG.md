@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — Virtual channels: streamlined settings & couch navigation
+- **Settings → CHANNELS simplified**: trimmed `manifest.json` down to 7 couch-essential rows: `Enabled`, `Manage Channels`, `Media Folder`, `Weather Channel`, `Auto-Scroll Guide` (simple ON/OFF toggle, replacing the 5-state idle menu), `Channel Preview`, and `Guide Music`. Cut background technical knobs (`Schedule Ahead`, `Scan Library at Start`, section headers).
+- **Manage Channels / ChannelSources cleaned up**: streamlined per-channel settings down to core essentials (`Source`, `Type` on custom channels, `Shows` / `Films`, `Order`, `Logo`, `Rebuild`, `Seed From Recipe`, `Rename`, `Delete`).
+- **New couch-friendly Order modes**:
+  - **TV channels**: `Rotating` (shows take turns in episode order), `Shuffle` (random across all shows), `By Airdate` (chronological by original airdate), and `Marathon` (play each series in full before moving to the next).
+  - **Movie channels**: `Shuffle` and `By Release Year` (chronological by release date).
+- **Deadweight shed**: deleted 11 unused/abandoned complex desktop scheduler QML subviews (`PlanEdit`, `BlockEdit`, `Bookings`, `BookingEdit`, `BookingDays`, `Interstitials`, `SourceIdents`, `IdentLevels`, `BannerSettings`, `PoolEditor`, `SourcePick`).
+
 ### Added — Virtual channels: bundled preset network & studio logos (Unit D)
 - **Auto-branded preset channels**: creating a TV Network or Movie Studio preset channel now automatically assigns a matching corner logo (`set_channel_logo` / `preset_logo_for_subject`), using a normalized alias table that maps `library.db` studio/network variants (e.g. `Warner Bros. Television` → `warner-bros.png`, `Williams Street` → `adult-swim.png`) to canonical marks.
 - **38 monochrome white/transparent PNG logos** (`modules/virtual_channels/assets/logos/*.png`), rendered from Wikimedia Commons Public Domain SVGs and attributed in `THANKS.md` (covering major US TV networks, animation/cable brands, and movie studios present in `library.db`).

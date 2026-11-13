@@ -2174,7 +2174,12 @@ void VirtualChannelsBackend::regenerate(int channelNumber) {
     // selection is shuffled. Films do not sit on a clock -- a two-hour film on
     // a half-hour grid is a card holding the remainder every time.
     if (isMovieChannel(o)) {
-        def.order       = playsAPlaylist(o) ? Ordering::AsListed : Ordering::Shuffle;
+        if (playsAPlaylist(o)) {
+            def.order = Ordering::AsListed;
+        } else {
+            const Ordering req = orderingFromString(o.value(QLatin1String("order")).toString());
+            def.order = (req == Ordering::Broadcast) ? Ordering::Broadcast : Ordering::Shuffle;
+        }
         def.gridMinutes = 0;
     }
 
@@ -3767,17 +3772,10 @@ void VirtualChannelsBackend::onPresenceReady(const QString &provider,
 }
 
 // The walk is the module's own setting: the shelves are what the add-flow
-// offers from, but a viewer who turns it off keeps the catalog path and pays
-// no listing cost at launch. Anything but the word off means walk.
+// Always walk the library shelves at launch so presence counts and metadata
+// stay current without exposing a manual toggle in settings.
 bool VirtualChannelsBackend::libraryWalkEnabled() const {
-    QFile f(m_dataRoot + QStringLiteral("/config.json"));
-    if (!f.open(QIODevice::ReadOnly))
-        return true;
-    const QJsonObject modules = QJsonDocument::fromJson(f.readAll()).object()
-                                    .value(QLatin1String("modules")).toObject();
-    const QString mode = modules.value(QLatin1String(kModuleId)).toObject()
-                             .value(QLatin1String("library_walk")).toString();
-    return mode.trimmed() != QStringLiteral("off");
+    return true;
 }
 
 // What the shelves can actually air, in the shape the add-flow's option rows

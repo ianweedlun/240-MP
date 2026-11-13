@@ -16,18 +16,14 @@
       "label": "Manage Channels",
       "type": "submenu",
       "view": "modules/virtual_channels/views/Manage.qml",
-      "description": "Add a channel, or rename, reorder and remove the ones you have."
-    },
-    {
-      "type": "section",
-      "label": "Dial"
+      "description": "Add, edit, reorder, or remove channels."
     },
     {
       "key": "media_directory",
       "label": "Media Folder",
       "type": "directory_browser",
       "default": "",
-      "description": "Where local video lives. Its series and movies folders are the local library; breaks can come from any folder inside it."
+      "description": "Folder for local videos and breaks."
     },
     {
       "key": "channels.weather",
@@ -35,45 +31,14 @@
       "type": "toggle",
       "default": "OFF",
       "requires_module": "com.240mp.weather",
-      "description": "Put the weather station on the dial as a channel of its own."
+      "description": "Include the Weather channel on the dial."
     },
     {
-      "key": "schedule.days",
-      "label": "Schedule Ahead",
-      "type": "list_single",
-      "options_source": "dynamic",
-      "options_slot": "get_schedule_days_options",
-      "default": "2",
-      "description": "How far ahead every channel is built. Topped up nightly and at startup."
-    },
-    {
-      "type": "section",
-      "label": "Shelves"
-    },
-    {
-      "key": "library_walk",
-      "label": "Scan Library at Start",
+      "key": "guide.autoscroll",
+      "label": "Auto-Scroll Guide",
       "type": "toggle",
       "default": "ON",
-      "description": "Look over the shelves once at start so the add-on lists show what is actually watchable, with counts. Shows whose networks the shelves know skip TheTVDB. Turn it off to keep the old catalog lists and pay no start-up scan."
-    },
-    {
-      "type": "section",
-      "label": "Guide"
-    },
-    {
-      "key": "guide.idling",
-      "label": "While Idle",
-      "type": "list_single",
-      "options": [
-        "Keeps Crawling",
-        "Holds · 30s",
-        "Holds · 1m",
-        "Holds · 5m",
-        "Holds · Never"
-      ],
-      "default": "Keeps Crawling",
-      "description": "What the guide does when a channel ends: keeps scrolling into the next programme, or holds the last one and either comes back after a pause or sits on it."
+      "description": "Scroll the guide continuously while idle."
     },
     {
       "key": "guide.preview",
@@ -85,7 +50,7 @@
         "Off"
       ],
       "default": "Video",
-      "description": "What to show of a channel while you pick one on the guide: the program playing, a picture of it, or nothing."
+      "description": "Show live video or artwork while browsing the guide."
     },
     {
       "key": "guide.music",
@@ -93,7 +58,7 @@
       "type": "toggle",
       "default": "OFF",
       "requires_module": "com.240mp.weather",
-      "description": "Play the Weather module's music over the guide. Needs its Music setting on."
+      "description": "Play Weather music over the guide."
     }
   ]
 }
