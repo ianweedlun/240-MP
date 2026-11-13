@@ -1043,9 +1043,9 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
         return;
     }
 
-    QString baseTmp = QStringLiteral("/dev/shm");
-    if (!QFileInfo(baseTmp).isDir() || !QFileInfo(baseTmp).isWritable())
-        baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    QString baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (baseTmp.isEmpty() || !QFileInfo(baseTmp).isDir() || !QFileInfo(baseTmp).isWritable())
+        baseTmp = QStringLiteral("/tmp");
 
     const qint64 pid = QCoreApplication::applicationPid();
     const quint64 seq = ++m_previewSeq;
@@ -1172,6 +1172,12 @@ void VirtualChannelsBackend::set_preview_volume(double volume) {
 void VirtualChannelsBackend::pollPreviewFrames() {
     if (m_previewDir.isEmpty()) return;
     QDir dir(m_previewDir);
+    if (!dir.exists()) {
+        qWarning("[VirtualChannels] preview dir disappeared (%s) — recreating",
+                 qPrintable(m_previewDir));
+        QDir().mkpath(m_previewDir);
+        return;
+    }
     const QStringList files = dir.entryList({QStringLiteral("*.jpg")}, QDir::Files, QDir::Name);
     if (files.size() < 2) return;
     // Second-to-last frame is guaranteed completely written by mpv; purge older ones.
