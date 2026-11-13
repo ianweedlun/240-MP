@@ -35,6 +35,7 @@ private slots:
     void refreshGamesParsesRzipCompressedPlaylist();
     void relativeRomResolvesAgainstRomDir();
     void absoluteRomPassesThrough();
+    void foreignAbsoluteRomRerootsAgainstRomDir();
     void thumbnailFoundInNamedBoxarts();
     void missingThumbnailYieldsEmptyString();
     void thumbnailDbUsesPlaylistBasenameOriginalCase();
@@ -265,6 +266,33 @@ void RetroArchBackendTest::absoluteRomPassesThrough() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
     QCOMPARE(games.at(0).toMap()["romPath"].toString(), QString("/some/where/Absolute.nes"));
+}
+
+void RetroArchBackendTest::foreignAbsoluteRomRerootsAgainstRomDir() {
+    RetroArchBackend *be = makeBackend();
+    const QString romDir = m_tmp.path() + "/ROMs";
+    QDir().mkpath(romDir + "/NES");
+    QFile f(romDir + "/NES/Mario.zip");
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write("dummy");
+        f.close();
+    }
+
+    QJsonArray items;
+    QJsonObject item;
+    item.insert("label", "Super Mario");
+    // Foreign path e.g. from Pi: /home/ian/ROMs/NES/Mario.zip#Mario.nes
+    item.insert("path", "/home/ian/ROMs/NES/Mario.zip#Mario.nes");
+    items.append(item);
+    QJsonObject root;
+    root.insert("items", items);
+    writePlaylist("nes_libretro.json",
+                  QJsonDocument(root).toJson(QJsonDocument::Compact));
+
+    const QVariantList games =
+        be->refreshGames(m_tmp.path() + "/playlists/nes_libretro.json");
+    QCOMPARE(games.at(0).toMap()["romPath"].toString(),
+             romDir + "/NES/Mario.zip#Mario.nes");
 }
 
 void RetroArchBackendTest::thumbnailFoundInNamedBoxarts() {

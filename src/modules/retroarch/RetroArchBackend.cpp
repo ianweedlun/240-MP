@@ -475,16 +475,26 @@ QVariantList RetroArchBackend::parsePlaylist(const QString &path, const QString 
 
 QString RetroArchBackend::resolveRomPath(const QString &playlistPath,
                                          const QString &romPath) const {
-    // Absolute paths are used as-is — the playlist is the source of truth.
-    if (QFileInfo(romPath).isAbsolute()) return romPath;
-
-    // RetroArch stores archive-internal entries as "archive.zip#entry.rom".
-    // The archive part is what must exist on disk; the whole string is what
-    // RetroArch needs to open it (it handles the '#' itself). Check the
-    // archive, not the composite path — QFileInfo treats "zip#entry" as a
-    // literal filename and always reports it missing.
+    // If absolute path does not exist on this machine (e.g. copied from Pi with /home/ian/ROMs),
+    // see if re-rooting against m_romDir makes it exist.
     const int hashAt = romPath.indexOf(QLatin1Char('#'));
     const QString archivePart = (hashAt >= 0) ? romPath.left(hashAt) : romPath;
+
+    if (QFileInfo(romPath).isAbsolute()) {
+        if (QFileInfo(archivePart).exists())
+            return romPath;
+        // Try re-rooting against m_romDir:
+        // /home/ian/ROMs/<Console>/game.zip -> <m_romDir>/<Console>/game.zip
+        const int romsIdx = archivePart.indexOf(QLatin1String("/ROMs/"));
+        if (romsIdx >= 0) {
+            const QString subPath = archivePart.mid(romsIdx + 6); // past "/ROMs/"
+            const QString candidate = QDir(m_romDir).filePath(subPath);
+            if (QFileInfo(candidate).exists()) {
+                return (hashAt >= 0) ? (candidate + romPath.mid(hashAt)) : candidate;
+            }
+        }
+        return romPath;
+    }
 
     auto archiveResolved = [&](const QString &candidate) -> QString {
         // Returns the path to pass to RetroArch when the archive exists at
@@ -527,14 +537,46 @@ QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString
     // leave it as-is — RetroArch won't find the core without an explicit path.
     // Fall back to the playlist's default_core_path, which RetroArch wrote when
     // the playlist was created.
-    if (corePath == "DETECT" && !defaultCorePath.isEmpty()) {
-        return defaultCorePath;
+    QString candidate = (corePath == "DETECT" && !defaultCorePath.isEmpty())
+                        ? defaultCorePath : corePath;
+
+    // Cross-platform re-resolution:
+    // If a playlist was authored on Linux (.so) or points to an absolute path that
+    // does not exist on this machine (e.g. /home/ian/.config/retroarch/cores/nestopia_libretro.so
+    // on macOS, where cores are .dylib in ~/Library/Application Support/RetroArch/cores),
+    // check if a native core exists in RetroArch's core directory or beside it.
+    if (!candidate.isEmpty() && candidate != QLatin1String("DETECT")) {
+        const QFileInfo fi(candidate);
+        if (!fi.exists()) {
+            const QString baseCore = fi.completeBaseName(); // e.g. nestopia_libretro
+#if defined(Q_OS_MACOS)
+            const QString targetExt = QStringLiteral(".dylib");
+#elif defined(Q_OS_WIN)
+            const QString targetExt = QStringLiteral(".dll");
+#else
+            const QString targetExt = QStringLiteral(".so");
+#endif
+            const QString nativeName = baseCore.endsWith(QStringLiteral("_libretro"))
+                                       ? (baseCore + targetExt)
+                                       : (baseCore + QStringLiteral("_libretro") + targetExt);
+
+            // 1. Check inside retroarch config's cores directory:
+            const QString cfgCoreDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
+                                       + QStringLiteral("/retroarch/cores");
+            const QString cand1 = QDir(cfgCoreDir).filePath(nativeName);
+            if (QFileInfo::exists(cand1)) return cand1;
+
+            // 2. On macOS RetroArch, check Application Support/RetroArch/cores:
+#if defined(Q_OS_MACOS)
+            const QString macCoreDir = QDir::homePath()
+                                       + QStringLiteral("/Library/Application Support/RetroArch/cores");
+            const QString cand2 = QDir(macCoreDir).filePath(nativeName);
+            if (QFileInfo::exists(cand2)) return cand2;
+#endif
+        }
     }
-    // Absolute: pass through. Relative filename: pass through too — RetroArch
-    // resolves it against its own core directory (core_directory setting),
-    // which is exactly where a user-installed core lives. Guessing a path
-    // ourselves would break on any install layout we haven't anticipated.
-    return corePath;
+
+    return candidate;
 }
 
 QString RetroArchBackend::findThumbnail(const QString &gameName,
@@ -631,22 +673,23 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     qInfo("[RetroArch] launching %s with args: %s",
           qPrintable(m_retroarchPath), qPrintable(args.join(QStringLiteral(" "))));
 
-    // Same hand-off as mpv: acquire the display, let RetroArch take the
-    // console, release (deferred — see DisplayHandoff's load-bearing ordering
-    // comment) once the process exits.
-    if (m_handoff && m_handoff->acquire(QLatin1String("retroarch")) < 0) {
-        qWarning("[RetroArch] Cannot start: %s has the screen",
-                 qPrintable(m_handoff->currentOwner()));
-        return;
-    }
-    if (m_handoff && !m_handoff->savedStateValid()) {
-        // A script-launcher can decline here; mpv deliberately cannot.
-        // RetroArch is closer to the script case — we'd be stranding the
-        // console with no way back if the restore can't restore.
-        qWarning("[RetroArch] CRTC state not captured — refusing to launch "
-                 "(restore could leave a black screen)");
-        m_handoff->releaseNow(QLatin1String("retroarch"));
-        return;
+    int vt = 0;
+    if (m_handoff) {
+        vt = m_handoff->acquire(QLatin1String("retroarch"));
+        if (vt < 0) {
+            qWarning("[RetroArch] Cannot start: %s has the screen",
+                     qPrintable(m_handoff->currentOwner()));
+            return;
+        }
+        if (vt > 0 && !m_handoff->savedStateValid()) {
+            // A script-launcher can decline here; mpv deliberately cannot.
+            // RetroArch is closer to the script case — we'd be stranding the
+            // console with no way back if the restore can't restore.
+            qWarning("[RetroArch] CRTC state not captured — refusing to launch "
+                     "(restore could leave a black screen)");
+            m_handoff->releaseNow(QLatin1String("retroarch"));
+            return;
+        }
     }
 
     QProcess *process = new QProcess(this);
