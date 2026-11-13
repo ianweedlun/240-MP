@@ -14,7 +14,7 @@ name: Pi RC deploy (pre-merge PR test)
 
 on:
   pull_request:
-    actions: [opened, labeled, synchronize, reopened, closed]
+    types: [opened, labeled, synchronize, reopened, closed]
 
 jobs:
   pi-rc:
