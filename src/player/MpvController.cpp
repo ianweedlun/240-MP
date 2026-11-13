@@ -134,7 +134,10 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
 MpvController::~MpvController() {
     if (m_process && m_process->state() != QProcess::NotRunning) {
         m_process->terminate();
-        m_process->waitForFinished(2000);
+        if (!m_process->waitForFinished(2000)) {
+            m_process->kill();
+            m_process->waitForFinished(500);
+        }
     }
     // Quitting mid-playback on a headless Pi used to leave the VT switched away
     // and DRM master dropped — a black screen or a stray text console. Restore
@@ -168,7 +171,10 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         m_process->disconnect();
         if (m_process->state() != QProcess::NotRunning) {
             m_process->terminate();
-            m_process->waitForFinished(1000);
+            if (!m_process->waitForFinished(1000)) {
+                m_process->kill();
+                m_process->waitForFinished(500);
+            }
         }
         m_process->deleteLater();
         m_process = nullptr;
@@ -784,10 +790,12 @@ void MpvController::onProcessFinished() {
         // DisplayHandoff defers the DRM restore and VT switch (200 ms by
         // default) because mpv's last KMS atomic commit may still be pending in
         // the vc4 driver at the moment the process exits.
+        QPointer<MpvController> self = this;
         m_handoff->releaseDeferred(QLatin1String(kHandoffOwner),
-                                   [this, pos, dur, reason]() {
-            m_headlessMode = false;
-            emit playbackEnded(pos, dur, reason);
+                                   [self, pos, dur, reason]() {
+            if (!self) return;
+            self->m_headlessMode = false;
+            emit self->playbackEnded(pos, dur, reason);
         });
     } else {
         emit playbackEnded(pos, dur, reason);
