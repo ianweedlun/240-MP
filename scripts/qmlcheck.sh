@@ -14,11 +14,17 @@ if [ ! -x "$LINT" ]; then
   exit 2
 fi
 
+if [ "$#" -eq 0 ]; then
+  mapfile -t files < <(find views modules -name '*.qml' 2>/dev/null | sort)
+else
+  files=("$@")
+fi
+
 bad=0
-for f in "$@"; do
+for f in "${files[@]}"; do
   out=$("$LINT" -I modules --bare "$f" 2>&1 \
         | grep -E ':[0-9]+:[0-9]+:' | grep -vE '^(Warning|Info):')
   if [ -n "$out" ]; then bad=1; echo "=== $f ==="; echo "$out"; fi
 done
-[ "$bad" = 0 ] && echo "QML OK (${#} file(s))"
+[ "$bad" = 0 ] && echo "QML OK (${#files[@]} file(s))"
 exit $bad

@@ -646,6 +646,7 @@ FocusScope {
         interactive: false
 
         delegate: Item {
+            id: itemDelegate
             width: itemList.width
             height: root.sh * 0.065
 
@@ -687,7 +688,7 @@ FocusScope {
             }
 
             Text {
-                text: modelData.label
+                text: itemDelegate.modelData.label
                 color: parent.selected ? root.surfaceColor
                                        : (parent.on ? root.primaryColor : root.tertiaryColor)
                 font.family: root.globalFont
@@ -703,7 +704,7 @@ FocusScope {
 
             Text {
                 id: subText
-                text: modelData.sub || (browserRoot.canDescend ? "►" : "")
+                text: itemDelegate.modelData.sub || (browserRoot.canDescend ? "►" : "")
                 color: parent.selected ? root.surfaceColor : root.tertiaryColor
                 font.family: root.globalFont
                 anchors.verticalCenter: parent.verticalCenter

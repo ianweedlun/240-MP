@@ -932,6 +932,7 @@ FocusScope {
             Repeater {
                 model: parent.rowData ? parent.rowData.blocks : []
                 delegate: Item {
+                    id: blockDelegate
                     required property var modelData
 
                     readonly property real rawX: (modelData.startMs - guideRoot.fromMs) * guideRoot.pxPerMs
@@ -947,7 +948,7 @@ FocusScope {
 
                     Rectangle {
                         anchors.fill: parent
-                        color: modelData.onNow ? root.secondaryColor : root.surfaceColor
+                        color: blockDelegate.modelData.onNow ? root.secondaryColor : root.surfaceColor
                     }
                     Rectangle {
                         x: parent.width - 1; y: 0; width: 1; height: parent.height
@@ -960,13 +961,13 @@ FocusScope {
                         anchors.rightMargin: root.sw * 0.003125
                         verticalAlignment: Text.AlignVCenter
                         text: {
-                            var base = modelData.series
-                                       ? modelData.series + ": " + modelData.title
-                                       : modelData.title
-                            return modelData.count > 1 ? base + "  +" + (modelData.count - 1)
+                            var base = blockDelegate.modelData.series
+                                       ? blockDelegate.modelData.series + ": " + blockDelegate.modelData.title
+                                       : blockDelegate.modelData.title
+                            return blockDelegate.modelData.count > 1 ? base + "  +" + (blockDelegate.modelData.count - 1)
                                                        : base
                         }
-                        color: modelData.onNow ? root.surfaceColor : root.primaryColor
+                        color: blockDelegate.modelData.onNow ? root.surfaceColor : root.primaryColor
                         font.family: root.globalFont
                         font.capitalization: Font.AllUppercase
                         elide: Text.ElideRight
