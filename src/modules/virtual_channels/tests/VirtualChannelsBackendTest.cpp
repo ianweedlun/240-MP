@@ -2157,13 +2157,22 @@ void testPlexTvGenreSeedFiltersShows() {
     check(ch >= 0, "preset channel created");
 
     bool seeded = false, ok = false;
+    int matchCountInSignal = -1;
     QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
                      [&](int num, bool s, const QString &) {
-                         if (num == ch) { seeded = true; ok = s; }
+                         if (num == ch) {
+                             seeded = true;
+                             ok = s;
+                             matchCountInSignal = b.channel_source_config(ch)
+                                                      .value(QStringLiteral("match"))
+                                                      .toStringList().size();
+                         }
                      });
     b.seed_preset_channel(ch);
     for (int i = 0; i < 40 && !seeded; ++i) spin(10);
     check(seeded && ok, "Horror TV genre seed completed");
+    checkEq(matchCountInSignal, 1,
+            "channel_source_config already has seeded picks when presetSeeded fires");
 
     const QJsonObject raw = fx.read(ch);
     const QJsonArray progs = raw.value(QStringLiteral("programmes")).toArray();

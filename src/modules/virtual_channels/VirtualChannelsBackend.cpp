@@ -4694,6 +4694,10 @@ void VirtualChannelsBackend::finishSeeding() {
         const int total = int(onNames.size()) + added;
         qInfo("[VirtualChannels] channel %d seeded from its recipe: %d pick(s) on the dial",
               channelNumber, total);
+        if (!writeChannels(channels)) {
+            emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
+            return;
+        }
         emit presetSeeded(channelNumber, total > 0,
                           total > 0 ? QStringLiteral("%1 %2")
                                         .arg(total)
@@ -4703,7 +4707,6 @@ void VirtualChannelsBackend::finishSeeding() {
         break;
     }
     if (!found) emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
-    else if (!writeChannels(channels)) emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
 }
 
 QVariantList VirtualChannelsBackend::media_folders(int maxDepth) {

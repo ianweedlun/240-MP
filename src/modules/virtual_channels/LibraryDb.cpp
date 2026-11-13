@@ -400,29 +400,42 @@ bool LibraryDb::applyPresenceRows(const QVariantList &rows, QString *why) {
         const QString channel = m.value(QStringLiteral("channel")).toString();
         const int count = m.value(QStringLiteral("count")).toInt();
         if (kind.isEmpty() || value.isEmpty() || channel.isEmpty() || count <= 0) continue;
-        // Two statements: place it, then raise the standing count to the larger
-        // of the two — SQLite has no per-field max inside INSERT OR REPLACE,
-        // and the CASE keeps whichever count a case-variant row already carried.
-        QSqlQuery put(db);
-        if (!put.prepare(QStringLiteral("INSERT INTO subjects (kind, value, channel, count) VALUES (:k, :v, :c, :n)"))) {
-            db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false;
+        // Update an existing case-insensitive row if present, and only insert
+        // when absent — inserting unconditionally created duplicate rows like
+        // both "Baseball" (from item tags) and "BASEBALL" (from load_collections).
+        QSqlQuery find(db);
+        if (!find.prepare(QStringLiteral(
+                "SELECT count FROM subjects"
+                " WHERE kind = :k AND channel = :c AND value COLLATE NOCASE = :v LIMIT 1"))) {
+            db.rollback(); if (why) *why = QStringLiteral("collection row lookup failed"); return false;
         }
-        put.bindValue(QStringLiteral(":k"), kind);
-        put.bindValue(QStringLiteral(":v"), value);
-        put.bindValue(QStringLiteral(":c"), channel);
-        put.bindValue(QStringLiteral(":n"), count);
-        if (!put.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false; }
-        QSqlQuery raise(db);
-        if (!raise.prepare(QStringLiteral(
-            "UPDATE subjects SET count = CASE WHEN count > :n THEN count ELSE :n END"
-            " WHERE kind = :k AND channel = :c AND value COLLATE NOCASE = :v"))) {
-            db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false;
+        find.bindValue(QStringLiteral(":k"), kind);
+        find.bindValue(QStringLiteral(":c"), channel);
+        find.bindValue(QStringLiteral(":v"), value);
+        if (!find.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row lookup failed"); return false; }
+        if (find.next()) {
+            QSqlQuery raise(db);
+            if (!raise.prepare(QStringLiteral(
+                "UPDATE subjects SET count = CASE WHEN count > :n THEN count ELSE :n END"
+                " WHERE kind = :k AND channel = :c AND value COLLATE NOCASE = :v"))) {
+                db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false;
+            }
+            raise.bindValue(QStringLiteral(":k"), kind);
+            raise.bindValue(QStringLiteral(":c"), channel);
+            raise.bindValue(QStringLiteral(":v"), value);
+            raise.bindValue(QStringLiteral(":n"), count);
+            if (!raise.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false; }
+        } else {
+            QSqlQuery put(db);
+            if (!put.prepare(QStringLiteral("INSERT INTO subjects (kind, value, channel, count) VALUES (:k, :v, :c, :n)"))) {
+                db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false;
+            }
+            put.bindValue(QStringLiteral(":k"), kind);
+            put.bindValue(QStringLiteral(":v"), value);
+            put.bindValue(QStringLiteral(":c"), channel);
+            put.bindValue(QStringLiteral(":n"), count);
+            if (!put.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row write failed"); return false; }
         }
-        raise.bindValue(QStringLiteral(":k"), kind);
-        raise.bindValue(QStringLiteral(":c"), channel);
-        raise.bindValue(QStringLiteral(":v"), value);
-        raise.bindValue(QStringLiteral(":n"), count);
-        if (!raise.exec()) { db.rollback(); if (why) *why = QStringLiteral("collection row raise failed"); return false; }
     }
     if (!db.commit()) { if (why) *why = QStringLiteral("collection rows commit failed"); return false; }
     return true;

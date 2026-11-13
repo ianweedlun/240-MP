@@ -763,7 +763,7 @@ void MediaServerSource::onItemsLoaded(const QVariant &items) {
                 if (shelf <= 0) shelf = m.value(QStringLiteral("leafCount")).toInt();
                 m_presenceSubjectRows.append(QVariantMap{
                     {QStringLiteral("kind"), QStringLiteral("collection")},
-                    {QStringLiteral("channel"), QStringLiteral("movies")},
+                    {QStringLiteral("channel"), m_presenceSide},
                     {QStringLiteral("value"), name},
                     {QStringLiteral("count"), qMax(1, shelf)}});
                 continue;

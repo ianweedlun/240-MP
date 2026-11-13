@@ -71,6 +71,14 @@ int runLibraryDbTests() {
                         QStringLiteral("jf-101"), "browseItems preserves jellyfin itemId");
         const QVariantList plexMov = db.browseItems(QStringLiteral("plex"), QStringLiteral("movies"));
         vtest::checkEq(plexMov.size(), 1, "browseItems returns plex movie");
+        vtest::check(db.applyPresenceRows({
+            QVariantMap{{"kind", "collection"}, {"channel", "movies"}, {"value", "Baseball"}, {"count", 3}},
+            QVariantMap{{"kind", "collection"}, {"channel", "movies"}, {"value", "BASEBALL"}, {"count", 5}},
+        }), "applyPresenceRows merges case-insensitively");
+        const QVariantList movColls = db.presence(QStringLiteral("collection"), QStringLiteral("movies"), 20);
+        vtest::checkEq(movColls.size(), 1, "applyPresenceRows does not duplicate Baseball/BASEBALL");
+        vtest::checkEq(movColls.value(0).toMap().value(QStringLiteral("count")).toInt(), 5,
+                       "applyPresenceRows raises count on existing row");
 
         // Deduped by (side, lower(title)): one Scrubs row, so Comedy counts ONCE
         // even though two servers carry it.
