@@ -1044,9 +1044,13 @@ void VirtualChannelsBackend::start_preview_video(const QString &url,
          << QStringLiteral("--vo-image-format=jpg")
          << QStringLiteral("--vo-image-jpeg-quality=80")
          << QStringLiteral("--vo-image-outdir=") + m_previewDir
-         << QStringLiteral("--volume=") + QString::number(volPct)
-         << QStringLiteral("--mute=") + (volPct <= 0 ? QStringLiteral("yes") : QStringLiteral("no"))
          << QStringLiteral("--input-ipc-server=") + m_previewIpcPath;
+    if (volPct <= 0) {
+        args << QStringLiteral("--no-audio");
+    } else {
+        args << QStringLiteral("--volume=") + QString::number(volPct)
+             << QStringLiteral("--mute=no");
+    }
     if (positionMs > 0)
         args << QStringLiteral("--start=") + QString::number(positionMs / 1000.0, 'f', 3);
     args << url;

@@ -28,7 +28,10 @@ FocusScope {
     property string previewMode: "VIDEO"
 
     property int masterVolume: 100
-    property bool guideMusicOn: false
+    readonly property bool guideMusicOn:
+        typeof weatherBackend !== "undefined" && weatherBackend && weatherBackend.musicPlaying
+
+    onGuideMusicOnChanged: applyVolume()
 
     readonly property bool previewAudible:
         !guideMusicOn && previewShowsVideo
@@ -315,8 +318,6 @@ FocusScope {
             }
         }
         refreshNowPlaying()
-        previewSettle.restart()
-        if (autoScrollEnabled && resumeSeconds > 0) resumeTimer.restart()
 
         if (idleTracker) idleTracker.mpvActive = true
 
@@ -324,11 +325,12 @@ FocusScope {
             var wasPlaying = weatherBackend.musicPlaying
             weatherBackend.startMusic()
             musicStartedHere = !wasPlaying && weatherBackend.musicPlaying
-            guideMusicOn = weatherBackend.musicPlaying
             applyVolume()
             if (!weatherBackend.musicPlaying)
                 status = "Music needs the Weather module's Music setting on"
         }
+        previewSettle.restart()
+        if (autoScrollEnabled && resumeSeconds > 0) resumeTimer.restart()
     }
 
     Component.onDestruction: {
@@ -867,7 +869,7 @@ FocusScope {
 
                     x: guideRoot.channelColW + snappedX
                     y: 0
-                    width: Math.max(0, snappedRight - snappedX - 1)
+                    width: Math.max(0, snappedRight - snappedX)
                     height: parent.height - 1
                     visible: width > 2
 
