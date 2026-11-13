@@ -48,8 +48,12 @@ private Q_SLOTS:
     void testFactoryAlwaysSucceeds() {
         auto mixer = makeSystemVolumeMixer();
         QVERIFY(mixer != nullptr);
-        // On WSL/CI neither wpctl nor amixer exists, so we get the no-op.
-        QCOMPARE(mixer->backendName(), QStringLiteral("none"));
+        // On machines without audio daemons (WSL/CI containers) it falls back to none;
+        // on real hardware with ALSA or PipeWire, it selects that backend.
+        const QString name = mixer->backendName();
+        QVERIFY(name == QStringLiteral("none") ||
+                name == QStringLiteral("alsa") ||
+                name == QStringLiteral("pipewire"));
     }
 
     // The factory's choice is stable across repeated calls.
