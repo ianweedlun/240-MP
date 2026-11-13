@@ -588,6 +588,8 @@ FocusScope {
             Image {
                 id: previewStill
                 anchors.fill: parent
+                sourceSize.width: width
+                sourceSize.height: height
                 source: guideRoot.previewImage
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true

@@ -11,6 +11,8 @@ Item {
         id: boxart
         visible: gamePreview.game.thumbnail && gamePreview.game.thumbnail !== ""
         anchors.fill: parent
+        sourceSize.width: width
+        sourceSize.height: height
         fillMode: Image.PreserveAspectFit
         source: gamePreview.game.thumbnail
         asynchronous: true
