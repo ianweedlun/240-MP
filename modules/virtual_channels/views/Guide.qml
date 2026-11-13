@@ -286,7 +286,7 @@ FocusScope {
             } else {
                 autoScrollEnabled = true
                 autoScroll = false
-                resumeSeconds = 5
+                resumeSeconds = 30
             }
         } else {
             autoScrollEnabled = toggleOn("guide.autoscroll", true)
@@ -314,7 +314,7 @@ FocusScope {
         }
         refreshNowPlaying()
         previewSettle.restart()
-        if (autoScrollEnabled && resumeSeconds > 0) idleTimer.restart()
+        if (autoScrollEnabled && resumeSeconds > 0) resumeTimer.restart()
 
         if (idleTracker) idleTracker.mpvActive = true
 
