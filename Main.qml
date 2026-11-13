@@ -357,7 +357,13 @@ Window {
                     root.appCurrentParams = {}
                     return
                 }
+                var returnTo = (root.appCurrentParams && root.appCurrentParams.returnTo) ? String(root.appCurrentParams.returnTo) : ""
                 var prev = root.appNavStack.pop()
+                if (returnTo !== "") {
+                    while (root.appNavStack.length > 0 && String(prev.source).indexOf("/" + returnTo) < 0) {
+                        prev = root.appNavStack.pop()
+                    }
+                }
                 root.appCurrentParams = prev.params
                 logState("back", "restore=" + prev.source + " stack=" + root.appNavStack.length)
                 moduleLoader.setSource(prev.source, { "navParams": prev.params, "navListState": prev.listState || {} })

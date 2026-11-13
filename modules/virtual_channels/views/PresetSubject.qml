@@ -89,7 +89,8 @@ FocusScope {
                     moduleId:      subjectRoot.moduleId,
                     channelNumber: subjectRoot.seedChannel,
                     channelName:   subjectRoot.seedName,
-                    seedSummary:   message
+                    seedSummary:   message,
+                    returnTo:      "Manage.qml"
                 }, {})
             } else {
                 // Nothing filled the channel, so nothing goes on the dial.
