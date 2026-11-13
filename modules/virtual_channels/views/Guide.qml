@@ -183,7 +183,7 @@ FocusScope {
     }
 
     function refreshNowPlaying() {
-        if (autoScroll) { nowPlaying = ({}); detailFor = -1; return }
+        if (!showDetail) { nowPlaying = ({}); detailFor = -1; return }
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
@@ -193,9 +193,14 @@ FocusScope {
     }
 
     function refreshDetail() {
+        if (!showDetail) {
+            stopPreview()
+            nowPlaying = ({})
+            detailFor = -1
+            return
+        }
         stopPreview()
-        if (showDetail) previewSettle.restart()
-        if (autoScroll) { nowPlaying = ({}); detailFor = -1; return }
+        previewSettle.restart()
         var i = channelRows.currentIndex
         if (i < 0 || i >= rows.length) { nowPlaying = ({}); detailFor = -1; return }
         var row = rows[i]
@@ -217,7 +222,7 @@ FocusScope {
     }
 
     readonly property real edgeMargin: Math.round(root.sw * 0.045)
-    readonly property real topMargin:  root.sh * 0.055
+    readonly property real topMargin:  Math.round(root.sh * 0.055)
 
     focus: true
 
@@ -291,7 +296,7 @@ FocusScope {
             } else {
                 autoScrollEnabled = true
                 autoScroll = false
-                resumeSeconds = 30
+                resumeSeconds = 5
             }
         } else {
             autoScrollEnabled = toggleOn("guide.autoscroll", true)
@@ -378,8 +383,7 @@ FocusScope {
         windowOffset = 0
         refresh()
         autoScroll = true
-        stopPreview()
-        refreshDetail()
+        if (!showDetail) refreshDetail()
     }
 
     function takeControl() {
@@ -519,9 +523,9 @@ FocusScope {
     readonly property real rowH:        Math.round(root.sh * 0.10)
     readonly property real headerH:     Math.round(root.sh * 0.075)
 
-    readonly property bool showDetail:  !autoScroll && rows.length > 0
+    readonly property bool showDetail:  rows.length > 0 && (previewShowsPicture || !autoScroll)
     onShowDetailChanged: if (!showDetail) stopPreview()
-    readonly property real detailH:     showDetail ? height * 0.42 : 0
+    readonly property real detailH:     showDetail ? Math.round(height * 0.42) : 0
 
     Rectangle {
         anchors.fill: parent
@@ -584,6 +588,11 @@ FocusScope {
             Text {
                 id: channelLine
                 text: {
+                    var target = guideRoot.detailFor
+                    for (var j = 0; j < guideRoot.rows.length; j++) {
+                        if (guideRoot.rows[j].number === target)
+                            return "CH " + guideRoot.rows[j].number + "  " + guideRoot.rows[j].name
+                    }
                     var i = channelRows.currentIndex
                     if (guideRoot.rows.length > 0 && i >= 0) {
                         var r = guideRoot.rows[i % guideRoot.rows.length]
@@ -785,8 +794,8 @@ FocusScope {
         x: guideRoot.edgeMargin
         y: header.y + header.height
         width: guideRoot.gridWidth
-        height: guideRoot.height - y
-                - (guideRoot.autoScroll ? guideRoot.topMargin * 0.5 : root.sh * 0.06)
+        height: Math.round(guideRoot.height - y
+                           - (guideRoot.autoScroll ? guideRoot.topMargin * 0.5 : root.sh * 0.06))
         clip: true
         interactive: false
         currentIndex: 0
@@ -826,11 +835,11 @@ FocusScope {
                 color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, 0.13)
             }
 
-            // 1px grid hairlines: left, right, bottom, and channel-column divider.
-            Rectangle { x: 0; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
-            Rectangle { x: guideRoot.channelColW - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
-            Rectangle { x: parent.width - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
-            Rectangle { x: 0; y: parent.height - 1; width: parent.width; height: 1; color: root.tertiaryColor }
+            // 1px grid hairlines on top (z: 2) so selected row keeps identical borders.
+            Rectangle { z: 2; x: 0; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: guideRoot.channelColW - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: parent.width - 1; y: 0; width: 1; height: parent.height; color: root.tertiaryColor }
+            Rectangle { z: 2; x: 0; y: parent.height - 1; width: parent.width; height: 1; color: root.tertiaryColor }
 
             Text {
                 id: chNum
