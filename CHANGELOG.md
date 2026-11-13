@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — Virtual channels: bundled preset network & studio logos (Unit D)
+- **Auto-branded preset channels**: creating a TV Network or Movie Studio preset channel now automatically assigns a matching corner logo (`set_channel_logo` / `preset_logo_for_subject`), using a normalized alias table that maps `library.db` studio/network variants (e.g. `Warner Bros. Television` → `warner-bros.png`, `Williams Street` → `adult-swim.png`) to canonical marks.
+- **38 monochrome white/transparent PNG logos** (`modules/virtual_channels/assets/logos/*.png`), rendered from Wikimedia Commons Public Domain SVGs and attributed in `THANKS.md` (covering major US TV networks, animation/cable brands, and movie studios present in `library.db`).
+- **Seamless user override**: `list_logos()` and `logo_path()` resolve `<dataRoot>/logos` first and fall back to the bundled `assets/logos/` directory, so user-dropped files override bundled marks by filename and bundled marks remain selectable in `LogoPicker`.
+- Test surface: new `testPresetLogos()` in `VirtualChannelsBackendTest` verifying bundled fallback, user override precedence, deduplicated `list_logos()`, alias normalization, and `create_preset_channel()` auto-branding (network/studio only, never Genre). Full suite **14/14 green**.
+
 ### Added — CHANNELS: the dial reads its shelves
 - **Local library index + launch walk**: the module looks its shelves over once at start ("Scan Library at Start", on by default in the new Shelves section), so the add-on lists offer only what is actually watchable — ordered by how many titles carry each category, count beside every row ("12 shows") — instead of an alphabetic catalog list of things nobody owns. A fresh app, an un-scanned app, and a viewer who turns it off keep the old lists byte for byte. A server that stays offline keeps its last-known lineup instead of darkening its channels; boxset shelves contribute their real counts; a genre nobody has stops being offered rather than sitting at a stale count.
 - **Network questions the shelves answer skip TheTVDB**: a show the walk saw a network for answers from the catalog's own network listing, so a seed pays zero searches for it — cold or warm, across boots. Answers TheTVDB does provide are taught back into the index, so a seed never re-pays a question it already asked.

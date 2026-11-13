@@ -2319,6 +2319,69 @@ void testAllRecipesFilterByLibraryDb() {
              QStringLiteral("NBC"), "tvstudios returns NBC, not movie 20th Century Fox");
 }
 
+void testPresetLogos() {
+    section("Backend: bundled preset logos resolve, allow user override, and auto-brand network/studio presets");
+
+    QTemporaryDir appRoot;
+    QTemporaryDir dataRoot;
+    const QString bundledDir = appRoot.path() + QStringLiteral("/modules/virtual_channels/assets/logos");
+    QDir().mkpath(bundledDir);
+    const QString userDir = dataRoot.path() + QStringLiteral("/logos");
+    QDir().mkpath(userDir);
+
+    auto touch = [](const QString &p) {
+        QFile f(p);
+        check(f.open(QIODevice::WriteOnly), "created fixture logo");
+        f.write("PNG");
+    };
+    touch(bundledDir + QStringLiteral("/warner-bros.png"));
+    touch(bundledDir + QStringLiteral("/adult-swim.png"));
+    touch(bundledDir + QStringLiteral("/nbc.png"));
+    touch(userDir + QStringLiteral("/warner-bros.png"));
+    touch(userDir + QStringLiteral("/custom.png"));
+
+    VirtualChannelsBackend b(appRoot.path(), dataRoot.path(), nullptr);
+
+    // User-dropped file overrides bundled file of the same name
+    checkStr(b.logo_path(QStringLiteral("warner-bros.png")),
+             userDir + QStringLiteral("/warner-bros.png"),
+             "user logo overrides bundled logo");
+    checkStr(b.logo_path(QStringLiteral("adult-swim.png")),
+             bundledDir + QStringLiteral("/adult-swim.png"),
+             "bundled logo resolves when not in user dir");
+
+    // list_logos merges both without duplicates
+    const QVariantList listed = b.list_logos();
+    checkEq(listed.size(), 4, "list_logos merges user + bundled without duplicates");
+
+    // Alias + normalization matching
+    checkStr(b.preset_logo_for_subject(1, QStringLiteral("Warner Bros. Television")),
+             QStringLiteral("warner-bros.png"), "studio variant maps to warner-bros.png");
+    checkStr(b.preset_logo_for_subject(1, QStringLiteral("Williams Street")),
+             QStringLiteral("adult-swim.png"), "Williams Street maps to adult-swim.png");
+    checkStr(b.preset_logo_for_subject(1, QStringLiteral("NBC")),
+             QStringLiteral("nbc.png"), "exact network maps to nbc.png");
+    checkStr(b.preset_logo_for_subject(0, QStringLiteral("NBC")),
+             QString(), "Genre presets do not auto-brand");
+    checkStr(b.preset_logo_for_subject(1, QStringLiteral("Nonexistent Studio")),
+             QString(), "unmatched studio returns empty");
+
+    // create_preset_channel auto-assigns logo for network/studio presets only
+    const int chWb = b.create_preset_channel(1, QStringLiteral("WB"),
+                                             QStringLiteral("Warner Bros. Television"),
+                                             QStringLiteral("tv"));
+    check(chWb > 0, "created WB preset channel");
+    checkStr(b.channel_logo(chWb), QStringLiteral("warner-bros.png"),
+             "network/studio preset auto-assigns logo");
+
+    const int chGenre = b.create_preset_channel(0, QStringLiteral("Comedy"),
+                                                QStringLiteral("Comedy"),
+                                                QStringLiteral("tv"));
+    check(chGenre > 0, "created Comedy genre channel");
+    checkStr(b.channel_logo(chGenre), QString(),
+             "genre preset leaves channel logo empty");
+}
+
 int runVirtualChannelsBackendTests() {
     testLocalFilmInProgrammePool();
     testOneBadRowDoesNotBlockThePool();
@@ -2369,6 +2432,7 @@ int runVirtualChannelsBackendTests() {
     testSurfLeavesTheLastProgrammesWritesBehind();
     testPreviewNeverWrites();
     testChannelLogoStyle();
+    testPresetLogos();
     testSpecialNumbersNeverCollide();
 
     vtest::section("Preset kind type contract");
