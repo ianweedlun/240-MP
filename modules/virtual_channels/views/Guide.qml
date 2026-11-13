@@ -211,7 +211,7 @@ FocusScope {
         return m > 0 ? m + "M " + (sec > 0 ? sec + "S" : "") : sec + "S"
     }
 
-    readonly property real edgeMargin: root.sw * 0.045
+    readonly property real edgeMargin: Math.round(root.sw * 0.045)
     readonly property real topMargin:  root.sh * 0.055
 
     focus: true
@@ -240,14 +240,6 @@ FocusScope {
                        blocks: [{ startMs: fromMs, durMs: spanMs,
                                   title: "Local Forecast", series: "",
                                   ep: "", onNow: true }] })
-        // The dial's own editor row: pressing Return on it walks into the
-        // channel manager, where channels get built, reordered and added.
-        all.push({ number: virtualChannelsBackend.manage_channel_number(),
-                   name: "Manage Channels", isSpecial: true,
-                   viewPath: manageView,
-                   blocks: [{ startMs: fromMs, durMs: spanMs,
-                              title: "Edit The Dial", series: "",
-                              ep: "", onNow: true }] })
         all.sort(function(a, b) { return a.number - b.number })
         rows = all
     }
@@ -505,12 +497,12 @@ FocusScope {
         }
     }
 
-    readonly property real gridWidth:   width - edgeMargin * 2
-    readonly property real channelColW: gridWidth * 0.30
+    readonly property real gridWidth:   Math.round(width - edgeMargin * 2)
+    readonly property real channelColW: Math.round(gridWidth * 0.30)
     readonly property real timeAreaW:   gridWidth - channelColW
     readonly property real pxPerMs:     timeAreaW / spanMs
-    readonly property real rowH:        root.sh * 0.10
-    readonly property real headerH:     root.sh * 0.075
+    readonly property real rowH:        Math.round(root.sh * 0.10)
+    readonly property real headerH:     Math.round(root.sh * 0.075)
 
     readonly property bool showDetail:  !autoScroll && rows.length > 0
     onShowDetailChanged: if (!showDetail) stopPreview()
@@ -830,12 +822,13 @@ FocusScope {
                     required property var modelData
 
                     readonly property real rawX: (modelData.startMs - guideRoot.fromMs) * guideRoot.pxPerMs
-                    readonly property real clippedX: Math.max(0, rawX)
+                    readonly property int  snappedX: Math.round(Math.max(0, rawX))
                     readonly property real rawRight: (modelData.startMs + modelData.durMs - guideRoot.fromMs) * guideRoot.pxPerMs
+                    readonly property int  snappedRight: Math.round(Math.min(guideRoot.timeAreaW, rawRight))
 
-                    x: guideRoot.channelColW + clippedX
+                    x: guideRoot.channelColW + snappedX
                     y: 1
-                    width: Math.max(0, Math.min(guideRoot.timeAreaW, rawRight) - clippedX) - 1
+                    width: Math.max(0, snappedRight - snappedX - 1)
                     height: parent.height - 2
                     visible: width > 2
 
@@ -898,7 +891,7 @@ FocusScope {
         opacity: 0.6
         y: channelRows.y
         x: guideRoot.edgeMargin + guideRoot.channelColW
-           + (guideRoot.nowMs - guideRoot.fromMs) * guideRoot.pxPerMs
+           + Math.round((guideRoot.nowMs - guideRoot.fromMs) * guideRoot.pxPerMs)
         visible: guideRoot.rows.length > 0
                  && guideRoot.nowMs >= guideRoot.fromMs
                  && guideRoot.nowMs < guideRoot.fromMs + guideRoot.spanMs

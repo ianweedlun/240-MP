@@ -20,6 +20,7 @@
 #include "ScheduleGenerator.h"
 #include "TrackChoice.h"
 
+class QProcess;
 class QTimer;
 
 namespace vchan {
@@ -28,6 +29,7 @@ class TVDBNetworkResolver; // forward: used as a pointer member only
 
 class VirtualChannelsBackend : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QString previewFrame READ previewFrame NOTIFY previewFrameChanged)
 public:
     explicit VirtualChannelsBackend(const QString &appRoot,
                                     const QString &dataRoot,
@@ -35,6 +37,7 @@ public:
                                     QObject *jellyfinBackend = nullptr,
                                     QObject *embyBackend = nullptr,
                                     QObject *parent = nullptr);
+    ~VirtualChannelsBackend() override;
 
     Q_INVOKABLE QVariantList get_channels();
 
@@ -44,6 +47,11 @@ public:
                                            int artWidth = 480, int artHeight = 270);
     Q_INVOKABLE void preview_stream(int channelNumber);
     Q_INVOKABLE void cancel_preview_stream();
+    Q_INVOKABLE void start_preview_video(const QString &url, double positionMs, double volume);
+    Q_INVOKABLE void stop_preview_video();
+    Q_INVOKABLE void set_preview_volume(double volume);
+    Q_INVOKABLE bool preview_video_available() const;
+    QString previewFrame() const { return m_previewFrame; }
 
     Q_INVOKABLE QVariantMap now_next(int channelNumber);
 
@@ -335,6 +343,7 @@ signals:
 
     void playDescriptorReady(const QVariantMap &descriptor);
     void previewStreamReady(int channelNumber, const QString &url, double positionMs);
+    void previewFrameChanged();
 
     void generationProgress(int channelNumber, int done, int total);
     void generationFinished(int channelNumber, bool ok, const QString &message);
@@ -658,6 +667,12 @@ private:
     int     m_previewChannel  = -1;
     int     m_previewSlot     = -1;
     qint64  m_previewPosition = 0;
+    QProcess *m_previewProc   = nullptr;
+    QTimer   *m_previewPoll   = nullptr;
+    QString   m_previewDir;
+    QString   m_previewIpcPath;
+    QString   m_previewFrame;
+    void      pollPreviewFrames();
     QObject *serverBackend(vchan::SlotSource src) const;
     vchan::SlotSource m_serverPendingSrc = vchan::SlotSource::Local;
     vchan::Slot       m_serverPendingSlot;        // asked for again once its detail is in

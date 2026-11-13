@@ -7,6 +7,7 @@
 #include "TVDBAuth.h"
 #include "TVDBNetworkResolver.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QTimeZone>
 #include <QDir>
@@ -17,10 +18,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalSocket>
 #include <QMetaObject>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -978,6 +982,7 @@ void VirtualChannelsBackend::preview_stream(int channelNumber) {
 }
 
 void VirtualChannelsBackend::cancel_preview_stream() {
+    stop_preview_video();
     if (m_previewChannel < 0) return;
     m_previewChannel  = -1;
     m_previewSlot     = -1;
@@ -985,6 +990,146 @@ void VirtualChannelsBackend::cancel_preview_stream() {
     m_urlPending      = false;
     m_plexAwaitingDetailFor.clear();
     if (m_urlTimer) m_urlTimer->stop();
+}
+
+VirtualChannelsBackend::~VirtualChannelsBackend() {
+    stop_preview_video();
+}
+
+static QString findPreviewMpv(const QString &appRoot) {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString bundled = appDir + QStringLiteral("/mpv");
+    if (QFileInfo::exists(bundled) && QFileInfo(bundled).isExecutable()) return bundled;
+    if (!appRoot.isEmpty()) {
+        const QString sibling = appRoot + QStringLiteral("/mpv");
+        if (QFileInfo::exists(sibling) && QFileInfo(sibling).isExecutable()) return sibling;
+    }
+    return QStandardPaths::findExecutable(QStringLiteral("mpv"));
+}
+
+bool VirtualChannelsBackend::preview_video_available() const {
+    return !findPreviewMpv(m_appRoot).isEmpty();
+}
+
+void VirtualChannelsBackend::start_preview_video(const QString &url,
+                                                   double positionMs,
+                                                   double volume) {
+    stop_preview_video();
+    if (url.isEmpty()) return;
+
+    const QString mpvBin = findPreviewMpv(m_appRoot);
+    if (mpvBin.isEmpty()) {
+        qWarning("[VirtualChannels] preview video requested but mpv binary not found");
+        return;
+    }
+
+    QString baseTmp = QStringLiteral("/dev/shm");
+    if (!QFileInfo(baseTmp).isDir() || !QFileInfo(baseTmp).isWritable())
+        baseTmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+
+    const qint64 pid = QCoreApplication::applicationPid();
+    m_previewDir = QStringLiteral("%1/240mp_preview_%2").arg(baseTmp).arg(pid);
+    QDir(m_previewDir).removeRecursively();
+    QDir().mkpath(m_previewDir);
+    m_previewIpcPath = QStringLiteral("%1/240mp_preview_ipc_%2.sock").arg(baseTmp).arg(pid);
+    QFile::remove(m_previewIpcPath);
+
+    const int volPct = qBound(0, qRound(volume * 100.0), 100);
+    QStringList args;
+    args << QStringLiteral("--no-config")
+         << QStringLiteral("--no-terminal")
+         << QStringLiteral("--really-quiet")
+         << QStringLiteral("--vf=scale=320:240:force_original_aspect_ratio=decrease,fps=10")
+         << QStringLiteral("--vo=image")
+         << QStringLiteral("--vo-image-format=jpg")
+         << QStringLiteral("--vo-image-jpeg-quality=80")
+         << QStringLiteral("--vo-image-outdir=") + m_previewDir
+         << QStringLiteral("--volume=") + QString::number(volPct)
+         << QStringLiteral("--mute=") + (volPct <= 0 ? QStringLiteral("yes") : QStringLiteral("no"))
+         << QStringLiteral("--input-ipc-server=") + m_previewIpcPath
+         << QStringLiteral("--loop-file=inf");
+    if (positionMs > 0)
+        args << QStringLiteral("--start=") + QString::number(positionMs / 1000.0, 'f', 3);
+    args << url;
+
+    m_previewProc = new QProcess(this);
+    m_previewProc->setProcessChannelMode(QProcess::MergedChannels);
+    connect(m_previewProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this](int, QProcess::ExitStatus) {
+                if (m_previewPoll) m_previewPoll->stop();
+            });
+    m_previewProc->start(mpvBin, args);
+
+    if (!m_previewPoll) {
+        m_previewPoll = new QTimer(this);
+        m_previewPoll->setInterval(80);
+        connect(m_previewPoll, &QTimer::timeout, this, &VirtualChannelsBackend::pollPreviewFrames);
+    }
+    m_previewPoll->start();
+}
+
+void VirtualChannelsBackend::stop_preview_video() {
+    if (m_previewPoll) m_previewPoll->stop();
+    if (m_previewProc) {
+        if (m_previewProc->state() != QProcess::NotRunning) {
+            m_previewProc->terminate();
+            if (!m_previewProc->waitForFinished(250)) {
+                m_previewProc->kill();
+                m_previewProc->waitForFinished(250);
+            }
+        }
+        m_previewProc->deleteLater();
+        m_previewProc = nullptr;
+    }
+    if (!m_previewDir.isEmpty()) {
+        QDir(m_previewDir).removeRecursively();
+        m_previewDir.clear();
+    }
+    if (!m_previewIpcPath.isEmpty()) {
+        QFile::remove(m_previewIpcPath);
+        m_previewIpcPath.clear();
+    }
+    if (!m_previewFrame.isEmpty()) {
+        m_previewFrame.clear();
+        emit previewFrameChanged();
+    }
+}
+
+void VirtualChannelsBackend::set_preview_volume(double volume) {
+    if (m_previewIpcPath.isEmpty() || !m_previewProc ||
+        m_previewProc->state() != QProcess::Running) return;
+    QLocalSocket sock;
+    sock.connectToServer(m_previewIpcPath);
+    if (!sock.waitForConnected(100)) return;
+    const int volPct = qBound(0, qRound(volume * 100.0), 100);
+    const QByteArray cmd1 = QJsonDocument(QJsonObject{
+        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                              QStringLiteral("volume"), volPct}}
+    }).toJson(QJsonDocument::Compact) + '\n';
+    const QByteArray cmd2 = QJsonDocument(QJsonObject{
+        {QStringLiteral("command"), QJsonArray{QStringLiteral("set_property"),
+                                              QStringLiteral("mute"), volPct <= 0}}
+    }).toJson(QJsonDocument::Compact) + '\n';
+    sock.write(cmd1);
+    sock.write(cmd2);
+    sock.flush();
+    sock.waitForBytesWritten(50);
+}
+
+void VirtualChannelsBackend::pollPreviewFrames() {
+    if (m_previewDir.isEmpty()) return;
+    QDir dir(m_previewDir);
+    const QStringList files = dir.entryList({QStringLiteral("*.jpg")}, QDir::Files, QDir::Name);
+    if (files.size() < 2) return;
+    // Second-to-last frame is guaranteed completely written by mpv; purge older ones.
+    const QString readyPath = dir.filePath(files[files.size() - 2]);
+    for (int i = 0; i < files.size() - 2; ++i)
+        dir.remove(files[i]);
+    const QString nextUrl = QUrl::fromLocalFile(readyPath).toString();
+    if (nextUrl != m_previewFrame) {
+        m_previewFrame = nextUrl;
+        emit previewFrameChanged();
+    }
 }
 
 bool VirtualChannelsBackend::deliverPreviewUrl(const QString &url, const QString &token) {
