@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — App-wide volume: one level, two renderers (#34)
+- **Volume keys work everywhere**: volume up/down/mute used to be each module's private business (weather music, mpv only). `InputManager` now hands them to a single app-wide `VolumeManager`, so pressing the remote's volume keys on any screen — menu, Plex, YouTube, channels, a game — changes the same level, and RetroArch keeps doing its own thing while a game owns the screen.
+- **The system mixer is the truth**: `VolumeManager` reads and writes the ALSA mixer (via `amixer`), so the number in the bar is the number the speakers actually play at. mpv and the weather music player run pinned at 100 and no longer attenuate on their own; the only exception is the speech duck, which is transient by design.
+- **One OSD, two renderers**: while the app owns the screen, a QML `VolumeBar` draws the level on every view — menu, module, guide, wherever you are — whether or not anything is currently playing. While mpv owns the screen — music, video — the app renderer is suspended, so the bundled `mpv-media-keys.lua` draws the same level through `script-message 240mp-volume-osd`, fed from the same `VolumeManager` state. One level, whichever surface happens to be visible.
+- **The level survives a restart**: it is persisted to `volume.json` in the app data dir and restored at startup, muting included.
+
 ### Fixed — Virtual channels: Guide video previews respect media-server transcode settings & stay smooth
 - **Plex / Jellyfin / Emby Guide previews**: `preview_stream()` now passes `m_previewPosition` and `transcodeAllowed = true` and honors `PlexBackend`'s resolution-aware `forceTranscode` decision (only transcoding items above the configured Video Quality threshold, starting at the live offset), while cleaning up active preview transcode sessions on channel change (`cancel_preview_stream`).
 - **Non-blocking preview teardown & real-time pacing**: replaced synchronous `waitForFinished()` in `stop_preview_video()` with async process teardown + per-launch `/dev/shm` directories (eliminating Guide navigation freezes), and moved `fps=8` before `scale=320:240` with `realtime` pacing when muted (`--no-audio`) so `mpv --vo=image` no longer runs untimed at 300%+ CPU.
