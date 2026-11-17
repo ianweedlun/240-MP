@@ -29,6 +29,11 @@ DisplayHandoff::DisplayHandoff(QObject *parent)
     // A member timer rather than QTimer::singleShot so releaseNow() can cancel a
     // pending release during shutdown — the stored callback captures an object
     // that is being destroyed.
+    m_restoreTimer = new QTimer(this);
+    m_restoreTimer->setSingleShot(true);
+    m_restoreTimer->setInterval(800);
+    connect(m_restoreTimer, &QTimer::timeout, this, &DisplayHandoff::completeRestore);
+
     m_releaseTimer = new QTimer(this);
     m_releaseTimer->setSingleShot(true);
     connect(m_releaseTimer, &QTimer::timeout, this, [this] {
@@ -188,24 +193,38 @@ void DisplayHandoff::doRestore() {
 // frame arrives — a visible flicker on the TV, right after the list appears.
 //
 // So the app is brought back while the display is still parked on the child's
-// VT, where nobody can see it: master restored, CRTC restored, window shown and
-// given a few frames to settle, and only then switched back. The re-init happens
-// off-screen and the VT switch lands on a live, already-correct frame.
+// VT, where nobody can see it: master restored, CRTC restored, window shown, and
+// only then switched back — so the re-init happens off-screen and the switch
+// lands on a live, already-correct frame.
+//
+// "Only then" has to mean a frame that was actually presented, not a nap. The
+// re-init is not the same cost on every device: a fixed 80 ms covered a desktop
+// GPU and not a Pi 4, which switched VTs onto an uninitialized scanout buffer
+// and showed a moment of black. Hence completeRestore() off frameSwapped.
 void DisplayHandoff::finishRestore() {
 #ifdef Q_OS_LINUX
+    // The window is shown here, on the child's VT, where the re-init is unseen.
+    // completeRestore() does the switch itself — main.cpp calls it from
+    // QQuickWindow::frameSwapped — so the switch cannot land before a real frame
+    // exists. A fixed delay was not enough: EGLFS's re-init on a Pi 4 takes
+    // longer than a few frames, and the switch then exposed an uninitialized
+    // scanout buffer as a moment of black.
     emit displayReturned();
-    if (m_switchedVt) {
-        // Frames are drawn on QSGRenderThread; sleeping the GUI thread here still
-        // lets it present. ~5 frames at 60 Hz.
-        QThread::msleep(80);
+    if (m_switchedVt && m_previousVt > 0) {
+        m_restoreTimer->start();
+        return;
     }
+#endif
+    completeRestore();
+}
+
+void DisplayHandoff::completeRestore() {
+    m_restoreTimer->stop();
+    // Idempotent: frameSwapped and the safety timer can both land.
     if (m_previousVt > 0 && m_switchedVt) {
         qDebug("[DisplayHandoff] Switching back to VT %d", m_previousVt);
         switchToVt(m_previousVt);
     }
-#else
-    emit displayReturned();
-#endif
     m_previousVt = -1;
     m_switchedVt = false;
     m_owner.clear();

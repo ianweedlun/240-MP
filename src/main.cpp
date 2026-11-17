@@ -291,10 +291,17 @@ int main(int argc, char *argv[]) {
                          rootWindow, [rootWindow, keepWindow] {
                              if (!keepWindow) rootWindow->setVisible(false);
                          });
+        // Showing the window makes EGLFS rebuild its swapchain and set the mode,
+        // so the VT switch back waits for the frame that proves that is done. A
+        // timer inside DisplayHandoff covers the case where no frame arrives.
         QObject::connect(&displayHandoff, &DisplayHandoff::displayReturned,
-                         rootWindow, [rootWindow] {
+                         rootWindow, [rootWindow, &displayHandoff] {
                              rootWindow->setVisible(true);
                              rootWindow->requestUpdate();
+                             QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
+                                              &displayHandoff,
+                                              &DisplayHandoff::completeRestore,
+                                              Qt::SingleShotConnection);
                          });
     }
 

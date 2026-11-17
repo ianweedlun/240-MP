@@ -93,6 +93,13 @@ public:
     // would receive it is being torn down).
     void releaseNow(const QString &owner);
 
+    // Second half of the restore, called once the restored window has actually
+    // presented a frame: switches the VT back and clears the hand-off state.
+    // main.cpp calls this from QQuickWindow::frameSwapped; a timer here covers the
+    // case where no frame ever arrives so the Pi cannot be stranded on the
+    // child's VT.
+    void completeRestore();
+
 signals:
     // Emitted once the hand-off is fully taken (VT switched, master dropped,
     // CRTC state saved). The owner of the QQuickWindow hides it here.
@@ -145,6 +152,7 @@ private:
     bool    m_switchedVt   = false;     // did the VT switch actually succeed?
     int     m_qtDrmFd      = -1;
     QTimer *m_releaseTimer = nullptr;
+    QTimer *m_restoreTimer = nullptr;
     std::function<void()> m_onRestored;
 #ifdef Q_OS_LINUX
     DrmSavedState m_savedDrm = {};
