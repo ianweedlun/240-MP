@@ -1,10 +1,34 @@
 name: CI macOS
 
-# macOS arm64 validation split out of ci.yml so Pi deployments never wait on
-# mac builds (macOS runners intermittently refuse capacity; nothing about the
-# arm64 Pi artifact depends on them). Keep the same triggers so this still
-# runs per push for dev and feature branches. The job body is verbatim from
-# the original CI (AGL-pinned macos-15 etc. preserved).
+# macOS validation split out of ci.yml so Pi deployments never wait on mac
+# builds (nothing about the arm64 Pi artifact depends on this lane). Same
+# triggers as before, so this still runs per push for dev and feature branches.
+#
+# RUNNER CHOICE — evidence, not taste (2026-11-17):
+# The lane spent its life on `macos-15` (GitHub hosted arm64) and died silently:
+# 13 consecutive jobs between 2026-11-17T14:26Z and 16:13Z ended `cancelled`
+# with ZERO steps executed and runner_name null, annotation:
+#   "The job was not acquired by Runner of type hosted even after multiple attempts"
+#   "Due to capacity constraints, jobs targeting macOS arm64 runners may experience
+#    longer queue times."
+# A dispatch-time probe of the four hosted labels settled it (run 44124734968):
+#   macos-15-intel -> runner acquired in 11s, x86_64 / macOS 15.7.9 / Xcode 16.4, green
+#   macos-14       -> arm64, cancelled immediately (same starved arm64 pool)
+#   macos-15       -> arm64, acquired after 5m04s (and 10m04s on a later run)
+#   macos-13       -> never acquired (retired image)
+# Every starved arm64 job is cancelled at exactly 15m00s with no runner, so the
+# arm64 pool is not absent, it is latency-unbounded: fine for an on-request
+# build, useless as a per-push gate. Hence the per-push lane runs on
+# `macos-15-intel` (x64), which allocates in seconds. NOTE:
+# `runs-on: [macos-15, macos-14]` is NOT a fallback list — a label array is
+# ANDed ("any runner that matches all of the specified values"), so it would
+# never match anything.
+#
+# The arm64 lane survives as an OPT-IN job behind the `arch` dispatch input:
+# Apple-Silicon coverage on request, and no arm64 leg on pushes at all. Job-level
+# `continue-on-error` was tried first and does not work for this failure mode — a
+# job cancelled before it ever starts still fails the run (run 44128689188:
+# arm64 leg cancelled at 15m01s, run conclusion `failure`).
 on:
   push:
     # burst/* work branches deliberately absent: lab/local only, CI runs when they merge into dev
@@ -13,11 +37,21 @@ on:
   pull_request:
     # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
     branches: [beta]
+  # yml-only changes are filtered out by the push paths-ignore above, so a manual
+  # trigger is the only way to exercise this lane without a code push.
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Which macOS arch to build (pushed builds are always x64)'
+        type: choice
+        default: x64
+        options: [x64, arm64, both]
 
 jobs:
-  build-macos-arm64:
-    name: macOS arm64
-    runs-on: macos-15
+  build-macos:
+    name: macOS x64 (intel)
+    if: github.event_name != 'workflow_dispatch' || inputs.arch != 'arm64'
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout
@@ -44,9 +78,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/ccache
-          key: 240mp-ccache-macos-arm64-${{ github.event_name }}-${{ github.ref_name }}
+          key: 240mp-ccache-macos-x64-${{ github.event_name }}-${{ github.ref_name }}
           restore-keys: |
-            240mp-ccache-macos-arm64-
+            240mp-ccache-macos-x64-
 
       - name: Install ccache (brew unless preinstalled)
         run: |
@@ -54,6 +88,8 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/ccache"
           echo "CCACHE_DIR=${RUNNER_TEMP}/ccache" >> "$GITHUB_ENV"
 
+      # Native arch on purpose: the runner is x86_64, so no CMAKE_OSX_ARCHITECTURES
+      # override (the old hardcoded arm64 was only correct on an Apple-Silicon host).
       - name: Install SDL2 from source
         run: |
           SDL2_VERSION=2.32.10
@@ -63,7 +99,6 @@ jobs:
             https://github.com/libsdl-org/SDL "$SRC"
           cmake -S "$SRC" -B "$BUILD" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
             -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
           cmake --build "$BUILD" --parallel
@@ -94,9 +129,85 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure -j4
 
+      # MACOSX_BUNDLE is TRUE in CMakeLists, so the binary lives inside the .app.
+      # if-no-files-found: error — the old `build/240mp` path matched nothing and
+      # the step still reported success (upload-artifact only warns), so the lane
+      # was green with no artifact at all.
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 240mp-macos-x64
+          path: build/240mp.app
+          if-no-files-found: error
+          retention-days: 5
+
+  # Apple-Silicon coverage, on request only — never on a push. Hosted arm64
+  # allocation is starvation-prone (see the header), and a job that is cancelled
+  # before it ever gets a runner still fails the whole run: job-level
+  # `continue-on-error` does NOT cover a pre-start cancel (proved by run
+  # 44128689188 — arm64 leg cancelled at 15m01s with no runner, run conclusion
+  # `failure`). So the arm64 leg is opt-in via the `arch` dispatch input: ask for
+  # it, and "capacity said no" is a truthful red on a run you asked for, instead
+  # of a red X on somebody's unrelated push.
+  build-macos-arm64:
+    name: macOS arm64 (on request)
+    if: github.event_name == 'workflow_dispatch' && inputs.arch != 'x64'
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          cache: true
+
+      - name: Install ccache (brew unless preinstalled)
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then brew install ccache; fi
+          mkdir -p "${RUNNER_TEMP}/ccache"
+          echo "CCACHE_DIR=${RUNNER_TEMP}/ccache" >> "$GITHUB_ENV"
+
+      - name: Install SDL2 from source
+        run: |
+          SDL2_VERSION=2.32.10
+          SRC="${RUNNER_TEMP}/SDL2-src"
+          BUILD="${RUNNER_TEMP}/SDL2-build"
+          git clone --depth 1 --branch "release-${SDL2_VERSION}" \
+            https://github.com/libsdl-org/SDL "$SRC"
+          cmake -S "$SRC" -B "$BUILD" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
+          cmake --build "$BUILD" --parallel
+          cmake --install "$BUILD"
+          echo "SDL2_PREFIX=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_ENV"
+
+      - name: Configure (with tests)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
+            -DBUILD_TESTS=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DAPP_VERSION="${{ github.sha }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: |
+          ctest --test-dir build --output-on-failure -j4
+
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-macos-arm64
-          path: build/240mp
+          path: build/240mp.app
+          if-no-files-found: error
           retention-days: 5

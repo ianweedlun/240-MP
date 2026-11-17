@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   sync:
@@ -17,6 +18,21 @@ jobs:
         with:
           fetch-depth: 0
           ref: dev
+
+      # A doc commit pushed onto a branch that is the head of an open `pi-test` PR
+      # fires pull_request.synchronize on pi-rc.yml, which rebuilds and REBOOTS the
+      # Pi — i.e. a docs-only mirror would kill a CRT test in progress. Record those
+      # heads and leave them stale until the PR closes: dev is the source, and the
+      # first doc push after the merge syncs them again.
+      - name: List open pi-test PR heads (mirror must skip them)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEADS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?state=open&per_page=100" \
+            | jq -r '.[] | select(any(.labels[]?; .name == "pi-test")) | .head.ref' | sort -u | paste -sd' ' -)
+          echo "pi-test PR heads (not mirrored): ${HEADS:-none}"
+          echo "HEADS=$HEADS" >> "$GITHUB_ENV"
 
       - name: Sync .hermes.md to all branches
         run: |
@@ -32,6 +48,12 @@ jobs:
 
           for BRANCH in $BRANCHES; do
             git show-ref --verify --quiet "refs/remotes/origin/$BRANCH" || continue
+
+            case " $HEADS " in
+              *" $BRANCH "*)
+                echo "$BRANCH: head of an open pi-test PR — mirror skipped (a doc commit here fires pi-rc = redeploy + reboot mid-test)"
+                continue ;;
+            esac
 
             # Skip branches whose doc blobs already match dev (both files)
             if git diff --quiet "origin/$BRANCH:.hermes.md" "origin/dev:.hermes.md" 2>/dev/null; then

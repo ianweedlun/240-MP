@@ -16,10 +16,25 @@ on:
   pull_request:
     types: [opened, labeled, synchronize, reopened, closed]
 
+  # Build-only lane (card t_82f5ebb9). Rebuild a ref's RC tarball and archive it
+  # WITHOUT touching the Pi. It exists because the only other way to exercise this
+  # file is a real PR event, which reboots the Pi out from under a human's CRT test.
+  # This lane never deploys, never writes a marker, and it deliberately names its
+  # artifact `pi-rc-buildonly-<sha12>` instead of `pi-rc-tarball-<sha12>`: a second
+  # compilation of the same ref has a different binary md5, so a probe that md5'd
+  # this artifact against an installed binary would manufacture false drift — the
+  # exact bug this card exists to kill.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref (sha/branch) to build. Build + upload only — no Pi contact.'
+        required: true
+
 jobs:
   pi-rc:
     name: PR Pi verification (RC / restore)
     if: >-
+      github.event_name == 'pull_request' &&
       github.event.pull_request.base.ref == 'beta' &&
       (
         (github.event.action != 'closed' &&
@@ -103,6 +118,22 @@ jobs:
           TARBALL="240-MP-pi-rc-${{ github.event.pull_request.number }}-linux-arm64-$(git rev-parse --short HEAD)"
           tar -czf "${TARBALL}.tar.gz" -C install .
           echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+          echo "ARTIFACT_SHA=$(git rev-parse --short=12 HEAD)" >> $GITHUB_ENV
+
+      # t_82f5ebb9: until this step existed the tarball only ever existed on the Pi,
+      # and only until 240mp-ci-deploy `rm -f`'d it — so an RC binary's md5 lived in
+      # a job log and nowhere else. Named by sha (not by run) so a probe can look up
+      # the artifact of the rev the markers name. This artifact is the binary the
+      # deploy step installs (same build, same run), which is what makes the Pi's
+      # .240mp-rc-deployed-md5 checkable; the build-only lane's artifact is not.
+      - name: Upload RC tarball (sha-addressed artifact)
+        if: env.MODE != 'skip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
+          path: ${{ env.TARBALL }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Deploy to Pi (RC or restore) + verify
         if: env.MODE != 'skip'
@@ -131,7 +162,7 @@ jobs:
           else
             CUR=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
             if [ "$CUR" = "$REF" ]; then
-              $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev" || true
+              $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" || true
               echo "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot." | post_comment
               exit 0
             fi
@@ -159,20 +190,21 @@ jobs:
               BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log" 2>/dev/null || true)
               if [ "$MODE" = "rc" ]; then
                 for i in $(seq 1 10); do
-                  $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev && echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr" && break
+                  $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev && echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr && echo $LOCAL_MD5 > \$HOME/.240mp-rc-deployed-md5" && break
                   echo "marker write attempt $i failed (Pi still settling), retry"; sleep 20
                 done
                 {
                   echo "### Pi RC deploy — PR $PR_NUM (**un-merged code on the Pi**)"
                   echo "- build: PR head \`$(git rev-parse HEAD)\` → Pi binary md5 \`$LOCAL_MD5\` (matches tarball), service **active**, verified loop"
                   echo "- previous official rev \`${OFFICIAL:-none}\` saved as restore target — closing this PR restores it automatically"
+                  echo "- tarball archived as artifact \`pi-rc-tarball-\` + this commit's sha12 (14 d) — the md5 above is the artifact's binary"
                   echo "- boot state log: \`$(echo "$BOOT" | tr '\n' ' ')\`"
                   echo ""
                   echo "CRT test the PR's behaviors now: your word on the behaviors gates your approving review; merge = official deploy over this RC."
                 } > /tmp/rc_body.md
               else
                 for i in $(seq 1 10); do
-                  $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-restore-rev" && break
+                  $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" && break
                   echo "restore marker write attempt $i failed (Pi still settling), retry"; sleep 20
                 done
                 {
@@ -192,3 +224,47 @@ jobs:
         if: env.MODE == 'skip' && github.event.action == 'closed' && !github.event.pull_request.merged
         run: |
           resp=$(jq -n --arg b "Closed without merge — this PR never put a build on the Pi; nothing to restore." '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/${{ github.event.pull_request.number }}/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; exit 1; }
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Build-only lane — workflow_dispatch, ZERO Pi contact (card t_82f5ebb9)
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Proves and services the artifact path without a deploy: same build recipe as
+  # the deploy lane, tarball archived as `pi-rc-buildonly-<sha12>`, no ssh, no
+  # scp, no wrapper call, no marker write. Never compare this artifact's binary
+  # md5 to /opt/240mp/bin/240mp — only `pi-rc-tarball-<sha12>` comes from the
+  # build that got installed.
+  rc-buildonly:
+    name: RC tarball rebuild (no deploy)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Build arm64 (same recipe as ci.yml)
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
+            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="buildonly-pi-rc"
+          cmake --build build --parallel
+          cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
+          mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
+          TARBALL="240-MP-pi-rc-buildonly-linux-arm64-$(git rev-parse --short HEAD)"
+          tar -czf "${TARBALL}.tar.gz" -C install .
+          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+          echo "ARTIFACT_SHA=$(git rev-parse --short=12 HEAD)" >> $GITHUB_ENV
+
+      - name: Upload tarball (build-only artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-rc-buildonly-${{ env.ARTIFACT_SHA }}
+          path: ${{ env.TARBALL }}.tar.gz
+          retention-days: 3
+          if-no-files-found: error
