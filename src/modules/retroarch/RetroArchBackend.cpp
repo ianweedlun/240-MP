@@ -772,7 +772,10 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
 }
 
 QVariantList RetroArchBackend::recentGames() const {
-    return m_recent.entries();
+    // Full sort parity with a games list: the RECENT view honours Game Sort
+    // exactly like Games.qml. The store itself stays newest-first so
+    // lastPlayedGame() still means "the game I just launched".
+    return sortedGames(m_recent.entries(), m_gameSort == QLatin1String("Z-A"));
 }
 
 QVariantMap RetroArchBackend::lastPlayedGame() const {

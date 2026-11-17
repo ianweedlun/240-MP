@@ -1,29 +1,33 @@
 // Offscreen QML smoke test for the Recently-played view layout contract.
-// Loads Recent.qml with stubbed backends and asserts the two affordances the
-// owner flagged as missing on the CRT: the thumbnail preview pane and the
-// letter-strip quick-scroll (including article-stripped, display-order buckets
-// and zone geometry that cannot overlap the strip).
+// Loads Recent.qml with stubbed backends and asserts its full parity with a
+// Games list: thumbnail preview pane, `N GAMES · A-Z/Z-A` header, and an A-Z
+// letter strip that follows the active sort direction. Article-stripped
+// bucketing and zone geometry that cannot overlap the strip are covered too.
 #include <QQmlEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlProperty>
 #include <QMetaObject>
 #include <QGuiApplication>
+#include <QCoreApplication>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QColor>
 #include <QUrl>
+#include <algorithm>
 #include <cstdio>
 
 class StubBackend : public QObject {
     Q_OBJECT
 public:
+    explicit StubBackend(QString sort = QStringLiteral("A-Z"), QObject *parent = nullptr)
+        : QObject(parent), m_sort(std::move(sort)) {}
     Q_INVOKABLE QVariantList recentGames() {
         QVariantList games;
-        // Newest first, deliberately NOT alphabetical. "The Legend of Zelda"
-        // must index under Z, not T (article stripping).
+        // Same five rows the real store would return; the real backend applies
+        // Game Sort, so mirror that here for both directions.
         const char *names[] = { "The Legend of Zelda", "Metal Gear Solid",
                                 "Angry Birds", "007 Goldeneye", "Donkey Kong" };
         for (const char *name : names) {
@@ -34,12 +38,33 @@ public:
             g["systemId"] = QStringLiteral("nes");
             games.append(g);
         }
+        // Mirror the real backend: the RECENT view receives games already
+        // ordered by Game Sort (articles stripped), not raw recency order.
+        const auto sortKey = [](const QVariant &game) {
+            QString name = game.toMap().value(QStringLiteral("name")).toString().trimmed();
+            for (const QString &article : { QStringLiteral("the "), QStringLiteral("a "),
+                                            QStringLiteral("an ") }) {
+                if (name.startsWith(article, Qt::CaseInsensitive)) {
+                    name = name.mid(article.size()).trimmed();
+                    break;
+                }
+            }
+            return name.toCaseFolded();
+        };
+        const bool descending = m_sort == QLatin1String("Z-A");
+        std::sort(games.begin(), games.end(), [&](const QVariant &a, const QVariant &b) {
+            return descending ? sortKey(a) > sortKey(b) : sortKey(a) < sortKey(b);
+        });
         return games;
     }
+    Q_INVOKABLE QString gameSort() const { return m_sort; }
+    void setSort(const QString &sort) { m_sort = sort; }
     Q_INVOKABLE QString resolveThumbnail(const QString &name, const QString &basename) const {
         return QStringLiteral("/tmp/boxart/%1/%2.png").arg(basename, name);
     }
     Q_INVOKABLE void launchGame(const QVariantMap &, const QString &) {}
+private:
+    QString m_sort;
 };
 
 class StubAppCore : public QObject {
@@ -48,6 +73,8 @@ public:
     explicit StubAppCore(QString thumb = QStringLiteral("RIGHT")) : m_thumb(std::move(thumb)) {}
     Q_INVOKABLE QString get_setting(const QString &, const QString &) const { return m_thumb; }
     Q_INVOKABLE void note_state(const QString &, const QString &) {}
+signals:
+    void moduleSettingChanged(const QString &, const QString &, const QVariant &);
 private:
     QString m_thumb;
 };
@@ -86,9 +113,11 @@ class StubModule : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString moduleIcon READ icon CONSTANT)
     Q_PROPERTY(QString moduleName READ name CONSTANT)
+    Q_PROPERTY(QString moduleId READ moduleId CONSTANT)
 public:
     QString icon() const { return QString(); }
     QString name() const { return QStringLiteral("RETROARCH"); }
+    QString moduleId() const { return QStringLiteral("com.240mp.retroarch"); }
 };
 
 static int errors = 0;
@@ -136,10 +165,16 @@ int main(int argc, char **argv) {
         QString letters;
         for (const QVariant &bucket : index)
             letters += bucket.toMap().value("letter").toString();
-        // "The Legend of Zelda" must index under L, not T (article stripping);
-        // order stays newest-first: L, M, A, #, D — no alphabetical re-sort.
-        check(letters == QStringLiteral("LMA#D"),
-              "letter strip is display-order with articles stripped (LMA#D)");
+        // Game Sort parity: A-Z means alphabetical by name (articles stripped),
+        // so the strip reads # A D L M with '#' leading, exactly like Games.qml.
+        check(letters == QStringLiteral("#ADLM"),
+              "A-Z letter strip is alphabetical with articles stripped (#ADLM)");
+        check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("A-Z"),
+              "view carries the A-Z sort label");
+        QObject *header = view->findChild<QObject *>("recentCountHeader");
+        check(header && QQmlProperty::read(header, "text").toString()
+              == QStringLiteral("5 GAMES  ·  A-Z"),
+              "count header matches the games list (N GAMES · A-Z)");
         check(QQmlProperty::read(view, "showPreview").toBool(), "preview enabled by default");
 
         QObject *preview = view->findChild<QObject *>("previewLoader");
@@ -165,10 +200,72 @@ int main(int argc, char **argv) {
             check(QQmlProperty::read(strip, "count").toInt() == 5, "letter strip has 5 buckets");
         }
         if (list && strip) {
-            QQmlProperty::write(list, "currentIndex", 3); // the "#" bucket
+            QQmlProperty::write(list, "currentIndex", 0); // the "#" bucket in A-Z
             bool invoked = QMetaObject::invokeMethod(view, "syncLetterToGame");
-            check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 3,
+            check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 0,
                   "row selection syncs the strip to the matching bucket");
+        }
+
+        // Live Game Sort change: same game stays selected, header/strip flip.
+        if (list) {
+            QQmlProperty::write(list, "currentIndex", 4); // Metal Gear Solid in A-Z
+            backend.setSort(QStringLiteral("Z-A"));
+            emit core.moduleSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                                           QStringLiteral("game_sort"),
+                                           QStringLiteral("Z-A"));
+            QCoreApplication::processEvents();
+            QVariantList flipped = QQmlProperty::read(list, "model").toList();
+            const int idx = QQmlProperty::read(list, "currentIndex").toInt();
+            check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
+                  "live Game Sort change updates the view label");
+            check(idx >= 0 && idx < flipped.size() &&
+                  flipped.at(idx).toMap().value("name").toString()
+                  == QStringLiteral("Metal Gear Solid"),
+                  "live sort flip keeps the same game selected");
+            QVariantList flippedIndex = QQmlProperty::read(view, "letterIndex").toList();
+            QString flippedLetters;
+            for (const QVariant &bucket : flippedIndex)
+                flippedLetters += bucket.toMap().value("letter").toString();
+            check(flippedLetters == QStringLiteral("MLDA#"),
+                  "live sort flip rebuilds the strip in Z-A order (MLDA#)");
+        }
+        delete view;
+    }
+
+    // ---- Z-A: header, list and letter strip all reverse together ----
+    {
+        QQmlEngine engine;
+        engine.addImportPath(repoRoot + "/views");
+        StubBackend backend(QStringLiteral("Z-A")); StubAppCore core;
+        StubRoot root; StubModule module;
+        QObject *view = loadView(engine, backend, core, root, module, repoRoot);
+        if (!view) return 1;
+
+        QVariantList index = QQmlProperty::read(view, "letterIndex").toList();
+        QString letters;
+        for (const QVariant &bucket : index)
+            letters += bucket.toMap().value("letter").toString();
+        check(letters == QStringLiteral("MLDA#"),
+              "Z-A letter strip reverses with '#' trailing (MLDA#)");
+        check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
+              "view carries the Z-A sort label");
+        QObject *header = view->findChild<QObject *>("recentCountHeader");
+        check(header && QQmlProperty::read(header, "text").toString()
+              == QStringLiteral("5 GAMES  ·  Z-A"),
+              "count header matches the games list (N GAMES · Z-A)");
+        QObject *list = view->findChild<QObject *>("recentList");
+        QObject *strip = view->findChild<QObject *>("letterList");
+        if (list) {
+            QVariantList model = QQmlProperty::read(list, "model").toList();
+            check(!model.isEmpty() && model.first().toMap().value("name").toString()
+                  == QStringLiteral("Metal Gear Solid"),
+                  "Z-A list starts at the descending end of the alphabet");
+        }
+        if (list && strip) {
+            QQmlProperty::write(list, "currentIndex", 4); // "007 Goldeneye" -> '#'
+            bool invoked = QMetaObject::invokeMethod(view, "syncLetterToGame");
+            check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 4,
+                  "Z-A row selection syncs the strip to the matching bucket");
         }
         delete view;
     }

@@ -75,8 +75,9 @@ public:
     // shortName); everything else is taken from the item itself.
     Q_INVOKABLE void launchGame(const QVariantMap &game, const QString &systemId);
 
-    // Recently played, newest first — what the RECENT row on the playlist screen
-    // and Recent.qml list. Empty until something has been launched.
+    // Recently played, sorted by the Game Sort setting like any games list.
+    // The RECENT row on the playlist screen and Recent.qml show this order;
+    // lastPlayedGame() below still reports the actual newest launch.
     Q_INVOKABLE QVariantList recentGames() const;
     // One press from the main menu to the thing you were playing: {} when nothing
     // has been played yet.

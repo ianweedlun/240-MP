@@ -1,4 +1,5 @@
 #include "../RetroArchBackend.h"
+#include "../RecentGamesStore.h"
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
@@ -53,6 +54,7 @@ private slots:
     void gameSortDefaultsToAtoZ();
     void gameSortLiveChangeReordersGames();
     void sortedGamesIgnoresArticlesAndCase();
+    void recentGamesHonorsGameSort();
     void failedLaunchDoesNotEnterRecentlyPlayed();
 };
 
@@ -705,6 +707,45 @@ void RetroArchBackendTest::sortedGamesIgnoresArticlesAndCase() {
     // The input list is untouched — callers own the model they pass in.
     QCOMPARE(games.at(0).toMap()["name"].toString(), QString("The Cat"));
     QVERIFY(RetroArchBackend::sortedGames(QVariantList{}, false).isEmpty());
+}
+
+void RetroArchBackendTest::recentGamesHonorsGameSort() {
+    // The store keeps true recency; the RECENT VIEW applies Game Sort exactly
+    // like Games.qml. lastPlayedGame() must remain the newest launch.
+    RecentGamesStore seed(m_tmp.path() + QStringLiteral("/retroarch_recent.json"));
+    seed.recordLaunch(QVariantMap{ { QStringLiteral("name"), QStringLiteral("007 Bond") },
+                                   { QStringLiteral("romPath"), QStringLiteral("/roms/0.nes") } }, 100);
+    seed.recordLaunch(QVariantMap{ { QStringLiteral("name"), QStringLiteral("The Apple") },
+                                   { QStringLiteral("romPath"), QStringLiteral("/roms/a.nes") } }, 200);
+    seed.recordLaunch(QVariantMap{ { QStringLiteral("name"), QStringLiteral("Zebra") },
+                                   { QStringLiteral("romPath"), QStringLiteral("/roms/z.nes") } }, 300);
+    QVERIFY(seed.save());
+
+    const auto names = [](const QVariantList &entries) {
+        QStringList result;
+        for (const QVariant &entry : entries)
+            result << entry.toMap().value(QStringLiteral("name")).toString();
+        return result;
+    };
+
+    {
+        RetroArchBackend *be = makeBackend(QString(), QStringLiteral("A-Z"));
+        QVERIFY(be != nullptr);
+        QCOMPARE(names(be->recentGames()),
+                 QStringList({ QStringLiteral("007 Bond"), QStringLiteral("The Apple"),
+                               QStringLiteral("Zebra") }));
+        QCOMPARE(be->lastPlayedGame().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("Zebra"));
+        delete be;
+    }
+    {
+        RetroArchBackend *be = makeBackend(QString(), QStringLiteral("Z-A"));
+        QVERIFY(be != nullptr);
+        QCOMPARE(names(be->recentGames()),
+                 QStringList({ QStringLiteral("Zebra"), QStringLiteral("The Apple"),
+                               QStringLiteral("007 Bond") }));
+        delete be;
+    }
 }
 
 void RetroArchBackendTest::failedLaunchDoesNotEnterRecentlyPlayed() {
