@@ -89,6 +89,7 @@ add_executable(240mp
     src/modules/scripts/ScriptsBackend.cpp
     src/modules/scripts/ScriptLauncher.cpp
     src/modules/retroarch/RetroArchBackend.cpp
+    src/modules/retroarch/RecentGamesStore.cpp
     src/modules/virtual_channels/VirtualChannelsBackend.cpp
     src/modules/virtual_channels/ChannelSchedule.cpp
     src/modules/virtual_channels/ChannelTuner.cpp
@@ -272,9 +273,11 @@ if(BUILD_TESTS)
     add_executable(retroarch-tests
         src/modules/retroarch/tests/RetroArchBackendTest.cpp
         src/modules/retroarch/RetroArchBackend.cpp
-        # RetroArchBackend.cpp references DisplayHandoff for the launch path;
-        # the tests never launch, but the symbols must resolve to link.
-        src/util/DisplayHandoff.cpp)
+        # RetroArchBackend.cpp references DisplayHandoff for the launch path and
+        # RecentGamesStore for the recently-played bookkeeping; the tests never
+        # launch, but the symbols must resolve to link.
+        src/util/DisplayHandoff.cpp
+        src/modules/retroarch/RecentGamesStore.cpp)
     set_target_properties(retroarch-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(retroarch-tests PRIVATE Qt6::Core Qt6::Test
         $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
@@ -286,6 +289,19 @@ if(BUILD_TESTS)
     endif()
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
+
+    # Recently-played / playlist-position bookkeeping (pure logic, no QObject).
+    # Lives beside the RetroArch tests because it is the same module's state, but
+    # as its own target so it cannot be broken by anything that needs a display.
+    add_executable(recent-games-tests
+        src/modules/retroarch/tests/RecentGamesStoreTest.cpp
+        src/modules/retroarch/RecentGamesStore.cpp)
+    set_target_properties(recent-games-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(recent-games-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(recent-games-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME recent-games COMMAND recent-games-tests)
 
     # Weather code-mapping tests: pure table lookups and METAR reduction, no
     # files, no network. WeatherCodes.h is self-contained, so this target
@@ -438,6 +454,21 @@ if(BUILD_VCHAN_TESTS)
     set(MP240_REPO_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(vchan-preset-smoke PRIVATE ${MP240_REPO_ROOT_DEF})
     add_test(NAME vchan-preset-smoke COMMAND vchan-preset-smoke)
+endif()
+
+# Recently-played view layout smoke: loads Recent.qml offscreen with stub
+# backends and proves the thumbnail pane + letter strip the CRT flagged as
+# missing are actually wired, ordered and non-overlapping. Not gated behind
+# BUILD_VCHAN_TESTS — this covers the retroarch view shared by every build.
+if(BUILD_TESTS)
+    add_executable(recent-view-smoke src/tests/recent-view-smoke-test.cpp)
+    set_target_properties(recent-view-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(recent-view-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(recent-view-smoke PRIVATE src)
+    set(MP240_RECENT_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
+    add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────

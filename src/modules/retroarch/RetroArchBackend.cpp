@@ -2,6 +2,7 @@
 #include "../../util/DisplayHandoff.h"
 #include <QBuffer>
 #include <QDir>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -17,8 +18,10 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
     : QObject(parent)
     , m_appRoot(appRoot)
     , m_dataRoot(dataRoot)
-    , m_handoff(handoff) {
+    , m_handoff(handoff)
+    , m_recent(dataRoot + QStringLiteral("/retroarch_recent.json")) {
     loadSettings();
+    m_recent.load();
 }
 
 RetroArchBackend::~RetroArchBackend() = default;
@@ -53,6 +56,10 @@ void RetroArchBackend::loadSettings() {
             m_playlistSort = mod["playlist_sort"].toString();
             if (m_playlistSort.isEmpty())
                 m_playlistSort = QStringLiteral("SYSTEM");
+
+            m_gameSort = mod["game_sort"].toString();
+            if (m_gameSort != QLatin1String("Z-A"))
+                m_gameSort = QStringLiteral("A-Z");
 
             // ── Migrate old show_preview (toggle) → thumbnail_display (list_single) ──
             bool needsSave = false;
@@ -108,6 +115,11 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
             m_playlistSort = QStringLiteral("SYSTEM");
         return;
     }
+    if (key == QLatin1String("game_sort")) {
+        m_gameSort = (value.toString() == QLatin1String("Z-A"))
+                     ? QStringLiteral("Z-A") : QStringLiteral("A-Z");
+        return;
+    }
     if (key == QLatin1String("retroarch_path")) {
         m_retroarchPath = value.toString();
         if (m_retroarchPath.isEmpty())
@@ -134,6 +146,37 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
 }
 
 QString RetroArchBackend::playlistSort() const { return m_playlistSort; }
+
+QString RetroArchBackend::gameSort() const { return m_gameSort; }
+
+namespace {
+// "The Legend of Zelda" and "Legend of Zelda" share a letter bucket in the
+// games view; sorting uses the same key so the list and its index agree.
+QString gameSortKey(const QVariant &entry) {
+    QString name = entry.toMap().value(QStringLiteral("name")).toString().trimmed();
+    for (const QString &article : { QStringLiteral("the "), QStringLiteral("a "), QStringLiteral("an ") }) {
+        if (name.startsWith(article, Qt::CaseInsensitive)) {
+            name = name.mid(article.size()).trimmed();
+            break;
+        }
+    }
+    return name.toCaseFolded();
+}
+}
+
+QVariantList RetroArchBackend::sortedGames(const QVariantList &games, bool descending) {
+    QVariantList sorted = games;
+    std::stable_sort(sorted.begin(), sorted.end(), [descending](const QVariant &a, const QVariant &b) {
+        const QString keyA = gameSortKey(a);
+        const QString keyB = gameSortKey(b);
+        if (keyA != keyB)
+            return descending ? keyA > keyB : keyA < keyB;
+        const QString nameA = a.toMap().value(QStringLiteral("name")).toString();
+        const QString nameB = b.toMap().value(QStringLiteral("name")).toString();
+        return descending ? nameA > nameB : nameA < nameB;
+    });
+    return sorted;
+}
 
 QString RetroArchBackend::playlist_directory() const { return m_playlistDir; }
 QString RetroArchBackend::rom_directory() const { return m_romDir; }
@@ -327,7 +370,9 @@ QVariantList RetroArchBackend::refreshPlaylists(const QString &systemId) {
 // ── Tier 3: games in a playlist ──────────────────────────────────────────────
 
 QVariantList RetroArchBackend::refreshGames(const QString &playlistPath) {
-    QVariantList games = parsePlaylist(playlistPath, systemFromPlaylist(playlistPath));
+    QVariantList games = sortedGames(
+        parsePlaylist(playlistPath, systemFromPlaylist(playlistPath)),
+        m_gameSort == QLatin1String("Z-A"));
     emit gamesReady(games);
     return games;
 }
@@ -714,4 +759,30 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     });
     process->start();
     m_gameProcess = process;
+
+    // Recorded after start() so a launch that never spawned (bad binary, missing
+    // core) cannot claim the RECENT slot. One file write per launch is nothing;
+    // the alternative is losing the list on a power cut.
+    QVariantMap entry = game;
+    entry.insert(QStringLiteral("systemId"), systemId);
+    m_recent.recordLaunch(entry, QDateTime::currentSecsSinceEpoch());
+    if (!m_recent.save())
+        qWarning("[RetroArch] could not persist recently-played list");
+}
+
+QVariantList RetroArchBackend::recentGames() const {
+    return m_recent.entries();
+}
+
+QVariantMap RetroArchBackend::lastPlayedGame() const {
+    return m_recent.lastPlayed();
+}
+
+void RetroArchBackend::recordGamePosition(const QString &playlistPath, int index) {
+    m_recent.recordPosition(playlistPath, index);
+    m_recent.save();
+}
+
+int RetroArchBackend::gamePosition(const QString &playlistPath) const {
+    return m_recent.position(playlistPath);
 }

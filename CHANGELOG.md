@@ -4,6 +4,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — RetroArch: Recently played now matches the other game lists
+- **Thumbnail preview restored on the RECENTLY PLAYED view**, using the same `GamePreview.qml` panel and `thumbnail_display` setting as the Games screen (LEFT / RIGHT / OFF). Thumbnails are resolved on demand from each stored entry's playlist basename, so moved ROM folders can't leave a cached stale path.
+- **Letter-strip quick-scroll restored**, with `A`/`An`/`The` removed from bucketing like the games list. Buckets follow the view's newest-first display order (no alphabetical re-sort) so jumping to a letter lands on the row actually showing it. The games count header and BROWSE hint are shown too.
+- Both zones use the Games screen geometry: preview and list never overlap the strip, and hiding thumbnails via `thumbnail_display=OFF` leaves the letter strip working.
+- Offscreen smoke test (`recent-view-smoke`, 14 assertions over the real QML with stubbed backends) covers strip order, boxart resolution, row→strip sync, zone geometry and the OFF setting; full suite 16/16 green locally and on the x86 CI lane.
+- The smoke test loads the real `AppBar` (MultiEffect), which needs `QtQuick.Effects` (Qt >= 6.5) and `QtQml.WorkerScript`. x86 CI's install-qt-action Qt 6.7 SDK has both and runs all 16 tests; the arm64 lane is Ubuntu 24.04's Qt 6.4, where `QtQuick.Effects` has no package at all. That lane still builds the smoke binary and runs the other 15 tests — QML layout is arch-independent, so the x86 lane is the correct place for it.
+- Owner CRT report: recently played was reachable but the thumbnail and letter strip were missing. Promotion stays on hold until the owner re-checks the RC build.
+
+### Added — RetroArch: games sort direction and a game count on the Games screen
+- **Game Sort setting** (`A-Z` default, `Z-A` alternative) for the Games list. Leading `A`/`An`/`The` are ignored, matching the letter buckets the quick-scroll strip already used; the strip reverses in `Z-A` so its order matches the rows.
+- **The count and active direction show at the top right** of the Games screen (`5 GAMES · A-Z`), the same information the Playlists screen already showed per system.
+- **Changing direction keeps the selected game selected.** Indices mean different rows after a re-sort, so the view re-finds the game by name and persists its new index — a later visit (or restart) still lands on that game.
+- Unit tests cover boot defaults, live setting changes, article/case-insensitive ordering and stable ties; offscreen smoke checks both directions end to end, including the letter strip and header layout.
+
+### Added — RetroArch: recently played, and your place in a playlist kept
+- **RECENTLY PLAYED at the top of the playlist screen**, when there is anything to show: a list of the last twelve games across all systems, newest first, launching straight from stored entries without re-reading a playlist. Re-playing a game moves it to the front instead of adding a second copy. Stored in `retroarch_recent.json` beside the rest of the app's data (atomic write: a power cut leaves the previous list, not a truncated one; a corrupt file reads as empty and is repaired on the next launch).
+- **Playlists remember where you stopped.** Backing out of a long list and coming back lands on the same row — including after a service restart, which in-session navigation state never covered; index 0 is stored as "no position", so the common case costs no write.
+- The playlist screen restores its own selection by row identity rather than a bare index, so the row that appears when the recent list becomes non-empty (and disappears when it empties) no longer shifts what gets highlighted.
+- Unit tests: `recent-games` (12 cases — dedupe/move-to-front, cap, corrupt and missing files, atomic round trip, position clamping) alongside the existing 15-test suite.
+
 ### Fixed — CI: an official deploy could skip over an RC build, and never cleared the RC markers
 - **The skip fast path trusted a marker the RC lane never touches.** `pi-rc.yml` deploys un-merged PR heads and records them in `.240mp-rc-deployed-{rev,pr,md5}`; the official deploy gate only compared `.240mp-last-deployed-rev`. So "same commit already deployed" could be true while the Pi was actually running an RC build, and the deploy would skip — blessing an RC binary as the beta deploy.
 - **Stale RC markers survived a real deploy.** Observed on the promotion of `55b129c`: the official deploy overwrote the official marker and left PR #77's `rc-deployed-*` files in place, so the Pi still read as "carrying an RC build" to every later probe (and the leftover `pr-77` owner makes a future PR close think it may need to restore).

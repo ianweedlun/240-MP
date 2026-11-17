@@ -114,9 +114,16 @@ FocusScope {
         Keys.onReturnPressed: {
             var pl = model[currentIndex]
             if (!pl) return
+            // The RECENT row is a door, not a playlist: it opens the recently
+            // played list, which launches straight from stored entries.
+            if (pl.recentRow) {
+                navigateTo("Recent.qml", {},
+                    { currentIndex: playlistList.currentIndex, key: "__recent" })
+                return
+            }
             navigateTo("Games.qml",
                 { playlistPath: pl.path, playlistName: pl.name, playlistBasename: pl.name, shortName: pl.shortName || pl.name, systemId: systemId },
-                { currentIndex: playlistList.currentIndex })
+                { currentIndex: playlistList.currentIndex, key: pl.path })
         }
 
         delegate: Item {
@@ -203,17 +210,44 @@ FocusScope {
         playlistList.forceActiveFocus()
     }
 
+    // Rows the list actually shows: an optional RECENT door, then the playlists.
+    // Kept as its own function so the index restore below can talk about row
+    // *identity* — a bare index silently points one row off the moment the recent
+    // row appears (first launch) or disappears (data wipe).
+    function buildRows(pls) {
+        var rows = []
+        if (showAllPlaylists) {
+            var recent = retroarchBackend.recentGames()
+            if (recent.length > 0) {
+                rows.push({ recentRow: true, name: "RECENTLY PLAYED",
+                            shortName: "RECENTLY PLAYED", count: recent.length, path: "" })
+            }
+        }
+        for (var i = 0; i < pls.length; i++) rows.push(pls[i])
+        return rows
+    }
+
     function refreshPlaylistModel() {
         var pls = showAllPlaylists
             ? retroarchBackend.refreshAllPlaylists()
             : retroarchBackend.refreshPlaylists(systemId)
-        playlistList.model = pls
+        var rows = buildRows(pls)
+        playlistList.model = rows
         playlistsRoot.listLoaded = true
-        if (pls.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            playlistList.currentIndex = Math.min(restore, pls.length - 1)
-            playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
+        if (rows.length === 0) return
+
+        var target = 0
+        var key = navListState.key
+        if (key !== undefined) {
+            for (var i = 0; i < rows.length; i++) {
+                var rowKey = rows[i].recentRow ? "__recent" : rows[i].path
+                if (rowKey === key) { target = i; break }
+            }
+        } else if (navListState.currentIndex !== undefined) {
+            target = navListState.currentIndex
         }
+        playlistList.currentIndex = Math.min(Math.max(target, 0), rows.length - 1)
+        playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
     }
 
     Connections {

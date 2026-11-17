@@ -18,6 +18,7 @@ FocusScope {
     // falsy forever, so an empty playlist kept the spinner and its
     // "No games in this playlist" state was unreachable.
     property bool listLoaded: false
+    property string gameSortLabel: "A-Z"
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
         // null/undefined means "never set" — the manifest default (RIGHT),
@@ -67,8 +68,13 @@ FocusScope {
             }
         }
         result.sort(function(a, b) {
-            if (a.letter === '#') return -1
-            if (b.letter === '#') return 1
+            // The letter strip follows the list direction; '#' leads A-Z and
+            // trails Z-A so its order matches the rows it jumps to.
+            var descending = gamesRoot.gameSortLabel === "Z-A"
+            if (a.letter === '#') return descending ? 1 : -1
+            if (b.letter === '#') return descending ? -1 : 1
+            if (a.letter === b.letter) return 0
+            if (descending) return a.letter > b.letter ? -1 : 1
             return a.letter < b.letter ? -1 : 1
         })
         return result
@@ -124,6 +130,22 @@ FocusScope {
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
         anchors.leftMargin: root.sw * 0.125 //80
+    }
+
+    // Game count + active direction, right-aligned to the list's edge. Playlists
+    // already show per-system counts; the games list had no equivalent.
+    Text {
+        id: gamesCountHeader
+        visible: gamesRoot.listLoaded
+        anchors.top: parent.top
+        anchors.topMargin: root.sh * 0.195 //94
+        anchors.right: parent.right
+        anchors.rightMargin: root.sw * 0.125 //80
+        text: gameList.count + " GAMES  ·  " + gamesRoot.gameSortLabel
+        color: root.secondaryColor
+        font.family: root.globalFont
+        font.capitalization: Font.AllUppercase
+        font.pixelSize: root.sh * 0.027
     }
 
     // Loading indicator
@@ -200,7 +222,17 @@ FocusScope {
         Keys.onReturnPressed: {
             var game = model[currentIndex]
             if (!game) return
-            retroarchBackend.launchGame(game, navParams.systemId)
+            // Copy, don't mutate the model entry: the row still needs its own
+            // identity, and the payload needs the playlist it came from so the
+            // recently-played entry can be launched without re-reading a playlist.
+            var payload = Object.assign({}, game)
+            payload.playlistPath = gamesRoot.playlistPath
+            payload.playlistBasename = gamesRoot.playlistBasename
+            payload.shortName = gamesRoot.shortName
+            payload.systemId = navParams.systemId
+            // Where we were, remembered before the child takes the screen.
+            retroarchBackend.recordGamePosition(gamesRoot.playlistPath, gameList.currentIndex)
+            retroarchBackend.launchGame(payload, navParams.systemId)
         }
 
         Keys.onRightPressed: {
@@ -398,19 +430,64 @@ FocusScope {
         return game
     }
 
-    Component.onCompleted: {
+    // Back out of a 1746-game list and the next visit lands where you left it,
+    // including after a service restart.
+    Component.onDestruction: {
+        if (gameList.count > 0)
+            retroarchBackend.recordGamePosition(playlistPath, gameList.currentIndex)
+    }
+
+    // One reload path for boot and for a live game_sort change. A sort flip
+    // keeps the same GAME selected by name (indices now mean different rows),
+    // then persists its new index so a later visit lands on the same game.
+    function refreshGamesModel(preserveSelection) {
+        var oldModel = gameList.model
+        var currentName = ""
+        if (preserveSelection && oldModel && oldModel.length > 0 &&
+                gameList.currentIndex >= 0 && gameList.currentIndex < oldModel.length) {
+            currentName = (oldModel[gameList.currentIndex] || {}).name || ""
+        }
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
+        // Direction first: buildLetterIndex() orders the jump strip by it.
+        gamesRoot.gameSortLabel = retroarchBackend.gameSort()
         gamesRoot.letterIndex = gamesRoot.buildLetterIndex(games)
         gamesRoot.listLoaded = true
-        if (games.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            gameList.currentIndex = Math.min(restore, games.length - 1)
-            gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
-            gamesRoot.syncLetterToGame()
-            if (previewLoader.item)
-                previewLoader.item.game = ensureThumbnail(games[gameList.currentIndex])
+        if (games.length === 0) return
+
+        var target = -1
+        if (currentName !== "") {
+            for (var i = 0; i < games.length; i++) {
+                if (games[i].name === currentName) { target = i; break }
+            }
         }
+        if (target < 0) {
+            // First load: nav state wins, then the persisted position.
+            var fromState = (navListState && navListState.currentIndex >= 0)
+                ? navListState.currentIndex : -1
+            var saved = retroarchBackend.gamePosition(playlistPath)
+            target = (fromState >= 0 && fromState < games.length) ? fromState
+                   : ((saved >= 0) ? Math.min(saved, games.length - 1) : 0)
+        }
+        if (preserveSelection)
+            retroarchBackend.recordGamePosition(playlistPath, target)
+        gameList.currentIndex = target
+        gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
+        gamesRoot.syncLetterToGame()
+        if (previewLoader.item)
+            previewLoader.item.game = ensureThumbnail(games[gameList.currentIndex])
+    }
+
+    Connections {
+        target: appCore
+        function onModuleSettingChanged(mid, key, value) {
+            if (mid === moduleRoot.moduleId && key === "game_sort")
+                gamesRoot.refreshGamesModel(true)
+        }
+    }
+
+    Component.onCompleted: {
+        gamesRoot.refreshGamesModel(false)
         gameList.forceActiveFocus()
     }
 }

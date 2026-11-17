@@ -17,7 +17,8 @@ private:
     QTemporaryDir m_tmp;
 
     // A temp-tree config.json pointing every path at the fixture dirs.
-    RetroArchBackend *makeBackend(const QString &playlistSort = QString());
+    RetroArchBackend *makeBackend(const QString &playlistSort = QString(),
+                                  const QString &gameSort = QString());
     void writePlaylist(const QString &name, const QString &content);
     void cleanPlaylistDir();
     void writePlaylistBinary(const QString &name, const QByteArray &content);
@@ -47,6 +48,9 @@ private slots:
     void playlistSortSystemIsDefault();
     void playlistSortCompanyFallsBackToAlpha();
     void livePlaylistSortChangeReorders();
+    void gameSortDefaultsToAtoZ();
+    void gameSortLiveChangeReordersGames();
+    void sortedGamesIgnoresArticlesAndCase();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -56,7 +60,8 @@ void RetroArchBackendTest::initTestCase() {
     QDir().mkpath(m_tmp.path() + "/thumbnails");
 }
 
-RetroArchBackend *RetroArchBackendTest::makeBackend(const QString &playlistSort) {
+RetroArchBackend *RetroArchBackendTest::makeBackend(const QString &playlistSort,
+                                                    const QString &gameSort) {
     const QString dataRoot = m_tmp.path();
     QJsonObject mod;
     mod.insert("playlist_directory", dataRoot + "/playlists");
@@ -64,6 +69,8 @@ RetroArchBackend *RetroArchBackendTest::makeBackend(const QString &playlistSort)
     mod.insert("thumbnail_directory", dataRoot + "/thumbnails");
     if (!playlistSort.isEmpty())
         mod.insert("playlist_sort", playlistSort);
+    if (!gameSort.isEmpty())
+        mod.insert("game_sort", gameSort);
     QJsonObject cfg;
     cfg.insert("modules", QJsonObject{ { QStringLiteral("com.240mp.retroarch"), mod } });
     {
@@ -191,10 +198,12 @@ void RetroArchBackendTest::refreshGamesParsesEntries() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.json");
     QCOMPARE(games.size(), 2);
-    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Super Mario World"));
-    QCOMPARE(games.at(0).toMap()["corePath"].toString(), core);
-    QCOMPARE(games.at(0).toMap()["coreName"].toString(), QString("snes9x_libretro"));
-    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
+    // Games come back in the configured view order (A-Z by default), not the
+    // playlist file's order.
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Chrono Trigger"));
+    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Super Mario World"));
+    QCOMPARE(games.at(1).toMap()["corePath"].toString(), core);
+    QCOMPARE(games.at(1).toMap()["coreName"].toString(), QString("snes9x_libretro"));
     // parsePlaylist no longer resolves thumbnails (lazy — see resolveThumbnail).
     QVERIFY(games.at(0).toMap()["thumbnail"].toString().isEmpty());
 }
@@ -449,8 +458,8 @@ void RetroArchBackendTest::refreshGamesParsesRzipCompressedPlaylist() {
     const QVariantList games =
         be->refreshGames(m_tmp.path() + "/playlists/snes9x_libretro.rpl");
     QCOMPARE(games.size(), 2);
-    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Super Mario World"));
-    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Chrono Trigger"));
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Chrono Trigger"));
+    QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Super Mario World"));
 }
 
 void RetroArchBackendTest::archiveRomPathChecksArchiveOnly() {
@@ -618,6 +627,78 @@ void RetroArchBackendTest::livePlaylistSortChangeReorders() {
     be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
                          QStringLiteral("playlist_sort"), QString());
     QCOMPARE(be->playlistSort(), QStringLiteral("SYSTEM"));
+}
+
+void RetroArchBackendTest::gameSortDefaultsToAtoZ() {
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be != nullptr);
+    QCOMPARE(be->gameSort(), QStringLiteral("A-Z"));
+
+    // A persisted Z-A is honored at boot, with no Settings round trip.
+    RetroArchBackend *desc = makeBackend(QString(), QStringLiteral("Z-A"));
+    QVERIFY(desc != nullptr);
+    QCOMPARE(desc->gameSort(), QStringLiteral("Z-A"));
+}
+
+void RetroArchBackendTest::gameSortLiveChangeReordersGames() {
+    cleanPlaylistDir();
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be != nullptr);
+    writePlaylist("NES.lpl",
+                  playlistJson("/cores/nes_libretro.so",
+                               { "Zelda", "The Adventures", "Bowser" }));
+
+    // A-Z: leading "The" ignored, so The Adventures sorts under A.
+    {
+        const QVariantList games = be->refreshGames(m_tmp.path() + "/playlists/NES.lpl");
+        QCOMPARE(games.size(), 3);
+        QCOMPARE(games.at(0).toMap()["name"].toString(), QString("The Adventures"));
+        QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Bowser"));
+        QCOMPARE(games.at(2).toMap()["name"].toString(), QString("Zelda"));
+    }
+
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("game_sort"), QStringLiteral("Z-A"));
+    QCOMPARE(be->gameSort(), QStringLiteral("Z-A"));
+    {
+        const QVariantList games = be->refreshGames(m_tmp.path() + "/playlists/NES.lpl");
+        QCOMPARE(games.at(0).toMap()["name"].toString(), QString("Zelda"));
+        QCOMPARE(games.at(1).toMap()["name"].toString(), QString("Bowser"));
+        QCOMPARE(games.at(2).toMap()["name"].toString(), QString("The Adventures"));
+    }
+
+    // Unknown and empty values fall back to the documented default.
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("game_sort"), QStringLiteral("SIDEWAYS"));
+    QCOMPARE(be->gameSort(), QStringLiteral("A-Z"));
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("game_sort"), QString());
+    QCOMPARE(be->gameSort(), QStringLiteral("A-Z"));
+}
+
+void RetroArchBackendTest::sortedGamesIgnoresArticlesAndCase() {
+    const QVariantList games{
+        QVariantMap{ { QStringLiteral("name"), QStringLiteral("The Cat") } },
+        QVariantMap{ { QStringLiteral("name"), QStringLiteral("zebra") } },
+        QVariantMap{ { QStringLiteral("name"), QStringLiteral("animal") } },
+        QVariantMap{ { QStringLiteral("name"), QStringLiteral("Cat") } }
+    };
+    const QVariantList asc = RetroArchBackend::sortedGames(games, false);
+    QCOMPARE(asc.at(0).toMap()["name"].toString(), QString("animal"));
+    // Equal sort keys break ties on original name, so the order is stable.
+    QCOMPARE(asc.at(1).toMap()["name"].toString(), QString("Cat"));
+    QCOMPARE(asc.at(2).toMap()["name"].toString(), QString("The Cat"));
+    QCOMPARE(asc.at(3).toMap()["name"].toString(), QString("zebra"));
+
+    const QVariantList desc = RetroArchBackend::sortedGames(games, true);
+    QCOMPARE(desc.at(0).toMap()["name"].toString(), QString("zebra"));
+    QCOMPARE(desc.at(1).toMap()["name"].toString(), QString("The Cat"));
+    QCOMPARE(desc.at(2).toMap()["name"].toString(), QString("Cat"));
+    QCOMPARE(desc.at(3).toMap()["name"].toString(), QString("animal"));
+
+    // The input list is untouched — callers own the model they pass in.
+    QCOMPARE(games.at(0).toMap()["name"].toString(), QString("The Cat"));
+    QVERIFY(RetroArchBackend::sortedGames(QVariantList{}, false).isEmpty());
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)

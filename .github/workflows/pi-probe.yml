@@ -65,7 +65,11 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
   # Audio ground truth. Read-only EXCEPT fact 4's attenuation test, which sets
-  # the code-preferred control to 40% and restores its original RAW value.
+  # the code-preferred control to 40% and restores its original value — the
+  # restore is proven by a read-back of the mixer, not asserted (card t_04594e5a:
+  # a regex that could not parse a negative 'Mono: Playback -1196 [85%]' line left
+  # the mixer at 40%). The write is also gated on a successful parse, so a parse
+  # regression fails closed instead of moving the volume.
   # workflow_dispatch = full measurement (FACT 4 included). schedule = the same
   # collection with every write guarded off (CANARY_MODE=1), so the PR/beta lane
   # is unchanged and a cron run can never move the volume under a viewer.
@@ -206,30 +210,15 @@ jobs:
           echo "-- code-preferred control from SAVED STATE: [${SAVED_PICK:-NONE FOUND}] --"
           echo "SAVED_PICK=${SAVED_PICK:-none}"
 
-          hr "FACT 4: attenuation test on [${PICK:-NONE}] (set 40%, restore original RAW value)"
-          if [ "${CANARY_MODE:-0}" = "1" ]; then
-            echo "GUARD: FACT 4 SKIPPED on the scheduled canary path (CANARY_MODE=1, event_name=schedule|force_schedule)."
-            echo "GUARD: this block runs 'amixer sset' — a WRITE to a live mixer value — and a cron run must never"
-            echo "GUARD: move the volume under a viewer. FACT 4 stays workflow_dispatch-only."
-            echo "FACT4_STATUS=skipped-scheduled-guard"
-          elif [ -z "$PICK" ]; then
-            echo "SKIPPED: no candidate control present — nothing to set."
-            echo "FACT4_STATUS=skipped-no-control"
-          else
-            echo "FACT4_STATUS=ran"
-            BEFORE=$(amixer sget "$PICK" 2>&1)
-            echo "-- before --"; echo "$BEFORE"
-            RAW=$(printf '%s' "$BEFORE" | grep -oE 'Playback [0-9]+ \[' | head -1 | grep -oE '[0-9]+')
-            echo "parsed raw value: ${RAW:-<none>}"
-            echo "-- sset 40% --"; amixer sset "$PICK" 40% 2>&1 || true
-            echo "-- after sset 40% --"; amixer sget "$PICK" 2>&1 || true
-            if [ -n "${RAW:-}" ]; then
-              echo "-- restore raw $RAW --"; amixer sset "$PICK" "$RAW" 2>&1 || true
-              echo "-- after restore --"; amixer sget "$PICK" 2>&1 || true
-            else
-              echo "RESTORE SKIPPED: original raw value unparsed — MIXER LEFT AT 40%, manual restore needed."
-            fi
-          fi
+          # FACT 4 (the attenuation test — a WRITE to the live mixer) and FACT 5 (the
+          # access routes, including the sudo attenuation test) run in the next step.
+          # Why: GitHub refuses to load a workflow whose block scalar passes its
+          # ~21,000-character inline-expression ceiling — dispatching this file on a
+          # branch fails with "Exceeded max expression length 21000", and this run
+          # block was already at ~20.9k chars (card t_04594e5a). Keeping FACT 4 here
+          # left no room to fix its parse. The attenuation step re-derives PICK with
+          # the same pickControl() mirror FACT 3 uses.
+          hr "FACT 4/5 moved out: attenuation + access routes run in the next step"
 
           hr "APP-USER CONTEXT"
           AUSER=$(systemctl show -p User --value 240mp.service 2>/dev/null || true)
@@ -244,89 +233,7 @@ jobs:
           getfacl -p /dev/snd/controlC0 2>&1 || true
           ls -l /dev/snd/by-path/ 2>&1 || true
 
-          # ── ROUND 2: why facts 3/4 came back permission-shaped, and whether
-          # any route exists for this ssh user to touch the mixer at all. ──
-          hr "FACT 5: mixer access routes for the probe user"
-          echo "-- /dev/snd/controlC0 open test (root cause of 'cannot find card') --"
-          dd if=/dev/snd/controlC0 bs=1 count=1 of=/dev/null 2>&1 || true
-          echo "-- audio group membership in the group db --"
-          getent group audio 2>&1 || echo "(no audio group)"
-          getent group pulse 2>&1 || echo "(no pulse group)"
-          getent group pulse-access 2>&1 || echo "(no pulse-access group)"
-          echo "-- sudo -n -l (what this user may run as root) --"
-          sudo -n -l 2>&1 || true
-          echo "-- saved ALSA state (control NAMES live here even without card access) --"
-          ls -l /var/lib/alsa/ 2>&1 || true
-          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state /var/lib/alsa/state; do
-            if [ -r "$f" ]; then
-              echo "=== $f (FULL DUMP) ==="
-              cat "$f" 2>&1 || true
-              echo "=== end $f ==="
-            else
-              echo "$f: NOT READABLE by $(id -un)"
-            fi
-          done
-          echo "-- control NAMES extracted from saved state --"
-          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state; do
-            [ -r "$f" ] || continue
-            echo "  from $f:"
-            sed -n "s/.*name '\(.*\)'.*/    \1/p" "$f" 2>/dev/null | sort -u || true
-          done
-          echo "-- sysfs card identity --"
-          cat /sys/class/sound/card0/id 2>&1 || true
-          cat /proc/asound/card0/id 2>&1 || true
-          echo "-- world-readable hardware volume readout (OSS emulation) --"
-          ls -l /proc/asound/card0/ 2>&1 || true
-          cat /proc/asound/card0/oss_mixer 2>&1 || true
-          echo "-- OSS mixer device nodes --"
-          ls -l /dev/mixer /dev/dsp 2>&1 || true
-          echo "-- key-channel writability (would allow driving the shipped code path) --"
-          for f in /tmp/240mp_key.in; do
-            if [ -e "$f" ]; then
-              ls -l "$f"
-              if [ -w "$f" ]; then echo "  $f: WRITABLE by $(id -un)"; else echo "  $f: NOT writable by $(id -un)"; fi
-            else
-              echo "  $f: absent"
-            fi
-          done
-          echo "-- amixer with explicit devices (clearer error than -c 0) --"
-          amixer -D default scontrols 2>&1 || true
-          amixer -D hw:Headphones scontrols 2>&1 || true
-          amixer -D hw:0 scontrols 2>&1 || true
-          echo "-- app state surfaces this user can read --"
-          ls -l /tmp/240mp_state.log /tmp/240mp_key.in 2>&1 || true
-          tail -n 25 /tmp/240mp_state.log 2>&1 || true
-          echo "-- app-persisted volume state (only written when mixer->setLevel() returned true) --"
-          for p in /home/ian/.local/share/240mp/volume.json /home/ian/.config/240mp/volume.json /tmp/240mp_volume.json; do
-            echo "  ## $p"; cat "$p" 2>&1 || true; echo
-          done
-          echo "-- journald read access for the app unit --"
-          journalctl -u 240mp.service -n 5 --no-pager 2>&1 | head -12 || true
-
-          echo "-- if sudo happens to allow the mixer, take the measurement here --"
-          if [ "${CANARY_MODE:-0}" = "1" ]; then
-            echo "GUARD: sudo attenuation measurement SKIPPED on the scheduled canary path — same write rule as FACT 4."
-          elif sudo -n amixer -c 0 scontrols >/dev/null 2>&1; then
-            SPICK=""
-            SSC=$(sudo -n amixer -c 0 scontrols 2>/dev/null || true)
-            for c in Master PCM Headphone Headphones Speaker; do
-              if printf '%s' "$SSC" | grep -qiF "control '$c'"; then SPICK="$c"; break; fi
-            done
-            echo "SUDO ROUTE WORKS — picked [${SPICK:-NONE}]"
-            echo "-- sudo amixer -c 0 scontrols --"; echo "$SSC"
-            if [ -n "$SPICK" ]; then
-              SBEF=$(sudo -n amixer -c 0 sget "$SPICK" 2>&1); echo "-- before --"; echo "$SBEF"
-              SRAW=$(printf '%s' "$SBEF" | grep -oE 'Playback [0-9]+ \[' | head -1 | grep -oE '[0-9]+')
-              sudo -n amixer -c 0 sset "$SPICK" 40% 2>&1 || true
-              echo "-- after sset 40% --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 || true
-              if [ -n "${SRAW:-}" ]; then
-                sudo -n amixer -c 0 sset "$SPICK" "$SRAW" 2>&1 || true
-                echo "-- restored raw $SRAW --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 || true
-              fi
-            fi
-          else
-            echo "SUDO ROUTE: unavailable (sudo cannot run amixer) — attenuation not measurable by this user."
-          fi
+          hr "FACT 5 moved out: access routes run in the attenuation step"
 
           # ── FACT 6: what systemd actually GRANTED the live process, read from
           # /proc — not from the unit's configured SupplementaryGroups list.
@@ -525,6 +432,211 @@ jobs:
           cat /tmp/pi_audio_facts.txt
           echo "REMOTE_PROBE_RC=$RC"
           exit 0
+
+      - name: Attenuation test FACT 4 + mixer access routes FACT 5 (mixer WRITE, dispatch only)
+        # Split out of "Collect facts 1-4" (card t_04594e5a): GitHub refuses to load a
+        # workflow whose block scalar passes its ~21,000-character inline-expression
+        # ceiling — dispatching that file on a branch fails with "Exceeded max
+        # expression length 21000" — and the collection run block was already at ~20.9k
+        # chars, so there was no headroom to fix the FACT 4 parse in place. Behaviour is
+        # unchanged: this step re-derives PICK exactly as FACT 3 does, then measures.
+        # FACT 4 WRITES the live mixer, so it keeps the CANARY_MODE guard and stays
+        # workflow_dispatch-only; the restore is proven by a read-back of the mixer.
+        env:
+          CANARY_MODE: ${{ (github.event_name == 'schedule' || inputs.force_schedule == 'true') && '1' || '0' }}
+        run: |
+          set +e
+          if [ "${PI_UNREACHABLE:-0}" = "1" ]; then
+            echo "SKIPPED: the Pi was unreachable in the collection step — no attenuation measurement."
+            echo "FACT4_STATUS=skipped-pi-unreachable" | tee -a /tmp/pi_audio_facts.txt
+            exit 0
+          fi
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          REMOTE="${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}"
+          $SSH "$REMOTE" "CANARY_MODE=${CANARY_MODE:-0} bash -s" 2>&1 <<'REMOTE_SCRIPT' | tee -a /tmp/pi_audio_facts.txt
+          set -u
+          hr(){ printf '\n===== %s =====\n' "$1"; }
+          # One ALSA value-line matcher, shared by FACT 4 and the sudo route (card
+          # t_04594e5a). A real value line looks like
+          #     Mono: Playback -1196 [85%] [-11.96dB] [on]
+          #     Front Left: Playback 60 [79%] [-12.00dB] [on]
+          # so it is labelled by channel, may carry a NEGATIVE raw value (this Pi's
+          # PCM limits are -10239..400), and always has a '[NN%]' bracket. The
+          # 'Limits: Playback -10239 - 400' line has no bracket, which is exactly how
+          # the limits line is excluded without hand-listing control names.
+          VLINE_RE='^[[:space:]]*[A-Za-z][A-Za-z ]*: Playback -?[0-9]+ \[[0-9]+%\]'
+
+          # Mirror ALSAVolumeMixer::pickControl() exactly (the same list FACT 3 uses):
+          # Master, PCM, Headphone, Headphones, Speaker — case-insensitive, default card.
+          PICK=""
+          SC=$(amixer scontrols 2>/dev/null || true)
+          for c in Master PCM Headphone Headphones Speaker; do
+            if printf '%s' "$SC" | grep -qiF "control '$c'"; then PICK="$c"; break; fi
+          done
+          echo "-- code-preferred control: [${PICK:-NONE FOUND}] --"
+
+          hr "FACT 4: attenuation test on [${PICK:-NONE}] (set 40%, restore original value, then read it back)"
+          if [ "${CANARY_MODE:-0}" = "1" ]; then
+            echo "GUARD: FACT 4 SKIPPED on the scheduled canary path (CANARY_MODE=1, event_name=schedule|force_schedule)."
+            echo "GUARD: this block runs 'amixer sset' — a WRITE to a live mixer value — and a cron run must never"
+            echo "GUARD: move the volume under a viewer. FACT 4 stays workflow_dispatch-only."
+            echo "FACT4_STATUS=skipped-scheduled-guard"
+          elif [ -z "$PICK" ]; then
+            echo "SKIPPED: no candidate control present — nothing to set."
+            echo "FACT4_STATUS=skipped-no-control"
+          else
+            echo "FACT4_STATUS=ran"
+            BEFORE=$(amixer sget "$PICK" 2>&1)
+            echo "-- before --"; echo "$BEFORE"
+            # Parse the value line(s) (card t_04594e5a). The old pattern
+            # 'Playback [0-9]+ \[' matched NEITHER thing this control prints — the
+            # value is negative ('Mono: Playback -1196 [85%] ...'), so RAW was always
+            # empty and the restore was dead code that left the mixer at 40%.
+            VLINES=$(printf '%s\n' "$BEFORE" | grep -E "$VLINE_RE" || true)
+            RAWS=$(printf '%s\n' "$VLINES" | sed -n 's/.* Playback \(-*[0-9][0-9]*\) \[[0-9][0-9]*%\].*/\1/p' | tr '\n' ',' | sed 's/,$//')
+            PCTS=$(printf '%s\n' "$VLINES" | sed -n 's/.* Playback -*[0-9][0-9]* \[\([0-9][0-9]*\)%\].*/\1/p' | tr '\n' ',' | sed 's/,$//')
+            echo "parsed value line(s):"
+            printf '%s\n' "${VLINES:-<none>}" | sed 's/^/  /'
+            echo "parsed raw value: ${RAWS:-<none>}   parsed percent: ${PCTS:-<none>}"
+            if [ -z "${VLINES:-}" ]; then
+              # Fail closed: a parse regression must leave the mixer untouched, never
+              # at the test value. Writing without a restore token is unrecoverable.
+              echo "GUARD: no value line parsed — NOT running 'amixer sset 40%' (a write with no restore token cannot be undone)."
+              echo "FACT4_STATUS=skipped-unparsed"
+            else
+              echo "-- sset 40% --"; amixer sset "$PICK" 40% 2>&1 || true
+              echo "-- after sset 40% --"; amixer sget "$PICK" 2>&1 || true
+
+              # NOTE: a negative raw value ('-1196') is swallowed by amixer's own
+              # getopt as an option ('amixer: invalid option -- 1') unless '--'
+              # ends option parsing first. Without it the raw restore NEVER ran and
+              # only the percent fallback below restored anything (card t_04594e5a).
+              echo "-- restore raw value(s) $RAWS --"; amixer sset "$PICK" -- "$RAWS" 2>&1 || true
+              AFTER_RESTORE=$(amixer sget "$PICK" 2>&1)
+              echo "-- after restore, read back from the mixer --"
+              printf '%s\n' "$AFTER_RESTORE" | sed 's/^/  /'
+              RESTORED=$(printf '%s\n' "$AFTER_RESTORE" | grep -E "$VLINE_RE" || true)
+              if [ "${RESTORED:-}" != "${VLINES:-}" ] && [ -n "${PCTS:-}" ]; then
+                echo "-- raw restore did not reproduce the original line(s); retrying with ${PCTS}% --"
+                amixer sset "$PICK" "${PCTS}%" 2>&1 || true
+                AFTER_RESTORE=$(amixer sget "$PICK" 2>&1)
+                echo "-- after percent restore, read back from the mixer --"
+                printf '%s\n' "$AFTER_RESTORE" | sed 's/^/  /'
+                RESTORED=$(printf '%s\n' "$AFTER_RESTORE" | grep -E "$VLINE_RE" || true)
+              fi
+              # Proof, not assertion: the read-back must equal the pre-test line.
+              if [ "${RESTORED:-}" = "${VLINES:-}" ]; then
+                echo "RESTORE_VERIFIED: post-restore read-back matches the pre-test value line byte-for-byte."
+                echo "FACT4_RESTORE=verified"
+              else
+                echo "FACT4_RESTORE=FAILED"
+                echo "  original: [${VLINES:-<none>}]"
+                echo "  restored: [${RESTORED:-<none>}]"
+                echo "::error::FACT 4 restore FAILED — '$PICK' is not back to its original value; restore by hand: amixer sset '$PICK' '${RAWS:-?}'"
+              fi
+            fi
+          fi
+
+          # ── ROUND 2: why facts 3/4 came back permission-shaped, and whether
+          # any route exists for this ssh user to touch the mixer at all. ──
+          hr "FACT 5: mixer access routes for the probe user"
+          echo "-- /dev/snd/controlC0 open test (root cause of 'cannot find card') --"
+          dd if=/dev/snd/controlC0 bs=1 count=1 of=/dev/null 2>&1 || true
+          echo "-- audio group membership in the group db --"
+          getent group audio 2>&1 || echo "(no audio group)"
+          getent group pulse 2>&1 || echo "(no pulse group)"
+          getent group pulse-access 2>&1 || echo "(no pulse-access group)"
+          echo "-- sudo -n -l (what this user may run as root) --"
+          sudo -n -l 2>&1 || true
+          echo "-- saved ALSA state (control NAMES live here even without card access) --"
+          ls -l /var/lib/alsa/ 2>&1 || true
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state /var/lib/alsa/state; do
+            if [ -r "$f" ]; then
+              echo "=== $f (FULL DUMP) ==="
+              cat "$f" 2>&1 || true
+              echo "=== end $f ==="
+            else
+              echo "$f: NOT READABLE by $(id -un)"
+            fi
+          done
+          echo "-- control NAMES extracted from saved state --"
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state; do
+            [ -r "$f" ] || continue
+            echo "  from $f:"
+            sed -n "s/.*name '\(.*\)'.*/    \1/p" "$f" 2>/dev/null | sort -u || true
+          done
+          echo "-- sysfs card identity --"
+          cat /sys/class/sound/card0/id 2>&1 || true
+          cat /proc/asound/card0/id 2>&1 || true
+          echo "-- world-readable hardware volume readout (OSS emulation) --"
+          ls -l /proc/asound/card0/ 2>&1 || true
+          cat /proc/asound/card0/oss_mixer 2>&1 || true
+          echo "-- OSS mixer device nodes --"
+          ls -l /dev/mixer /dev/dsp 2>&1 || true
+          echo "-- key-channel writability (would allow driving the shipped code path) --"
+          for f in /tmp/240mp_key.in; do
+            if [ -e "$f" ]; then
+              ls -l "$f"
+              if [ -w "$f" ]; then echo "  $f: WRITABLE by $(id -un)"; else echo "  $f: NOT writable by $(id -un)"; fi
+            else
+              echo "  $f: absent"
+            fi
+          done
+          echo "-- amixer with explicit devices (clearer error than -c 0) --"
+          amixer -D default scontrols 2>&1 || true
+          amixer -D hw:Headphones scontrols 2>&1 || true
+          amixer -D hw:0 scontrols 2>&1 || true
+          echo "-- app state surfaces this user can read --"
+          ls -l /tmp/240mp_state.log /tmp/240mp_key.in 2>&1 || true
+          tail -n 25 /tmp/240mp_state.log 2>&1 || true
+          echo "-- app-persisted volume state (only written when mixer->setLevel() returned true) --"
+          for p in /home/ian/.local/share/240mp/volume.json /home/ian/.config/240mp/volume.json /tmp/240mp_volume.json; do
+            echo "  ## $p"; cat "$p" 2>&1 || true; echo
+          done
+          echo "-- journald read access for the app unit --"
+          journalctl -u 240mp.service -n 5 --no-pager 2>&1 | head -12 || true
+
+          echo "-- if sudo happens to allow the mixer, take the measurement here --"
+          if [ "${CANARY_MODE:-0}" = "1" ]; then
+            echo "GUARD: sudo attenuation measurement SKIPPED on the scheduled canary path — same write rule as FACT 4."
+          elif sudo -n amixer -c 0 scontrols >/dev/null 2>&1; then
+            SPICK=""
+            SSC=$(sudo -n amixer -c 0 scontrols 2>/dev/null || true)
+            for c in Master PCM Headphone Headphones Speaker; do
+              if printf '%s' "$SSC" | grep -qiF "control '$c'"; then SPICK="$c"; break; fi
+            done
+            echo "SUDO ROUTE WORKS — picked [${SPICK:-NONE}]"
+            echo "-- sudo amixer -c 0 scontrols --"; echo "$SSC"
+            if [ -n "$SPICK" ]; then
+              SBEF=$(sudo -n amixer -c 0 sget "$SPICK" 2>&1); echo "-- before --"; echo "$SBEF"
+              SVLINES=$(printf '%s\n' "$SBEF" | grep -E "$VLINE_RE" || true)
+              SRAWS=$(printf '%s\n' "$SVLINES" | sed -n 's/.* Playback \(-*[0-9][0-9]*\) \[[0-9][0-9]*%\].*/\1/p' | tr '\n' ',' | sed 's/,$//')
+              echo "parsed value line(s): $(printf '%s' "${SVLINES:-<none>}" | tr '\n' '|')  raw=${SRAWS:-<none>}"
+              if [ -z "${SVLINES:-}" ]; then
+                echo "GUARD: no value line parsed — not writing to the mixer through sudo either (same rule as FACT 4)."
+              else
+                sudo -n amixer -c 0 sset "$SPICK" 40% 2>&1 || true
+                echo "-- after sset 40% --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 || true
+                sudo -n amixer -c 0 sset "$SPICK" "$SRAWS" 2>&1 || true
+                SRTD=$(sudo -n amixer -c 0 sget "$SPICK" 2>&1 | grep -E "$VLINE_RE" || true)
+                echo "-- after restore, read back --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 | sed 's/^/  /'
+                if [ "${SRTD:-}" = "${SVLINES:-}" ]; then
+                  echo "SUDO_RESTORE=verified"
+                else
+                  echo "SUDO_RESTORE=FAILED original=[${SVLINES:-<none>}] restored=[${SRTD:-<none>}]"
+                  echo "::error::FACT 5 sudo restore FAILED — '$SPICK' is not back to its original value; restore by hand: sudo amixer -c 0 sset '$SPICK' '${SRAWS:-?}'"
+                fi
+              fi
+            fi
+          else
+            echo "SUDO ROUTE: unavailable (sudo cannot run amixer) — attenuation not measurable by this user."
+          fi
+
+          hr "END OF ATTENUATION PROBE"
+          REMOTE_SCRIPT
+          echo "ATTENUATION_STEP_RC=${PIPESTATUS[0]}"
+          exit 0
+
 
       - name: Resolve builds and deployed identity (fact 1, lane-aware)
         # FACT 1 is an identity question and the Pi has TWO legitimate deploy lanes

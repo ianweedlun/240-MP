@@ -6,6 +6,8 @@
 #include <QVariantList>
 #include <QProcess>
 
+#include "RecentGamesStore.h"
+
 class DisplayHandoff;
 
 // Browsing RetroArch's playlist library.
@@ -32,6 +34,13 @@ public:
 
     // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
     QString playlistSort() const;
+    // Current games-view sort direction (A-Z / Z-A).
+    Q_INVOKABLE QString gameSort() const;
+
+    // Pure ordering used by the games view: case-insensitive, leading English
+    // articles ignored, ties broken by the original name. Exposed so the
+    // ordering can be unit-tested without a playlist file or a view.
+    static QVariantList sortedGames(const QVariantList &games, bool descending);
 
     // True while the RetroArch child process launched by launchGame() is alive.
     // InputManager consults this (the child owns the whole console — the app
@@ -61,8 +70,21 @@ public:
     Q_INVOKABLE QString resolveThumbnail(const QString &gameName,
                                          const QString &playlistBasename) const;
     // Launch a game: hand the display to RetroArch, run it with the item's
-    // core, restore the display when it exits.
+    // core, restore the display when it exits. The map should carry the fields a
+    // later "recently played" row needs (playlistPath, playlistBasename,
+    // shortName); everything else is taken from the item itself.
     Q_INVOKABLE void launchGame(const QVariantMap &game, const QString &systemId);
+
+    // Recently played, newest first — what the RECENT row on the playlist screen
+    // and Recent.qml list. Empty until something has been launched.
+    Q_INVOKABLE QVariantList recentGames() const;
+    // One press from the main menu to the thing you were playing: {} when nothing
+    // has been played yet.
+    Q_INVOKABLE QVariantMap lastPlayedGame() const;
+    // Remember where the viewer stopped in a playlist (index 0 clears it).
+    Q_INVOKABLE void recordGamePosition(const QString &playlistPath, int index);
+    // That remembered index, or -1.
+    Q_INVOKABLE int gamePosition(const QString &playlistPath) const;
 
     // System id derived from a playlist path: its filename without extension,
     // lowercased. "Sega - Mega Drive - Genesis.lpl" -> "sega - mega drive - genesis".
@@ -91,7 +113,12 @@ private:
     QString m_thumbnailDir;
     QString m_retroarchPath;
     QString m_playlistSort;
+    QString m_gameSort = QStringLiteral("A-Z");
     DisplayHandoff *m_handoff = nullptr;
+    // Persisted recently-played / playlist-position bookkeeping. Loaded on
+    // construction so a view can ask synchronously; written on launch and on
+    // leaving a games list.
+    RecentGamesStore m_recent;
     QProcess *m_gameProcess = nullptr; // the live launchGame() child, null when not running
 
     void loadSettings();

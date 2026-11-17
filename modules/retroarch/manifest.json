@@ -60,6 +60,17 @@
         "COMPANY"
       ],
       "description": "[SYSTEM] Alpha by shortname [COMPANY] Sort by company"
+    },
+    {
+      "key": "game_sort",
+      "label": "Game Sort",
+      "type": "list_single",
+      "default": "A-Z",
+      "options": [
+        "A-Z",
+        "Z-A"
+      ],
+      "description": "Games list order; ignores leading A/An/The."
     }
   ]
 }
