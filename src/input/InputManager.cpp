@@ -2,6 +2,8 @@
 #include "../AppCore.h"
 #include "../util/DisplayHandoff.h"
 #include "../modules/retroarch/RetroArchBackend.h"
+#include "../audio/VolumeManager.h"
+#include "../audio/VolumeKeyMap.h"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -139,6 +141,10 @@ void InputManager::setDisplayHandoff(DisplayHandoff *handoff) {
 
 void InputManager::setGameObserver(RetroArchBackend *backend) {
     m_raBackend = backend;
+}
+
+void InputManager::setVolumeManager(VolumeManager *volume) {
+    m_volume = volume;
 }
 
 // ── SDL lifecycle ─────────────────────────────────────────────────────────────
@@ -762,6 +768,19 @@ void InputManager::pollDebugKeyChannel()
                 QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
             continue;
         }
+        if (cmd == QLatin1String("volup") || cmd == QLatin1String("volumeup")
+            || cmd == QLatin1String("voldown") || cmd == QLatin1String("volumedown")
+            || cmd == QLatin1String("volmute") || cmd == QLatin1String("volumemute")) {
+            // Volume keys never become Actions — they go straight through the
+            // app-level eventFilter to VolumeManager. Post real Qt volume key
+            // events so the lab drive exercises that exact path, hardware-shaped.
+            const int volQtKey = cmd.contains(QLatin1String("up"))   ? Qt::Key_VolumeUp
+                               : cmd.contains(QLatin1String("down")) ? Qt::Key_VolumeDown
+                                                                     : Qt::Key_VolumeMute;
+            postKey(volQtKey, QEvent::KeyPress, false);
+            postKey(volQtKey, QEvent::KeyRelease, false);
+            continue;
+        }
         Action a = Action::None;
         if (cmd == QLatin1String("up")) a = Action::Up;
         else if (cmd == QLatin1String("down")) a = Action::Down;
@@ -1085,13 +1104,26 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     // never reach us — mpv binds the same names natively.
     // A module that handles volume/media keys itself (Weather's volume OSD)
     // disables interception; the keys then fall through and QML sees them.
+    //
+    // Volume is the exception, and always will be: #34 made it app-wide, so a
+    // volume key moves the system mixer through VolumeManager no matter which
+    // module is on screen or whether a player is running. Only the other media
+    // keys honour the interception switch. The key->action decision lives in
+    // audio/VolumeKeyMap.h so a unit test can hold it still.
+    const audio::VolumeKey volKey = audio::volumeKeyFor(ke->key());
+    if (volKey != audio::VolumeKey::None && m_volume) {
+        if (type == QEvent::KeyPress)
+            audio::applyVolumeKey(*m_volume, volKey);
+        return true;   // swallow the release too: the manager already moved
+    }
+
     const QString mediaKey = m_interceptMediaKeys ? mpvKeyForMediaEvent(ke) : QString();
     if (!mediaKey.isEmpty()) {
         if (type == QEvent::KeyPress) {
-            // Volume keys repeat while held; everything else fires once per press.
-            // mediaKey is the single source of truth for which key this is.
-            const bool isVolume = mediaKey.startsWith(QLatin1String("VOLUME"));
-            if (isVolume || !ke->isAutoRepeat())
+            // Volume never reaches here — it returns above as an app-wide
+            // VolumeManager key. Everything left fires once per press so a held
+            // key is a single seek/chapter jump.
+            if (!ke->isAutoRepeat())
                 emit mpvKeyRequested(mediaKey);
         }
         return true;
