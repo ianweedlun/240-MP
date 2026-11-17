@@ -757,17 +757,18 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
             m_handoff->releaseDeferred(QLatin1String("retroarch"), []() {});
         process->deleteLater();
     });
-    process->start();
-    m_gameProcess = process;
-
-    // Recorded after start() so a launch that never spawned (bad binary, missing
-    // core) cannot claim the RECENT slot. One file write per launch is nothing;
-    // the alternative is losing the list on a power cut.
     QVariantMap entry = game;
     entry.insert(QStringLiteral("systemId"), systemId);
-    m_recent.recordLaunch(entry, QDateTime::currentSecsSinceEpoch());
-    if (!m_recent.save())
-        qWarning("[RetroArch] could not persist recently-played list");
+    // start() is asynchronous: FailedToStart is delivered later, so recording
+    // right after it would give a binary that never spawned a RECENT slot.
+    // The child owns the screen only once started() fires.
+    connect(process, &QProcess::started, this, [this, entry]() {
+        m_recent.recordLaunch(entry, QDateTime::currentSecsSinceEpoch());
+        if (!m_recent.save())
+            qWarning("[RetroArch] could not persist recently-played list");
+    });
+    process->start();
+    m_gameProcess = process;
 }
 
 QVariantList RetroArchBackend::recentGames() const {
