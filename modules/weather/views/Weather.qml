@@ -56,7 +56,8 @@ FocusScope {
             // the setting a second time.
             weatherBackend.startMusic()
 
-            // Allow volume keys to reach QML for weather music volume control.
+            // No per-module volume keys any more (#34): InputManager routes them
+            // to the app-wide VolumeManager, so QML never has to see them here.
             inputManager.setInterceptMediaKeys(false)
         }
     }
