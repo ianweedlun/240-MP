@@ -10,6 +10,7 @@
 #include <QMetaObject>
 #include <QGuiApplication>
 #include <QCoreApplication>
+#include <QKeyEvent>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
@@ -59,6 +60,10 @@ public:
     }
     Q_INVOKABLE QString gameSort() const { return m_sort; }
     void setSort(const QString &sort) { m_sort = sort; }
+    // Games.qml asks for a playlist; the smoke test uses the same five rows.
+    Q_INVOKABLE QVariantList refreshGames(const QString &) { return recentGames(); }
+    Q_INVOKABLE void recordGamePosition(const QString &, int) {}
+    Q_INVOKABLE int gamePosition(const QString &) const { return 0; }
     Q_INVOKABLE QString resolveThumbnail(const QString &name, const QString &basename) const {
         return QStringLiteral("/tmp/boxart/%1/%2.png").arg(basename, name);
     }
@@ -73,10 +78,21 @@ public:
     explicit StubAppCore(QString thumb = QStringLiteral("RIGHT")) : m_thumb(std::move(thumb)) {}
     Q_INVOKABLE QString get_setting(const QString &, const QString &) const { return m_thumb; }
     Q_INVOKABLE void note_state(const QString &, const QString &) {}
+    Q_INVOKABLE void save_setting(const QString &module, const QString &key, const QVariant &value) {
+        m_savedModule = module;
+        m_savedKey = key;
+        m_savedValue = value;
+    }
+    QString savedModule() const { return m_savedModule; }
+    QString savedKey() const { return m_savedKey; }
+    QVariant savedValue() const { return m_savedValue; }
 signals:
     void moduleSettingChanged(const QString &, const QString &, const QVariant &);
 private:
     QString m_thumb;
+    QString m_savedModule;
+    QString m_savedKey;
+    QVariant m_savedValue;
 };
 
 class StubRoot : public QObject {
@@ -128,7 +144,7 @@ static void check(bool ok, const char *what) {
 
 static QObject *loadView(QQmlEngine &engine, StubBackend &backend,
                          StubAppCore &appCore, StubRoot &root, StubModule &module,
-                         const QString &repoRoot) {
+                         const QString &repoRoot, const QString &leaf = QStringLiteral("Recent.qml")) {
     auto *ctx = engine.rootContext();
     ctx->setContextProperty("appCore", QVariant::fromValue(&appCore));
     ctx->setContextProperty("retroarchBackend", QVariant::fromValue(&backend));
@@ -136,16 +152,21 @@ static QObject *loadView(QQmlEngine &engine, StubBackend &backend,
     ctx->setContextProperty("moduleRoot", QVariant::fromValue(&module));
 
     QQmlComponent comp(&engine, QUrl::fromLocalFile(
-        repoRoot + "/modules/retroarch/views/Recent.qml"));
+        repoRoot + "/modules/retroarch/views/" + leaf));
     if (comp.status() == QQmlComponent::Error) {
         for (const auto &e : comp.errors())
-            std::printf("  ERR  Recent.qml: %s\n", e.description().toStdString().c_str());
-        check(false, "Recent.qml instantiates");
+            std::printf("  ERR  %s: %s\n", qPrintable(leaf), e.description().toStdString().c_str());
+        check(false, qPrintable(leaf + QStringLiteral(" instantiates")));
         return nullptr;
     }
     QObject *obj = comp.create();
-    check(obj != nullptr, "Recent.qml object created");
+    check(obj != nullptr, qPrintable(leaf + QStringLiteral(" object created")));
     return obj;
+}
+
+static void sendKey(QObject *target, Qt::Key key) {
+    QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &event);
 }
 
 int main(int argc, char **argv) {
@@ -204,6 +225,30 @@ int main(int argc, char **argv) {
             bool invoked = QMetaObject::invokeMethod(view, "syncLetterToGame");
             check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 0,
                   "row selection syncs the strip to the matching bucket");
+        }
+
+        // Up at the first letter leaves letter mode and focuses the sort header;
+        // Down returns to the same letter. Enter persists the toggled setting.
+        if (header && strip) {
+            QQmlProperty::write(strip, "currentIndex", 0);
+            QMetaObject::invokeMethod(strip, "forceActiveFocus");
+            sendKey(strip, Qt::Key_Up);
+            QCoreApplication::processEvents();
+            check(QQmlProperty::read(view, "sortHeaderFocused").toBool(),
+                  "Up past the first letter focuses the sort header");
+            check(QQmlProperty::read(strip, "currentIndex").toInt() == 0,
+                  "letter selection is preserved when the header takes focus");
+            sendKey(header, Qt::Key_Down);
+            check(!QQmlProperty::read(view, "sortHeaderFocused").toBool() &&
+                  QQmlProperty::read(strip, "currentIndex").toInt() == 0,
+                  "Down from the header returns to the same letter");
+
+            sendKey(strip, Qt::Key_Up);
+            sendKey(header, Qt::Key_Return);
+            check(core.savedModule() == QStringLiteral("com.240mp.retroarch") &&
+                  core.savedKey() == QStringLiteral("game_sort") &&
+                  core.savedValue().toString() == QStringLiteral("Z-A"),
+                  "Enter on the header persists the toggled Game Sort");
         }
 
         // Live Game Sort change: same game stays selected, header/strip flip.
@@ -266,6 +311,42 @@ int main(int argc, char **argv) {
             bool invoked = QMetaObject::invokeMethod(view, "syncLetterToGame");
             check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 4,
                   "Z-A row selection syncs the strip to the matching bucket");
+        }
+        delete view;
+    }
+
+    // ---- Games.qml gets the same focusable sort header ----
+    {
+        QQmlEngine engine;
+        engine.addImportPath(repoRoot + "/views");
+        StubBackend backend; StubAppCore core; StubRoot root; StubModule module;
+        QObject *view = loadView(engine, backend, core, root, module, repoRoot,
+                                 QStringLiteral("Games.qml"));
+        if (!view) return 1;
+
+        QObject *header = view->findChild<QObject *>("sortHeader");
+        QObject *strip = view->findChild<QObject *>("letterList");
+        check(header && strip, "Games view has a sort header and letter strip");
+        if (header) {
+            check(QQmlProperty::read(header, "text").toString()
+                  == QStringLiteral("5 GAMES  ·  A-Z"),
+                  "Games header reads N GAMES · A-Z");
+        }
+        if (header && strip) {
+            QQmlProperty::write(strip, "currentIndex", 0);
+            QMetaObject::invokeMethod(strip, "forceActiveFocus");
+            sendKey(strip, Qt::Key_Up);
+            check(QQmlProperty::read(view, "sortHeaderFocused").toBool(),
+                  "Games: Up past the first letter focuses the sort header");
+            sendKey(header, Qt::Key_Return);
+            check(core.savedModule() == QStringLiteral("com.240mp.retroarch") &&
+                  core.savedKey() == QStringLiteral("game_sort") &&
+                  core.savedValue().toString() == QStringLiteral("Z-A"),
+                  "Games: Enter on the header persists the toggled Game Sort");
+            sendKey(header, Qt::Key_Down);
+            check(!QQmlProperty::read(view, "sortHeaderFocused").toBool() &&
+                  QQmlProperty::read(strip, "currentIndex").toInt() == 0,
+                  "Games: Down from the header returns to the same letter");
         }
         delete view;
     }

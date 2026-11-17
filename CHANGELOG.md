@@ -4,6 +4,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — RetroArch: the sort header is now a control
+- In both RECENTLY PLAYED and Games, pressing **Up** on the first letter of the letter strip moves focus to the `N GAMES · A-Z/Z-A` header instead of wrapping to the last letter. **Down** returns to the same highlighted letter, **Enter** toggles Game Sort and persists it through the normal setting, and the focused header highlights on the CRT.
+
 ### Changed — RetroArch: Recently played now has full list-view parity
 - **Game Sort (`A-Z` / `Z-A`) applies to RECENTLY PLAYED too**, using the same backend ordering as the Games screen. The stored list stays newest-first; only the view's order changes. `lastPlayedGame()` (one press from the main menu to the last game you launched) still reports true recency.
 - **The header now reads `N GAMES · A-Z` / `N GAMES · Z-A`**, matching the Games screen, and the letter-strip buckets are sorted by the active direction (`#` leads A-Z, trails Z-A).
