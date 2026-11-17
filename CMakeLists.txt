@@ -456,6 +456,21 @@ if(BUILD_VCHAN_TESTS)
     add_test(NAME vchan-preset-smoke COMMAND vchan-preset-smoke)
 endif()
 
+# Recently-played view layout smoke: loads Recent.qml offscreen with stub
+# backends and proves the thumbnail pane + letter strip the CRT flagged as
+# missing are actually wired, ordered and non-overlapping. Not gated behind
+# BUILD_VCHAN_TESTS — this covers the retroarch view shared by every build.
+if(BUILD_TESTS)
+    add_executable(recent-view-smoke src/tests/recent-view-smoke-test.cpp)
+    set_target_properties(recent-view-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(recent-view-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(recent-view-smoke PRIVATE src)
+    set(MP240_RECENT_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
+    add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
+endif()
+
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")

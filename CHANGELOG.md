@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — RetroArch: Recently played now matches the other game lists
+- **Thumbnail preview restored on the RECENTLY PLAYED view**, using the same `GamePreview.qml` panel and `thumbnail_display` setting as the Games screen (LEFT / RIGHT / OFF). Thumbnails are resolved on demand from each stored entry's playlist basename, so moved ROM folders can't leave a cached stale path.
+- **Letter-strip quick-scroll restored**, with `A`/`An`/`The` removed from bucketing like the games list. Buckets follow the view's newest-first display order (no alphabetical re-sort) so jumping to a letter lands on the row actually showing it. The games count header and BROWSE hint are shown too.
+- Both zones use the Games screen geometry: preview and list never overlap the strip, and hiding thumbnails via `thumbnail_display=OFF` leaves the letter strip working.
+- Offscreen smoke test (`recent-view-smoke`, 14 assertions over the real QML with stubbed backends) covers strip order, boxart resolution, row→strip sync, zone geometry and the OFF setting; full suite 16/16 green.
+- Owner CRT report on #85: recently played was reachable but the thumbnail and letter strip were missing. Promotion of the wave stays on hold until the owner re-checks the RC build.
+
 ### Added — RetroArch: games sort direction and a game count on the Games screen
 - **Game Sort setting** (`A-Z` default, `Z-A` alternative) for the Games list. Leading `A`/`An`/`The` are ignored, matching the letter buckets the quick-scroll strip already used; the strip reverses in `Z-A` so its order matches the rows.
 - **The count and active direction show at the top right** of the Games screen (`5 GAMES · A-Z`), the same information the Playlists screen already showed per system.
