@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: 'Git sha whose CI artifact the deployed Pi binary should match (dev tip)'
+        description: 'Sha whose build the deployed binary should match. Empty = this dispatch head. Docs/CI-only pushes have no build: the probe prints IDENTITY(expected): SKIPPED + the reason instead of UNDETERMINED.'
         required: false
-        default: '431c5e8'
+        default: ''
       force_schedule:
         description: 'Proving aid: exercise the SCHEDULED (read-only) code path — skips FACT 4 exactly as a cron run does'
         required: false
@@ -28,6 +28,14 @@ on:
   # ──────────────────────────────────────────────────────────────────────────
   schedule:
     - cron: '0 9 * * 1'
+
+# FACT 1 anchoring (card t_6e9e27d7). CI does not build every dev push — ci.yml sets
+# paths-ignore ['**.md','**.yml'], so a docs/CI-only dev tip has no arm64 artifact, and
+# anchoring FACT 1 on "the CI artifact for expected_sha" could only ever print
+# UNDETERMINED from dev. The probe now resolves a build from either lane — the CI push
+# artifact, else the archived pi-rc-tarball-<sha12> — and when neither exists it prints
+# an explicit IDENTITY(expected): SKIPPED with the measured reason. The answer to "is the
+# Pi on this sha's build?" is "no build exists", which is a fact, not no opinion.
 
 jobs:
   probe:
@@ -422,6 +430,25 @@ jobs:
           C_MD5=$(md5sum /opt/240mp/bin/240mp 2>/dev/null | awk '{print $1}')
           echo "C_BINARY_MD5=${C_MD5:-<none>}"
           echo "C_BINARY_STAT=$(stat -c '%s bytes %y' /opt/240mp/bin/240mp 2>/dev/null || echo '<none>')"
+          # Deploy lane (card t_6e9e27d7). `.240mp-last-deployed-rev` is the OFFICIAL
+          # restore target; the rc-* markers are written by pi-rc.yml when a PR-head
+          # build displaces it. Both are read here, read-only, so the verdict can tell
+          # a legitimate RC deploy from real drift instead of comparing the RC binary
+          # to the official marker's CI artifact (a different compilation).
+          C_RC_REV=$(cat "$HOME/.240mp-rc-deployed-rev" 2>/dev/null | tr -d '[:space:]')
+          echo "C_RC_REV=${C_RC_REV:-<none>}"
+          C_RC_PR=$(cat "$HOME/.240mp-rc-deployed-pr" 2>/dev/null | tr -d '[:space:]')
+          echo "C_RC_PR=${C_RC_PR:-<none>}"
+          C_RC_MD5=$(cat "$HOME/.240mp-rc-deployed-md5" 2>/dev/null | tr -d '[:space:]')
+          echo "C_RC_MD5=${C_RC_MD5:-<none>}"
+          C_RC_RESTORE=$(cat "$HOME/.240mp-rc-restore-rev" 2>/dev/null | tr -d '[:space:]')
+          echo "C_RC_RESTORE=${C_RC_RESTORE:-<none>}"
+          # /usr/local/bin/240mp is the unit's ExecStart target (a symlink into
+          # /opt/240mp/bin, normally identical md5). It is collected so the verdict can
+          # notice a hand-copied launcher, which would be real drift; an unreadable file
+          # is a permission limit, never drift.
+          C_EXE_MD5=$(md5sum /usr/local/bin/240mp 2>/dev/null | awk '{print $1}')
+          echo "C_EXE_MD5=${C_EXE_MD5:-<none>}"
           C_SVC=$(systemctl is-active 240mp.service 2>/dev/null | tr -d '[:space:]')
           echo "C_SERVICE=${C_SVC:-unknown}"
           C_PID=$(systemctl show -p MainPID --value 240mp.service 2>/dev/null | tr -d '[:space:]')
@@ -499,65 +526,149 @@ jobs:
           echo "REMOTE_PROBE_RC=$RC"
           exit 0
 
-      - name: Compare deployed binary with the dev-tip CI artifact (fact 1)
-        # expected_sha is a workflow_dispatch input only; a scheduled run has none.
+      - name: Resolve builds and deployed identity (fact 1, lane-aware)
+        # FACT 1 is an identity question and the Pi has TWO legitimate deploy lanes
+        # (.hermes.md, "deploy truth = two states, never one marker"):
+        #   OFFICIAL — the installed binary came from ci.yml's arm64 artifact for
+        #              .240mp-last-deployed-rev, so that artifact's md5 is a valid anchor.
+        #   RC       — the installed binary came from pi-rc.yml's PR-head tarball: a
+        #              SEPARATE compilation of the same rev. Comparing it to the CI
+        #              artifact of that rev is invalid by construction (t_82f5ebb9), so
+        #              the anchor is .240mp-rc-deployed-md5, or the archived
+        #              pi-rc-tarball-<sha12> when the deploy predates that marker.
+        # Two holes this step closes (card t_6e9e27d7):
+        #   1. No build normally exists for a dev tip — ci.yml sets
+        #      paths-ignore ['**.md','**.yml'] and dev is doc/CI-only a lot — so the
+        #      old code fell through to "IDENTITY: UNDETERMINED" forever. Now a missing
+        #      build is resolved as an explicit, documented SKIPPED, and the RC tarball
+        #      is tried before giving up.
+        #   2. The Authorization header was the literal string `Bearer ***` (a redaction
+        #      artifact from authoring), so every API call was unauthenticated and any
+        #      artifact download would have 401'd. Now the token arrives in GH_TOKEN.
         if: env.PI_UNREACHABLE != '1' && github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA_INPUT: ${{ inputs.expected_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
-          TOKEN='${{ github.token }}'
+          set -u
           REPO='ianweedlun/240-MP'
-          SHA=$(cat /tmp/expected_sha.txt)
-          echo "expected sha: $SHA"
-          RUN=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            "https://api.github.com/repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
-            | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
-          echo "$RUN" > /tmp/ci_run_id.txt
-          echo "CI push run for $SHA: ${RUN:-<none>}"
-          if [ -z "$RUN" ]; then
-            echo "ARTIFACT_MD5=" >> $GITHUB_ENV
-            exit 0
-          fi
-          echo "run: https://github.com/$REPO/actions/runs/$RUN"
-          ARTS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN/artifacts?per_page=50")
-          echo "$ARTS" | jq -r '.artifacts[]? | "  artifact: \(.name) id=\(.id) expired=\(.expired)"'
-          DL=$(echo "$ARTS" | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
-          if [ -z "$DL" ]; then
-            echo "ARTIFACT_MD5=" >> $GITHUB_ENV
-            echo "240mp-linux-arm64 missing or expired for run $RUN."
-            exit 0
-          fi
-          curl -sSL -H "Authorization: Bearer $TOKEN" "$DL" -o /tmp/art.zip
-          echo "downloaded $(wc -c < /tmp/art.zip) bytes ($(file -b /tmp/art.zip))"
-          rm -rf /tmp/art; mkdir -p /tmp/art; unzip -o -q /tmp/art.zip -d /tmp/art
-          ls -l /tmp/art
-          ART=$(md5sum /tmp/art/240mp | awk '{print $1}')
-          echo "CI artifact md5: $ART"
-          echo "ARTIFACT_MD5=$ART" >> $GITHUB_ENV
-          exit 0
+          API="https://api.github.com/repos/$REPO"
+          AUTH="Authorization: Bearer $GH_TOKEN"
 
-      - name: Compare deployed binary with ITS OWN rev's CI artifact (fact 1b)
-        if: env.PI_UNREACHABLE != '1'
-        run: |
-          TOKEN='${{ github.token }}'
-          REPO='ianweedlun/240-MP'
+          SHA=$(printf '%s' "${EXPECTED_SHA_INPUT:-}" | tr -d '[:space:]')
+          SHA_SRC=input
+          if [ -z "$SHA" ]; then SHA="${DISPATCH_SHA}"; SHA_SRC=dispatch-head; fi
+          SHA12=$(printf '%s' "$SHA" | cut -c1-12)
+          echo "$SHA" > /tmp/expected_sha.txt
+          echo "expected_sha=$SHA (source=$SHA_SRC)"
+          echo "EXPECTED_SHA_SRC=$SHA_SRC" >> $GITHUB_ENV
+
+          # ci_md5 <sha> -> md5 of ci.yml's arm64 artifact, empty when there is no
+          # CI push run / no live artifact. Sets CI_RUN and CI_WHY for the report.
+          CI_RUN=""
+          CI_WHY=""
+          ci_md5() {
+            local sha=$1 run dl
+            run=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" \
+              | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
+            CI_RUN=$run
+            if [ -z "$run" ]; then
+              local n
+              n=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" | jq -r '.total_count // 0')
+              if [ "${n:-0}" = "0" ]; then
+                CI_WHY="this sha has no workflow run at all — ci.yml skips docs/CI-only pushes (paths-ignore ['**.md','**.yml']), and pi-rc.yml only builds PR heads and dispatches"
+              else
+                CI_WHY="there are ${n} run(s) at this sha but none is a CI push run"
+              fi
+              return 0
+            fi
+            dl=$(curl -s -H "$AUTH" "$API/actions/runs/$run/artifacts?per_page=50" \
+              | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
+            if [ -z "$dl" ]; then
+              CI_WHY="CI push run $run has no live 240mp-linux-arm64 artifact (expired, or the run failed before upload)"
+              return 0
+            fi
+            curl -sSL -H "$AUTH" "$dl" -o /tmp/ci.zip || { CI_WHY="artifact download failed for CI run $run"; return 0; }
+            rm -rf /tmp/ci; mkdir -p /tmp/ci
+            unzip -o -q /tmp/ci.zip -d /tmp/ci || { CI_WHY="unzip failed for CI run $run"; return 0; }
+            md5sum /tmp/ci/240mp 2>/dev/null | awk '{print $1}'
+          }
+
+          # rc_tarball_md5 <sha12> -> md5 of the pi-rc.yml deploy artifact for that sha,
+          # empty when absent. Deliberately NOT pi-rc-buildonly-*: that lane recompiles
+          # the same ref separately, so its md5 can never match an installed binary.
+          rc_tarball_md5() {
+            local sha12=$1 dl
+            dl=$(curl -s -H "$AUTH" "$API/actions/artifacts?name=pi-rc-tarball-$sha12&per_page=50" \
+              | jq -r '[.artifacts[]? | select(.expired==false)] | first | .archive_download_url // empty')
+            [ -n "$dl" ] || return 0
+            curl -sSL -H "$AUTH" "$dl" -o /tmp/rc.tgz 2>/dev/null || return 0
+            tar -xzf /tmp/rc.tgz -O ./usr/local/bin/240mp 2>/dev/null | md5sum | awk '{print $1}'
+          }
+
+          # ── the requested sha's build (either lane) ───────────────────────────
+          ART=""; ART_SRC=""; ART_WHY=""
+          ART=$(ci_md5 "$SHA")
+          if [ -n "$ART" ]; then
+            ART_SRC="ci-push run $CI_RUN"
+            echo "CI artifact md5 for $SHA12: $ART (run $CI_RUN)"
+          else
+            ART_WHY=$CI_WHY
+            ART=$(rc_tarball_md5 "$SHA12")
+            if [ -n "$ART" ]; then
+              ART_SRC="rc-tarball pi-rc-tarball-$SHA12"
+              echo "RC tarball md5 for $SHA12: $ART"
+            else
+              ART=""
+              echo "no build for $SHA12 — $ART_WHY"
+            fi
+          fi
+          if [ -n "$ART" ]; then echo "ARTIFACT_MD5=$ART" >> $GITHUB_ENV; fi
+          echo "ARTIFACT_SRC=$ART_SRC" >> $GITHUB_ENV
+          { echo "ARTIFACT_WHY<<PROBEEOF"; echo "$ART_WHY"; echo "PROBEEOF"; } >> $GITHUB_ENV
+          { echo "CI_RUN<<PROBEEOF"; echo "$CI_RUN"; echo "PROBEEOF"; } >> $GITHUB_ENV
+          echo "$CI_RUN" > /tmp/ci_run_id.txt
+          echo "EXPECTED_CI_RUN=$CI_RUN" >> $GITHUB_ENV
+
+          # ── the OFFICIAL marker's build (restore target / normal Pi state) ────
           FACTS=/tmp/pi_audio_facts.txt
-          PREV=$(sed -n '/-- \/home\/ghdeploy\/.240mp-last-deployed-rev --/{n;p;}' "$FACTS" | tr -d '[:space:]')
-          if [ -z "$PREV" ]; then PREV=$(grep -A1 -- '-- /home/' "$FACTS" | grep -oE '^[0-9a-f]{40}$' | head -1); fi
-          echo "deployed rev: ${PREV:-<unknown>}"
+          PREV=$(sed -n '/-- \/home\/ghdeploy\/.240mp-last-deployed-rev --/{n;p;}' "$FACTS" 2>/dev/null | tr -d '[:space:]')
+          if [ -z "$PREV" ]; then PREV=$(grep -A1 -- '-- /home/' "$FACTS" 2>/dev/null | grep -oE '^[0-9a-f]{40}$' | head -1); fi
+          echo "official marker rev: ${PREV:-<unknown>}"
+          PREV_MD5=""; PREV_WHY=""; PREV_SRC=""; CI_RUN=""
+          if [ -z "$PREV" ]; then
+            PREV_WHY="no .240mp-last-deployed-rev readable — nothing to anchor the official lane to"
+          else
+            PREV_MD5=$(ci_md5 "$PREV")
+            if [ -n "$PREV_MD5" ]; then
+              echo "CI artifact md5 for official marker $PREV: $PREV_MD5 (run $CI_RUN)"; PREV_SRC="ci-push run $CI_RUN"
+            else
+              PREV_WHY=$CI_WHY
+              echo "no CI build for official marker $PREV — $PREV_WHY"
+            fi
+          fi
           echo "PREV_REV=$PREV" >> $GITHUB_ENV
-          if [ -z "$PREV" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
-          RUN=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            "https://api.github.com/repos/$REPO/actions/runs?head_sha=$PREV&per_page=50" \
-            | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
-          echo "CI push run for deployed rev: ${RUN:-<none>}" >> $GITHUB_STEP_SUMMARY
-          if [ -z "$RUN" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
-          DL=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN/artifacts?per_page=50" \
-            | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
-          if [ -z "$DL" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
-          curl -sSL -H "Authorization: Bearer $TOKEN" "$DL" -o /tmp/prev.zip
-          rm -rf /tmp/prev; mkdir -p /tmp/prev; unzip -o -q /tmp/prev.zip -d /tmp/prev
-          PM=$(md5sum /tmp/prev/240mp | awk '{print $1}')
-          echo "CI artifact md5 for deployed rev $PREV: $PM"
-          echo "PREV_MD5=$PM" >> $GITHUB_ENV
+          echo "PREV_SRC=$PREV_SRC" >> $GITHUB_ENV
+          if [ -n "$PREV_MD5" ]; then echo "PREV_MD5=$PREV_MD5" >> $GITHUB_ENV; fi
+          { echo "PREV_WHY<<PROBEEOF"; echo "$PREV_WHY"; echo "PROBEEOF"; } >> $GITHUB_ENV
+
+          # ── the RC lane's anchor, when an RC deploy is in place ───────────────
+          RC_REV=$(sed -n 's/^C_RC_REV=//p' "$FACTS" 2>/dev/null | head -1)
+          case "$RC_REV" in ""|"<none>") RC_REV="" ;; esac
+          RC_ART_MD5=""; RC_ART_WHY=""
+          if [ -n "$RC_REV" ]; then
+            RC_REV12=$(printf '%s' "$RC_REV" | cut -c1-12)
+            RC_ART_MD5=$(rc_tarball_md5 "$RC_REV12")
+            if [ -n "$RC_ART_MD5" ]; then
+              echo "RC deploy artifact pi-rc-tarball-$RC_REV12 md5: $RC_ART_MD5"
+            else
+              RC_ART_WHY="no live pi-rc-tarball-$RC_REV12 artifact (deploy predates the artifact lane, or it expired)"
+              echo "$RC_ART_WHY"
+            fi
+          fi
+          echo "RC_REV_ART_MD5=$RC_ART_MD5" >> $GITHUB_ENV
+          { echo "RC_ART_WHY<<PROBEEOF"; echo "$RC_ART_WHY"; echo "PROBEEOF"; } >> $GITHUB_ENV
           exit 0
 
       - name: Verdict and summary
@@ -575,29 +686,70 @@ jobs:
           else
             PI_MD5=$(grep -oE '^[0-9a-f]{32}  /opt/240mp/bin/240mp' "$FACTS" | awk '{print $1}' | head -1)
             PI_REV=$(sed -n '/-- \/home\/ghdeploy\/.240mp-last-deployed-rev --/{n;p;}' "$FACTS" | tr -d '[:space:]')
+            CGET() { sed -n "s/^$1=//p" "$FACTS" 2>/dev/null | head -1 || true; }
+            RC_REV=$(CGET C_RC_REV); case "$RC_REV" in ""|"<none>") RC_REV="" ;; esac
+            RC_PR=$(CGET C_RC_PR);   case "$RC_PR" in ""|"<none>") RC_PR="" ;; esac
+            RC_MD5=$(CGET C_RC_MD5); case "$RC_MD5" in ""|"<none>") RC_MD5="" ;; esac
+            RC_RS=$(CGET C_RC_RESTORE); case "$RC_RS" in ""|"<none>") RC_RS="" ;; esac
+            RC12="none"; if [ -n "$RC_REV" ]; then RC12=$(printf '%s' "$RC_REV" | cut -c1-12); fi
+            LANE=OFFICIAL
+            if [ -n "$RC_REV" ] || [ -n "$RC_RS" ]; then LANE=RC; fi
+            EXP12=$(printf '%s' "$EXP" | cut -c1-12)
+
             echo
-            echo "FACT 1  expected_sha=$EXP  ci_run=$RUN"
-            echo "        pi_deployed_rev=${PI_REV:-<empty/missing>}"
+            echo "FACT 1  lane=$LANE  expected_sha=$EXP (source=${EXPECTED_SHA_SRC:-unknown})  expected_ci_run=${EXPECTED_CI_RUN:-none}"
+            echo "        official_marker=${PI_REV:-<empty/missing>}  rc_rev=${RC_REV:-<none>}  rc_pr=${RC_PR:-<none>}  rc_md5_marker=${RC_MD5:-<absent>}  rc_restore=${RC_RS:-<none>}"
             echo "        pi_binary_md5=${PI_MD5:-<not found>}"
-            echo "        ci_artifact_md5=${ARTIFACT_MD5:-<unavailable>}"
-            echo "        deployed_rev=${PREV_REV:-<unknown>}  deployed_rev_artifact_md5=${PREV_MD5:-<unavailable>}"
-            if [ -n "${PI_MD5:-}" ] && [ -n "${PREV_MD5:-}" ]; then
-              if [ "$PI_MD5" = "$PREV_MD5" ]; then
-                echo "        IDENTITY(self): MATCH — deployed binary is byte-identical to the CI artifact of its own rev ${PREV_REV}."
+            if [ -n "${ARTIFACT_MD5:-}" ]; then
+              echo "        expected_build_md5=${ARTIFACT_MD5}  source=${ARTIFACT_SRC:-unknown}"
+              if [ -z "${PI_MD5:-}" ]; then
+                echo "        IDENTITY(expected): SKIPPED — installed binary md5 not readable from CI."
+              elif [ "$PI_MD5" = "$ARTIFACT_MD5" ]; then
+                echo "        IDENTITY(expected): MATCH — the installed binary IS the $EXP12 build."
               else
-                echo "        IDENTITY(self): MISMATCH — deployed binary differs from its own rev's CI artifact."
+                if [ "$LANE" = "RC" ]; then
+                  echo "        IDENTITY(expected): MISMATCH — the installed binary is NOT the $EXP12 build. Expected under lane=RC: the Pi runs the PR #${RC_PR:-?} head build $RC12, and the official/expected build is not installed."
+                else
+                  echo "        IDENTITY(expected): MISMATCH — the installed binary is NOT the $EXP12 build."
+                fi
               fi
             else
-              echo "        IDENTITY(self): UNDETERMINED (missing deployed-rev artifact)."
+              echo "        expected_build_md5=<none>"
+              echo "        IDENTITY(expected): SKIPPED — no build exists for $EXP12: ${ARTIFACT_WHY:-no CI artifact and no pi-rc-tarball artifact for that sha}."
             fi
-            if [ -n "${PI_MD5:-}" ] && [ -n "${ARTIFACT_MD5:-}" ]; then
-              if [ "$PI_MD5" = "${ARTIFACT_MD5}" ]; then
-                echo "        IDENTITY: MATCH — deployed binary is byte-identical to the $EXP CI artifact."
+            if [ "$LANE" = "RC" ]; then
+              # An RC binary is a SEPARATE compilation of the same rev (pi-rc.yml tarball),
+              # so the CI artifact for that rev is NOT a valid identity anchor. Anchor on
+              # the RC lane's own md5 marker / archived tarball instead.
+              if [ -n "$RC_MD5" ] && [ -n "${PI_MD5:-}" ]; then
+                if [ "$PI_MD5" = "$RC_MD5" ]; then
+                  echo "        IDENTITY(self): MATCH — installed binary is byte-identical to .240mp-rc-deployed-md5 (lane=RC, PR #${RC_PR:-?} rev $RC12)."
+                else
+                  echo "        IDENTITY(self): MISMATCH — installed binary differs from .240mp-rc-deployed-md5 ($RC_MD5) for RC rev $RC12: someone else wrote /opt/240mp/bin/240mp."
+                fi
+                if [ -n "${RC_REV_ART_MD5:-}" ]; then
+                  if [ "$RC_REV_ART_MD5" = "$PI_MD5" ]; then
+                    echo "        IDENTITY(self): artifact pi-rc-tarball-$RC12 md5=$RC_REV_ART_MD5 MATCHES the installed binary."
+                  else
+                    echo "        IDENTITY(self): artifact pi-rc-tarball-$RC12 md5=$RC_REV_ART_MD5 DIFFERS from the installed binary — RC lane re-verified, do not trust the marker alone."
+                  fi
+                else
+                  echo "        IDENTITY(self): rc artifact anchor unavailable — ${RC_ART_WHY:-pi-rc-tarball-$RC12 not found}."
+                fi
               else
-                echo "        IDENTITY: MISMATCH — deployed binary is NOT the $EXP CI artifact."
+                echo "        IDENTITY(self): SKIPPED — lane=RC rev $RC12 but no .240mp-rc-deployed-md5: this RC was deployed by the pre-md5 pi-rc.yml, so its binary is UNVERIFIED, not drift (.hermes.md). The next RC deploy archives pi-rc-tarball-$RC12 and this becomes provable."
               fi
             else
-              echo "        IDENTITY: UNDETERMINED (missing Pi md5 or artifact)."
+              echo "        deployed_rev=${PREV_REV:-<unknown>}  deployed_build_md5=${PREV_MD5:-<unavailable>}  source=${PREV_SRC:-none}"
+              if [ -n "${PI_MD5:-}" ] && [ -n "${PREV_MD5:-}" ]; then
+                if [ "$PI_MD5" = "$PREV_MD5" ]; then
+                  echo "        IDENTITY(self): MATCH — deployed binary is byte-identical to the CI artifact of its own rev ${PREV_REV}."
+                else
+                  echo "        IDENTITY(self): MISMATCH — deployed binary differs from its own rev's CI artifact."
+                fi
+              else
+                echo "        IDENTITY(self): SKIPPED — ${PREV_WHY:-no CI artifact for the official marker rev — expired, or no CI push run for it}."
+              fi
             fi
             echo
             echo "FACT 2  wpctl=$(sed -n 's/^wpctl *-> //p' "$FACTS" | head -1)  amixer=$(sed -n 's/^amixer *-> //p' "$FACTS" | head -1)"
@@ -636,6 +788,12 @@ jobs:
           # Exactly one machine-readable line for this lane. Read it, don't parse
           # the rest. state=DRIFT means at least one invariant below is broken;
           # every DRIFT reason is spelled out on the CANARY-DRIFT line after it.
+          # Lane-aware (card t_6e9e27d7): the Pi has two legitimate deploy states
+          # (.hermes.md). Under lane=RC the official marker names the RESTORE TARGET,
+          # so "installed binary != official marker's CI artifact" is by design and
+          # must never be reported as DRIFT; the RC lane's own anchors decide instead:
+          #   state=RC-DEPLOY      rc marker + rc md5 match the installed binary
+          #   state=RC-UNVERIFIED  rc deploy predates .240mp-rc-deployed-md5 (no anchor)
           CGET() { sed -n "s/^$1=//p" "$FACTS" 2>/dev/null | head -1 || true; }
           STATE=OK
           REV12=none
@@ -644,6 +802,10 @@ jobs:
           MIX=none
           CTL=none
           CIA=no
+          LANE=OFFICIAL
+          RC12=none
+          RC_PR=none
+          RCM=absent
           DRIFT_WHY=""
           echo
           echo "################ CANARY ################"
@@ -657,6 +819,7 @@ jobs:
             CH=$(CGET C_MARK_HOME)
             CIAN=$(CGET C_MARK_IAN)
             CB=$(CGET C_BINARY_MD5)
+            CEXE=$(CGET C_EXE_MD5)
             CSVC=$(CGET C_SERVICE)
             MIX=$(CGET C_MIXER)
             [ -n "$MIX" ] || MIX=none
@@ -666,9 +829,18 @@ jobs:
             [ -n "$CIA" ] || CIA=no
             WOK=$(CGET C_WPCTL_OK)
             [ -n "$CM" ] || CM="<none>"
+            RCR=$(CGET C_RC_REV);   case "$RCR" in ""|"<none>") RCR="" ;; esac
+            RCPS=$(CGET C_RC_PR);   case "$RCPS" in ""|"<none>") RCPS="" ;; esac
+            RCMD=$(CGET C_RC_MD5);  case "$RCMD" in ""|"<none>") RCMD="" ;; esac
+            RCRS=$(CGET C_RC_RESTORE); case "$RCRS" in ""|"<none>") RCRS="" ;; esac
+            if [ -n "$RCR" ] || [ -n "$RCRS" ]; then LANE=RC; fi
+            if [ -n "$RCR" ]; then RC12=$(printf '%s' "$RCR" | cut -c1-12); fi
+            if [ -n "$RCPS" ]; then RC_PR="$RCPS"; fi
 
-            # rev: 12-char prefix of the deploy marker; rev_marker: do all readable
-            # copies of .240mp-last-deployed-rev agree?
+            # rev: 12-char prefix of the OFFICIAL deploy marker. Both readable copies
+            # live in ghdeploy's home ($HOME and /home/ghdeploy are the same file), so
+            # only Ian's stale copy is compared besides it — and /home/ian/... is stale
+            # junk from PR #52 that CI never reads (.hermes.md), so it is a DETAIL, not drift.
             case "$CM" in
               ""|"<none>") REV12=none; REVM=missing ;;
               *)
@@ -679,16 +851,40 @@ jobs:
                   echo "CANARY-DETAIL: marker copies disagree — \$HOME says '${CH}' , /home/ghdeploy says '${CM}'."
                 fi
                 if [ -n "$CIAN" ] && [ "$CIAN" != "<none>" ] && [ "$CIAN" != "<unreadable>" ] && [ "$CIAN" != "$CM" ]; then
-                  REVM=mismatch
-                  echo "CANARY-DETAIL: marker copies disagree — /home/ian says '${CIAN}' , /home/ghdeploy says '${CM}'."
+                  echo "CANARY-DETAIL: /home/ian/.240mp-last-deployed-rev says '${CIAN}' (stale junk from PR #52, not a deploy truth) vs /home/ghdeploy says '${CM}' — informational only."
                 fi
                 ;;
             esac
 
             if [ "$CSVC" = "active" ]; then SVC=active; else SVC=inactive; fi
 
-            if [ "$REVM" != "match" ]; then DRIFT_WHY="$DRIFT_WHY rev_marker=$REVM"; fi
-            if [ -n "$CB" ] && [ "$CB" != "<none>" ] && [ -n "${PREV_MD5:-}" ]; then
+            # ── identity, per lane ─────────────────────────────────────────
+            if [ "$LANE" = "RC" ]; then
+              if [ -z "$CB" ] || [ "$CB" = "<none>" ]; then
+                STATE=RC-UNVERIFIED
+                echo "CANARY-WARN: lane=RC but the installed binary md5 is unreadable — identity SKIPPED."
+              elif [ -z "$RCMD" ]; then
+                STATE=RC-UNVERIFIED
+                echo "CANARY-NOTE: lane=RC rev=$RC12 pr=#${RC_PR} — no .240mp-rc-deployed-md5: this RC was deployed by the pre-md5 pi-rc.yml, so the installed binary is UNVERIFIED, not drift (.hermes.md)."
+                echo "CANARY-NOTE: the official marker ($REV12) is the restore target here, NOT an identity anchor — diverging from it is what lane=RC means."
+              elif [ "$CB" = "$RCMD" ]; then
+                STATE=RC-DEPLOY; RCM=match
+                echo "CANARY-NOTE: lane=RC — Pi runs the PR #${RC_PR} head build $RC12, and the installed md5 matches .240mp-rc-deployed-md5 (RC lane identity verified)."
+                if [ -n "${RC_REV_ART_MD5:-}" ]; then
+                  if [ "$RC_REV_ART_MD5" = "$CB" ]; then
+                    echo "CANARY-NOTE: archived artifact pi-rc-tarball-$RC12 md5=$RC_REV_ART_MD5 also matches the installed binary."
+                  else
+                    RCM=mismatch; DRIFT_WHY="$DRIFT_WHY rc_artifact_md5_mismatch"
+                    echo "CANARY-DETAIL: pi-rc-tarball-$RC12 md5=$RC_REV_ART_MD5 but the installed binary is $CB — the marker and the archived tarball disagree."
+                  fi
+                else
+                  echo "CANARY-NOTE: no pi-rc-tarball-$RC12 artifact to cross-check (${RC_ART_WHY:-artifact not found}); the rc md5 marker is the only anchor."
+                fi
+              else
+                RCM=mismatch; DRIFT_WHY="$DRIFT_WHY rc_binary_md5_mismatch"
+                echo "CANARY-DETAIL: lane=RC but the installed md5 $CB is NOT .240mp-rc-deployed-md5 $RCMD — the RC deploy's own binary is not what is installed."
+              fi
+            elif [ -n "$CB" ] && [ "$CB" != "<none>" ] && [ -n "${PREV_MD5:-}" ]; then
               if [ "$CB" != "$PREV_MD5" ]; then
                 DRIFT_WHY="$DRIFT_WHY binary_md5_mismatch"
                 echo "CANARY-DETAIL: deployed binary md5 $CB is NOT the CI artifact md5 $PREV_MD5 for rev ${PREV_REV:-unknown} — the Pi is running something CI never produced."
@@ -696,7 +892,11 @@ jobs:
                 echo "CANARY-DETAIL: deployed binary md5 $CB == CI artifact for rev ${PREV_REV:-unknown} (identity verified)."
               fi
             else
-              echo "CANARY-WARN: identity UNDETERMINED — no CI artifact available for the marker's rev (>90d expiry, or no CI push run for it). state=OK then means 'no drift detected', NOT 'byte-identical proven'."
+              echo "CANARY-WARN: identity SKIPPED — no CI artifact available for the official marker's rev (${PREV_WHY:-expired, or no CI push run for it}). state=$STATE then means 'no drift detected', NOT 'byte-identical proven'."
+            fi
+            if [ -n "$CEXE" ] && [ "$CEXE" != "<none>" ] && [ -n "$CB" ] && [ "$CB" != "<none>" ] && [ "$CEXE" != "$CB" ]; then
+              DRIFT_WHY="$DRIFT_WHY launcher_md5_mismatch"
+              echo "CANARY-DETAIL: /usr/local/bin/240mp md5 $CEXE != /opt/240mp/bin/240mp md5 $CB — the unit's ExecStart target is not the installed binary."
             fi
             if [ "$SVC" != "active" ]; then DRIFT_WHY="$DRIFT_WHY service=$SVC"; fi
             if [ "$MIX" = "none" ]; then DRIFT_WHY="$DRIFT_WHY mixer=none"; fi
@@ -714,7 +914,7 @@ jobs:
             echo "CANARY-DETAIL: backend=$MIX  control=$CTL ($(CGET C_CONTROL_SOURCE))  saved_state_names=$(CGET C_SAVED_NAMES)  audio_group=$(CGET C_AUDIO_GROUP)"
             echo "CANARY-CAVEAT: a scheduled run's own control/backend view is the CI uid's, not the app user's; 'control' therefore falls back to the saved ALSA state when /dev/snd is unreadable, which is the element the app would select."
           fi
-          echo "CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA"
+          echo "CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA lane=$LANE rc_rev=$RC12 rc_pr=$RC_PR rc_md5=$RCM"
           if [ -n "$DRIFT_WHY" ]; then echo "CANARY-DRIFT:${DRIFT_WHY}"; fi
 
           {
@@ -722,10 +922,11 @@ jobs:
             echo '```'
             cat "$FACTS" 2>/dev/null || echo "(no probe output)"
             echo '```'
-            echo "- expected sha: \`$EXP\`"
-            echo "- CI run for that sha: \`$RUN\`"
-            echo "- CI artifact md5: \`${ARTIFACT_MD5:-unavailable}\`"
-            echo "- canary: \`CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA\`"
+            echo "- expected sha: \`$EXP\` (source ${EXPECTED_SHA_SRC:-unknown})"
+            echo "- lane: \`$LANE\`  official marker: \`${PREV_REV:-unknown}\`  rc rev: \`${RC12}\`  rc pr: \`#${RC_PR}\`"
+            echo "- expected build md5: \`${ARTIFACT_MD5:-none}\` (${ARTIFACT_SRC:-no build for this sha: ${ARTIFACT_WHY:-unknown}})"
+            echo "- official build md5: \`${PREV_MD5:-none}\` (${PREV_SRC:-${PREV_WHY:-none}})"
+            echo "- canary: \`CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA lane=$LANE rc_rev=$RC12 rc_pr=$RC_PR rc_md5=$RCM\`"
             if [ -n "$DRIFT_WHY" ]; then echo "- drift:${DRIFT_WHY}"; fi
           } >> $GITHUB_STEP_SUMMARY
           exit 0
