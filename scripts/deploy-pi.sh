@@ -108,9 +108,15 @@ REV_SHA=""
 if [ -n "${COMMIT:-}" ]; then
     REV_SHA="$COMMIT"
     CUR=$(sshrun "cat /home/ghdeploy/.240mp-last-deployed-rev \$HOME/.240mp-last-deployed-rev 2>/dev/null" 2>/dev/null | head -1)
-    if [ "$CUR" = "$REV_SHA" ]; then
+    # RC markers mean pi-rc.yml put an un-merged build on the Pi, and it does not touch the
+    # official marker — so a matching official marker does not prove the running binary is the
+    # official one. Deploy instead of trusting it.
+    RCMARK=$(sshrun "ls /home/ghdeploy/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-rev 2>/dev/null" 2>/dev/null | head -1)
+    if [ "$CUR" = "$REV_SHA" ] && [ -z "$RCMARK" ]; then
         echo "Commit $REV_SHA already deployed and verified on the Pi — skipping transfer+reboot."
         exit 0
+    elif [ "$CUR" = "$REV_SHA" ]; then
+        echo "Official marker matches $REV_SHA but RC markers are present — redeploying instead of skipping."
     fi
 fi
 
@@ -126,8 +132,10 @@ sleep 30
 for i in $(seq 1 15); do
     OUT=$(sshrun "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || { sleep 10; continue; }
     if echo "$OUT" | grep -q "^active" && echo "$OUT" | grep -q "$LOCAL_MD5"; then
-        # Record the deployed commit so a future same-commit push skips transfer+reboot.
-        [ -n "${REV_SHA:-}" ] && sshrun "echo $REV_SHA > \$HOME/.240mp-last-deployed-rev" || true
+        # Record the deployed commit so a future same-commit push skips transfer+reboot, and
+        # clear any RC markers: an official deploy supersedes the RC lane, and a stale
+        # .240mp-rc-deployed-* makes the Pi read as "carrying an RC build" to later probes.
+        [ -n "${REV_SHA:-}" ] && sshrun "echo $REV_SHA > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" || true
         echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($LOCAL_MD5)"
         exit 0
     fi
