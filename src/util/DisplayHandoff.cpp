@@ -122,19 +122,29 @@ int DisplayHandoff::acquire(const QString &owner) {
                  "may not.");
     }
 
-    m_qtDrmFd = findQtDrmFd();
-    if (m_qtDrmFd < 0) {
-        qWarning("[DisplayHandoff] Could not find Qt DRM fd");
+    if (m_crtcCaptureHook) {
+        // Test seam (see setCrtcCaptureHookForTest): stands in for the whole
+        // capture step so the ordering asserted below is testable without a DRM
+        // device. No fd discovery, no ioctls.
+        m_crtcCaptureHook();
     } else {
-        qDebug("[DisplayHandoff] DRM master dropped (fd %d)", m_qtDrmFd);
-        // Save the current CRTC state so we can restore it exactly after the
-        // child exits. An atomic cleanup disables the CRTC (CRTC_ACTIVE=0);
-        // without this restore, Qt EGLFS gets EINVAL on its next page flip.
-        saveDrmCrtcState(m_qtDrmFd);
+        m_qtDrmFd = findQtDrmFd();
+        if (m_qtDrmFd < 0) {
+            qWarning("[DisplayHandoff] Could not find Qt DRM fd");
+        } else {
+            qDebug("[DisplayHandoff] DRM master dropped (fd %d)", m_qtDrmFd);
+            // Save the current CRTC state so we can restore it exactly after the
+            // child exits. An atomic cleanup disables the CRTC (CRTC_ACTIVE=0);
+            // without this restore, Qt EGLFS gets EINVAL on its next page flip.
+            saveDrmCrtcState(m_qtDrmFd);
+        }
     }
-    // Last, once the hand-off is complete: hide the app window and with it EGLFS's
-    // render loop. See the signal's comment — the VT switch alone does not stop
-    // this build from drawing.
+    // Last, once the hand-off is complete — the CRTC state above is captured
+    // BEFORE the window goes away, because hiding it re-initialises EGLFS on the
+    // way back (see doRestore) — hide the app window and with it EGLFS's render
+    // loop. See the signal's comment: the VT switch alone does not stop this
+    // build from drawing. src/util/tests/DisplayHandoffSignalTest.cpp fails if
+    // this emit is ever moved above the capture step.
     emit displayTaken();
     return freeVt;
 #else

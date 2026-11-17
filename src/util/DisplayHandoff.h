@@ -107,6 +107,17 @@ public:
     // modeset is a visible blank. See doRestore().
     void setRendererSuspendsWindow(bool on) { m_rendererSuspendsWindow = on; }
 
+    // TEST SEAM — src/util/tests/DisplayHandoffSignalTest.cpp only, production
+    // never calls it. Replaces the CRTC capture step of acquire() (Qt DRM fd
+    // discovery + saveDrmCrtcState) with a hook, because the ordering that
+    // displayTaken() depends on — capture, THEN announce — cannot be observed
+    // on a machine with no /dev/dri. With the hook set, acquire() runs no DRM
+    // ioctls at all. When unset, the real capture happens exactly as before.
+    void setCrtcCaptureHookForTest(std::function<void()> hook)
+    {
+        m_crtcCaptureHook = std::move(hook);
+    }
+
 signals:
     // Emitted once the hand-off is fully taken (VT switched, master dropped,
     // CRTC state saved). The owner of the QQuickWindow hides it here.
@@ -162,6 +173,7 @@ private:
     QTimer *m_restoreTimer = nullptr;
     bool m_rendererSuspendsWindow = false;
     std::function<void()> m_onRestored;
+    std::function<void()> m_crtcCaptureHook;   // test seam, see the setter
 #ifdef Q_OS_LINUX
     DrmSavedState m_savedDrm = {};
     //
