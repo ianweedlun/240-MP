@@ -16,6 +16,7 @@ class QSocketNotifier;
 class AppCore;
 class DisplayHandoff;
 class RetroArchBackend;
+class VolumeManager;
 
 // Centralized gamepad input. SDL controller buttons/axes are mapped to a small
 // set of named actions (up/down/left/right/select/back/play_pause), and each
@@ -45,11 +46,15 @@ public:
     // input paths can tell when a fullscreen external process (RetroArch
     // gameplay) has the screen; see the suppression rule in deliverPress().
     void setDisplayHandoff(DisplayHandoff *handoff);
-
     // Non-owned: the RetroArch backend, so the input paths can ask whether a
     // game child process is running (the trustworthy fullscreen-game signal —
     // DisplayHandoff records no owner where there is no VT/DRM dance to do).
     void setGameObserver(class RetroArchBackend *backend);
+
+    // Non-owned: the app-wide volume owner (#34). Volume keys move the system
+    // mixer through it instead of going to whichever player happens to be
+    // running, so the level means the same thing in every view.
+    void setVolumeManager(VolumeManager *volume);
 
     bool gamepadConnected() const { return !m_controllers.isEmpty(); }
     QString lastInputDevice() const { return m_lastInputDevice; }
@@ -109,7 +114,9 @@ private slots:
 private:
     enum class Action { None, Up, Down, Left, Right, Select, Back, PlayPause,
                         ChannelUp, ChannelDown };
+
     DisplayHandoff *m_handoff = nullptr;   // non-owned, set by main.cpp
+    VolumeManager *m_volume = nullptr;  // non-owned, set by main.cpp
     RetroArchBackend *m_raBackend = nullptr; // non-owned, set by main.cpp
 
     void initSdl();

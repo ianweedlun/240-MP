@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — App-wide volume: one level, two renderers (#34)
+- **Volume keys work everywhere**: volume up/down/mute used to be each module's private business (weather music, mpv only). `InputManager` now hands them to a single app-wide `VolumeManager`, so pressing the remote's volume keys on any screen — menu, Plex, YouTube, channels, a game — changes the same level, and RetroArch keeps doing its own thing while a game owns the screen.
+- **The system mixer is the truth**: `VolumeManager` reads and writes the ALSA mixer (via `amixer`), so the number in the bar is the number the speakers actually play at. mpv and the weather music player run pinned at 100 and no longer attenuate on their own; the only exception is the speech duck, which is transient by design.
+- **One OSD, two renderers**: while the app owns the screen, a QML `VolumeBar` draws the level on every view — menu, module, guide, wherever you are — whether or not anything is currently playing. While mpv owns the screen — music, video — the app renderer is suspended, so the bundled `mpv-media-keys.lua` draws the same level through `script-message 240mp-volume-osd`, fed from the same `VolumeManager` state. One level, whichever surface happens to be visible.
+- **The level survives a restart**: it is persisted to `volume.json` in the app data dir and restored at startup, muting included.
+
 ### Fixed — CI: the Pi deploy trigger that could never fire
 - **Beta pushes never reached the Pi.** `deploy-pi.yml` was triggered by `on.workflow_run: workflows: ["CI"], branches: [beta]` — and `workflow_run` only emits for runs of the triggering workflow on the repository's **default branch**, which is `dev`. Beta had 17 green `CI` push runs and produced **zero** deploy runs; the last Pi deploy (`43388847788`) came from a `dev` push, which the `head_branch == 'beta'` gate then rejected. Net effect: the Pi received deploys from no branch at all.
 - **One mechanism now, in one file:** the deploy is a job in `ci.yml` — `deploy-pi`, `needs: [build-linux-arm64]`, `if: github.ref == 'refs/heads/beta'` — so "deploy only after a green build" comes from the job DAG instead of an event that never arrives, and the standalone workflow is gone. Under a push trigger `github.sha` is the beta tip, so the existing `~/.240mp-last-deployed-rev` fast path and the tarball-md5 verify work unchanged.
