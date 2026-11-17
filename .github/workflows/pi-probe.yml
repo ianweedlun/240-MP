@@ -570,18 +570,20 @@ jobs:
           CI_RUN=""
           CI_WHY=""
           ci_md5() {
-            local sha=$1 run dl n
+            local sha=$1 run dl n resp names
             : > /tmp/ci_md5.txt
             CI_RUN=""; CI_WHY=""
             run=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" \
               | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
             CI_RUN=$run
             if [ -z "$run" ]; then
-              n=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" | jq -r '.total_count // 0')
+              resp=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50")
+              n=$(printf '%s' "$resp" | jq -r '.total_count // 0')
+              names=$(printf '%s' "$resp" | jq -r '[.workflow_runs[].name] | unique | join(", ")')
               if [ "${n:-0}" = "0" ]; then
                 CI_WHY="this sha has no workflow run at all — ci.yml skips docs/CI-only pushes (paths-ignore ['**.md','**.yml']), and pi-rc.yml only builds PR heads and dispatches"
               else
-                CI_WHY="there are ${n} run(s) at this sha but none is a CI push run"
+                CI_WHY="there are ${n} run(s) at this sha (${names:-unknown}) but none is a CI push run"
               fi
               printf '%s' "$CI_RUN" > /tmp/ci_run.txt; printf '%s' "$CI_WHY" > /tmp/ci_why.txt
               return 0
@@ -699,6 +701,7 @@ jobs:
             CGET() { sed -n "s/^$1=//p" "$FACTS" 2>/dev/null | head -1 || true; }
             RC_REV=$(CGET C_RC_REV); case "$RC_REV" in ""|"<none>") RC_REV="" ;; esac
             RC_PR=$(CGET C_RC_PR);   case "$RC_PR" in ""|"<none>") RC_PR="" ;; esac
+            RC_PR=${RC_PR#pr-}
             RC_MD5=$(CGET C_RC_MD5); case "$RC_MD5" in ""|"<none>") RC_MD5="" ;; esac
             RC_RS=$(CGET C_RC_RESTORE); case "$RC_RS" in ""|"<none>") RC_RS="" ;; esac
             RC12="none"; if [ -n "$RC_REV" ]; then RC12=$(printf '%s' "$RC_REV" | cut -c1-12); fi
@@ -840,6 +843,7 @@ jobs:
             [ -n "$CM" ] || CM="<none>"
             RCR=$(CGET C_RC_REV);   case "$RCR" in ""|"<none>") RCR="" ;; esac
             RCPS=$(CGET C_RC_PR);   case "$RCPS" in ""|"<none>") RCPS="" ;; esac
+            RCPS=${RCPS#pr-}
             RCMD=$(CGET C_RC_MD5);  case "$RCMD" in ""|"<none>") RCMD="" ;; esac
             RCRS=$(CGET C_RC_RESTORE); case "$RCRS" in ""|"<none>") RCRS="" ;; esac
             if [ -n "$RCR" ] || [ -n "$RCRS" ]; then LANE=RC; fi
