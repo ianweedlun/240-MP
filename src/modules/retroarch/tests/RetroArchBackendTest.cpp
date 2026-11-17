@@ -2,6 +2,7 @@
 
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,7 +19,8 @@ private:
 
     // A temp-tree config.json pointing every path at the fixture dirs.
     RetroArchBackend *makeBackend(const QString &playlistSort = QString(),
-                                  const QString &gameSort = QString());
+                                  const QString &gameSort = QString(),
+                                  const QString &retroarchPath = QString());
     void writePlaylist(const QString &name, const QString &content);
     void cleanPlaylistDir();
     void writePlaylistBinary(const QString &name, const QByteArray &content);
@@ -51,6 +53,7 @@ private slots:
     void gameSortDefaultsToAtoZ();
     void gameSortLiveChangeReordersGames();
     void sortedGamesIgnoresArticlesAndCase();
+    void failedLaunchDoesNotEnterRecentlyPlayed();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -61,12 +64,15 @@ void RetroArchBackendTest::initTestCase() {
 }
 
 RetroArchBackend *RetroArchBackendTest::makeBackend(const QString &playlistSort,
-                                                    const QString &gameSort) {
+                                                    const QString &gameSort,
+                                                    const QString &retroarchPath) {
     const QString dataRoot = m_tmp.path();
     QJsonObject mod;
     mod.insert("playlist_directory", dataRoot + "/playlists");
     mod.insert("rom_directory", dataRoot + "/ROMs");
     mod.insert("thumbnail_directory", dataRoot + "/thumbnails");
+    if (!retroarchPath.isEmpty())
+        mod.insert("retroarch_path", retroarchPath);
     if (!playlistSort.isEmpty())
         mod.insert("playlist_sort", playlistSort);
     if (!gameSort.isEmpty())
@@ -699,6 +705,33 @@ void RetroArchBackendTest::sortedGamesIgnoresArticlesAndCase() {
     // The input list is untouched — callers own the model they pass in.
     QCOMPARE(games.at(0).toMap()["name"].toString(), QString("The Cat"));
     QVERIFY(RetroArchBackend::sortedGames(QVariantList{}, false).isEmpty());
+}
+
+void RetroArchBackendTest::failedLaunchDoesNotEnterRecentlyPlayed() {
+    // QProcess::start() returns before FailedToStart is delivered. A binary
+    // that never spawned must not consume a slot in the RECENT list.
+    QFile::remove(m_tmp.path() + "/retroarch_recent.json");
+    const QString rom = m_tmp.path() + "/ROMs/failed-launch.nes";
+    QFile romFile(rom);
+    QVERIFY(romFile.open(QIODevice::WriteOnly));
+    romFile.write("not a real rom, but it exists on disk");
+    romFile.close();
+
+    const QString missingBinary = m_tmp.path() + "/no-such-retroarch";
+    RetroArchBackend *be = makeBackend(QString(), QString(), missingBinary);
+    QVERIFY(be);
+    QCOMPARE(be->retroarchPath(), missingBinary);
+    QVERIFY(be->recentGames().isEmpty());
+
+    QVariantMap game;
+    game.insert(QStringLiteral("name"), QStringLiteral("Never Launched"));
+    game.insert(QStringLiteral("romPath"), rom);
+    game.insert(QStringLiteral("playlistPath"), m_tmp.path() + "/playlists/NES.lpl");
+    be->launchGame(game, QStringLiteral("nes"));
+
+    // Wait for the async FailedToStart to clear the live-process pointer.
+    QTRY_VERIFY_WITH_TIMEOUT(!be->gameRunning(), 2000);
+    QVERIFY(be->recentGames().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)
