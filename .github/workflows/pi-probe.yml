@@ -443,10 +443,10 @@ jobs:
           echo "C_RC_MD5=${C_RC_MD5:-<none>}"
           C_RC_RESTORE=$(cat "$HOME/.240mp-rc-restore-rev" 2>/dev/null | tr -d '[:space:]')
           echo "C_RC_RESTORE=${C_RC_RESTORE:-<none>}"
-          # /usr/local/bin/240mp is the unit's ExecStart target (a symlink into
-          # /opt/240mp/bin, normally identical md5). It is collected so the verdict can
-          # notice a hand-copied launcher, which would be real drift; an unreadable file
-          # is a permission limit, never drift.
+          # /usr/local/bin/240mp is the tiny shell wrapper the image installs (not a copy
+          # of the binary, so its md5 is never expected to match), and /opt/240mp/bin/240mp
+          # is the real binary. Collected as evidence only — FACT 1 already prints
+          # `readlink -f` for the launcher.
           C_EXE_MD5=$(md5sum /usr/local/bin/240mp 2>/dev/null | awk '{print $1}')
           echo "C_EXE_MD5=${C_EXE_MD5:-<none>}"
           C_SVC=$(systemctl is-active 240mp.service 2>/dev/null | tr -d '[:space:]')
@@ -564,35 +564,43 @@ jobs:
           echo "expected_sha=$SHA (source=$SHA_SRC)"
           echo "EXPECTED_SHA_SRC=$SHA_SRC" >> $GITHUB_ENV
 
-          # ci_md5 <sha> -> md5 of ci.yml's arm64 artifact, empty when there is no
-          # CI push run / no live artifact. Sets CI_RUN and CI_WHY for the report.
+          # ci_md5 <sha> — resolves ci.yml's arm64 artifact md5 for that sha and leaves
+          # the answer in files, NOT on stdout: a `$(...)` call runs in a subshell, so
+          # globals set inside would be lost (that bug once blanked these reasons).
           CI_RUN=""
           CI_WHY=""
           ci_md5() {
-            local sha=$1 run dl
+            local sha=$1 run dl n
+            : > /tmp/ci_md5.txt
+            CI_RUN=""; CI_WHY=""
             run=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" \
               | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
             CI_RUN=$run
             if [ -z "$run" ]; then
-              local n
               n=$(curl -s -H "$AUTH" "$API/actions/runs?head_sha=$sha&per_page=50" | jq -r '.total_count // 0')
               if [ "${n:-0}" = "0" ]; then
                 CI_WHY="this sha has no workflow run at all — ci.yml skips docs/CI-only pushes (paths-ignore ['**.md','**.yml']), and pi-rc.yml only builds PR heads and dispatches"
               else
                 CI_WHY="there are ${n} run(s) at this sha but none is a CI push run"
               fi
+              printf '%s' "$CI_RUN" > /tmp/ci_run.txt; printf '%s' "$CI_WHY" > /tmp/ci_why.txt
               return 0
             fi
             dl=$(curl -s -H "$AUTH" "$API/actions/runs/$run/artifacts?per_page=50" \
               | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
             if [ -z "$dl" ]; then
               CI_WHY="CI push run $run has no live 240mp-linux-arm64 artifact (expired, or the run failed before upload)"
-              return 0
+            elif curl -sSL -H "$AUTH" "$dl" -o /tmp/ci.zip; then
+              rm -rf /tmp/ci; mkdir -p /tmp/ci
+              if unzip -o -q /tmp/ci.zip -d /tmp/ci; then
+                md5sum /tmp/ci/240mp 2>/dev/null | awk '{print $1}' > /tmp/ci_md5.txt
+              else
+                CI_WHY="unzip failed for CI run $run"
+              fi
+            else
+              CI_WHY="artifact download failed for CI run $run"
             fi
-            curl -sSL -H "$AUTH" "$dl" -o /tmp/ci.zip || { CI_WHY="artifact download failed for CI run $run"; return 0; }
-            rm -rf /tmp/ci; mkdir -p /tmp/ci
-            unzip -o -q /tmp/ci.zip -d /tmp/ci || { CI_WHY="unzip failed for CI run $run"; return 0; }
-            md5sum /tmp/ci/240mp 2>/dev/null | awk '{print $1}'
+            printf '%s' "$CI_RUN" > /tmp/ci_run.txt; printf '%s' "$CI_WHY" > /tmp/ci_why.txt
           }
 
           # rc_tarball_md5 <sha12> -> md5 of the pi-rc.yml deploy artifact for that sha,
@@ -609,7 +617,8 @@ jobs:
 
           # ── the requested sha's build (either lane) ───────────────────────────
           ART=""; ART_SRC=""; ART_WHY=""
-          ART=$(ci_md5 "$SHA")
+          ci_md5 "$SHA"
+          ART=$(cat /tmp/ci_md5.txt 2>/dev/null)
           if [ -n "$ART" ]; then
             ART_SRC="ci-push run $CI_RUN"
             echo "CI artifact md5 for $SHA12: $ART (run $CI_RUN)"
@@ -640,7 +649,8 @@ jobs:
           if [ -z "$PREV" ]; then
             PREV_WHY="no .240mp-last-deployed-rev readable — nothing to anchor the official lane to"
           else
-            PREV_MD5=$(ci_md5 "$PREV")
+            ci_md5 "$PREV"
+            PREV_MD5=$(cat /tmp/ci_md5.txt 2>/dev/null)
             if [ -n "$PREV_MD5" ]; then
               echo "CI artifact md5 for official marker $PREV: $PREV_MD5 (run $CI_RUN)"; PREV_SRC="ci-push run $CI_RUN"
             else
@@ -819,7 +829,6 @@ jobs:
             CH=$(CGET C_MARK_HOME)
             CIAN=$(CGET C_MARK_IAN)
             CB=$(CGET C_BINARY_MD5)
-            CEXE=$(CGET C_EXE_MD5)
             CSVC=$(CGET C_SERVICE)
             MIX=$(CGET C_MIXER)
             [ -n "$MIX" ] || MIX=none
@@ -893,10 +902,6 @@ jobs:
               fi
             else
               echo "CANARY-WARN: identity SKIPPED — no CI artifact available for the official marker's rev (${PREV_WHY:-expired, or no CI push run for it}). state=$STATE then means 'no drift detected', NOT 'byte-identical proven'."
-            fi
-            if [ -n "$CEXE" ] && [ "$CEXE" != "<none>" ] && [ -n "$CB" ] && [ "$CB" != "<none>" ] && [ "$CEXE" != "$CB" ]; then
-              DRIFT_WHY="$DRIFT_WHY launcher_md5_mismatch"
-              echo "CANARY-DETAIL: /usr/local/bin/240mp md5 $CEXE != /opt/240mp/bin/240mp md5 $CB — the unit's ExecStart target is not the installed binary."
             fi
             if [ "$SVC" != "active" ]; then DRIFT_WHY="$DRIFT_WHY service=$SVC"; fi
             if [ "$MIX" = "none" ]; then DRIFT_WHY="$DRIFT_WHY mixer=none"; fi
