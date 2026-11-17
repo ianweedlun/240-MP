@@ -94,7 +94,23 @@ public:
     void releaseNow(const QString &owner);
 
 signals:
+    // Emitted once the hand-off is fully taken (VT switched, master dropped,
+    // CRTC state saved). The owner of the QQuickWindow hides it here.
     //
+    // This is not belt-and-braces. The VT switch is supposed to suspend Qt's
+    // render thread through the kernel's VT_PROCESS signal, and on this Pi it
+    // does NOT: the app holds no console fd (only /dev/dri/card1), so QFbVtHandler
+    // was never installed and nothing tells EGLFS to stop drawing. The switch
+    // still completes, so there is no warning and no failed-looking state — but
+    // the renderer keeps submitting atomic commits to a DRM device it no longer
+    // owns: ~500 EACCES lines per RetroArch launch, ~10% CPU for the whole
+    // session, and a child that draws nothing would leave the stale UI on screen.
+    // Hiding the window is the only lever that actually stops EGLFS rendering
+    // from inside the app.
+    void displayTaken();
+
+    // Emitted after the display is put back (master restored, CRTC restored, VT
+    // switched back). The window becomes visible again here.
     void displayReturned();
 
 private:

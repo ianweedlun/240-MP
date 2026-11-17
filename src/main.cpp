@@ -279,9 +279,23 @@ int main(int argc, char *argv[]) {
     inputManager.setTargetWindow(rootWindow);
 
     //
+    // The hand-off brackets the app window, not just the DRM device: on this Pi
+    // Qt EGLFS never installed a VT_PROCESS handler (the app holds no console fd),
+    // so the kernel VT switch does not stop it drawing. Hiding the window is what
+    // actually suspends rendering while a child owns the screen; see the
+    // displayTaken comment in DisplayHandoff.h. MP240_HANDOFF_KEEP_WINDOW=1 skips
+    // it, for A/B testing the old behaviour without a rebuild.
     if (rootWindow) {
+        const bool keepWindow = !qgetenv("MP240_HANDOFF_KEEP_WINDOW").isEmpty();
+        QObject::connect(&displayHandoff, &DisplayHandoff::displayTaken,
+                         rootWindow, [rootWindow, keepWindow] {
+                             if (!keepWindow) rootWindow->setVisible(false);
+                         });
         QObject::connect(&displayHandoff, &DisplayHandoff::displayReturned,
-                         rootWindow, [rootWindow] { rootWindow->requestUpdate(); });
+                         rootWindow, [rootWindow] {
+                             rootWindow->setVisible(true);
+                             rootWindow->requestUpdate();
+                         });
     }
 
     // eventFilter() must be installed on the window or it never runs — without

@@ -126,6 +126,10 @@ int DisplayHandoff::acquire(const QString &owner) {
         // without this restore, Qt EGLFS gets EINVAL on its next page flip.
         saveDrmCrtcState(m_qtDrmFd);
     }
+    // Last, once the hand-off is complete: hide the app window and with it EGLFS's
+    // render loop. See the signal's comment — the VT switch alone does not stop
+    // this build from drawing.
+    emit displayTaken();
     return freeVt;
 #else
     return 0;
