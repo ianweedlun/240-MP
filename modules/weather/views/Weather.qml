@@ -124,16 +124,6 @@ FocusScope {
             // music should keep playing under a screen you're lingering on.
             weatherBackend.toggleMusic()
             event.accepted = true
-        } else if (event.key === Qt.Key_VolumeUp || event.key === 0x1008FF13) {
-            var curUp = weatherBackend.musicVolume
-            if (curUp === undefined) curUp = 50
-            weatherBackend.setMusicVolume(Math.min(100, curUp + 10))
-            event.accepted = true
-        } else if (event.key === Qt.Key_VolumeDown || event.key === 0x1008FF11) {
-            var curDown = weatherBackend.musicVolume
-            if (curDown === undefined) curDown = 50
-            weatherBackend.setMusicVolume(Math.max(0, curDown - 10))
-            event.accepted = true
         }
     }
 
@@ -200,103 +190,6 @@ FocusScope {
             if (item.hasOwnProperty("almanac"))      item.almanac = weatherBackend.almanac
             if (item.hasOwnProperty("rows"))         item.rows = weatherBackend.otherLocations
             if (item.hasOwnProperty("tempUnit"))     item.tempUnit = weatherBackend.tempUnitLabel
-        }
-    }
-
-    // Volume bar overlay — drawn in QML because mpv's --vo=null doesn't
-    // reliably render OSD overlays. Geometry is mirrored 1:1 from
-    // scripts/mpv-media-keys.lua (the themed volume bar the player views show),
-    // so the Weather OSD renders exactly like the Player one: same font (VCR
-    // OSD Mono = globalFont), same rows (big label above the bar row), same
-    // tick count (vol_max/VOLUME_STEP = 20), same glyphs (full-height filled
-    // rects, short vertically-centred dashes for unlit), same 35% gaps,
-    // same colours (opaque white / white at ~31% = ASS \1a&HB0&).
-    // Shows for BAR_TIMEOUT (1.5 s) when volume changes.
-    Rectangle {
-        id: volumeBarOverlay
-        anchors.fill: parent
-        color: "transparent"
-        visible: false
-
-        // Reference geometry, per-OSD-frame (issue #27)
-        property real fs: Math.floor(parent.height * 0.0333333)          // lua fs
-        property real lm: Math.floor(parent.width * 0.12)                // lua lm
-        property real barW: Math.floor(parent.width * 0.88) - lm         // lua bar_w
-        property real barH: fs * 2                                      // lua bar_h
-        property real barY: Math.floor(parent.height * 0.8333333)       // lua bar_y
-        property real labelY: Math.floor(parent.height * 0.7979166)     // lua row1_y
-        // lua: filled = clamp(round(volume / VOLUME_STEP), 0, ticks)
-        property int filled: Math.max(0, Math.min(20,
-                                 Math.floor(weatherBackend.musicVolume / 5 + 0.5)))
-
-        // Volume label — bottom-left anchored off the bar row, grows upward
-        // (lua: \an1 at (lm, row1_y), fs*3, no bold/border/shadow)
-        Text {
-            text: (weatherBackend.musicVolume === 0) ? "MUTE" : "VOLUME"
-            color: "#ffffff"                                            // lua C_WHITE
-            font.family: root.globalFont
-            font.pixelSize: volumeBarOverlay.fs * 3
-            x: volumeBarOverlay.lm
-            y: volumeBarOverlay.labelY - height
-        }
-
-        Rectangle {
-            id: tickRow
-            x: volumeBarOverlay.lm
-            y: volumeBarOverlay.barY
-            width: volumeBarOverlay.barW
-            height: volumeBarOverlay.barH
-            color: "transparent"
-
-            Repeater {
-                model: 20 // one tick per VOLUME_STEP (5%) across 0-100
-
-                Rectangle {
-                    // Slot maths straight from the lua: gap = 35% of slot,
-                    // tick = the rest; filled = full-height rect, empty =
-                    // short dash centred in the slot. Sharp corners (lua
-                    // rect_cw draws none).
-                    property real slotW: tickRow.width / 20
-                    property real dashH: Math.max(2, Math.floor(tickRow.height * 0.15))
-                    width: Math.max(1, Math.floor(slotW - Math.max(1, Math.floor(slotW * 0.35))))
-                    x: index * slotW
-                    height: index + 1 <= volumeBarOverlay.filled ? tickRow.height : dashH
-                    y: index + 1 <= volumeBarOverlay.filled
-                            ? 0
-                            : Math.floor((tickRow.height - dashH) / 2)
-                    color: index + 1 <= volumeBarOverlay.filled
-                            ? "#ffffff"
-                            : Qt.rgba(1, 1, 1, 0.31) // lua \1a&HB0& ≈ 31% opaque
-                }
-            }
-        }
-
-        // Fade in/out animation
-        opacity: 0
-        Behavior on opacity { NumberAnimation { duration: 200 } }
-    }
-
-    Connections {
-        target: weatherBackend
-        // Volume-only listener: musicStateChanged would show the bar on module
-        // open (music autostarts). The handler only runs when setMusicVolume
-        // actually changed volume, so the bar appears exactly on volume keys.
-        function onMusicVolumeChanged(volume) {
-            if (weatherBackend.musicPlaying) {
-                volumeBarOverlay.visible = true
-                volumeBarOverlay.opacity = 1
-                volumeBarTimer.start()
-            }
-        }
-    }
-
-    Timer {
-        id: volumeBarTimer
-        interval: 1500 // lua BAR_TIMEOUT (was 2000) — same fade window as the Player OSD
-        onTriggered: {
-            volumeBarOverlay.opacity = 0
-            // Keep visible but transparent so it doesn't flash
-            if (!volumeBarTimer.running) volumeBarOverlay.visible = false
         }
     }
 

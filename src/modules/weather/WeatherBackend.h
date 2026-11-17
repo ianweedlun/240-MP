@@ -49,8 +49,6 @@ class WeatherBackend : public QObject {
     // Nothing binds it yet; it exists so an on-screen indicator is a QML-only
     // change.
     Q_PROPERTY(bool musicPlaying READ musicPlaying NOTIFY musicStateChanged)
-    // Current music volume (0-100). Updated when volume is changed via IPC.
-    Q_PROPERTY(int musicVolume READ musicVolume NOTIFY musicVolumeChanged)
 
 public:
     explicit WeatherBackend(const QString &appRoot, const QString &dataRoot,
@@ -68,7 +66,6 @@ public:
     int         utcOffsetSeconds() const { return m_utcOffset; }
 
     bool musicPlaying() const;
-    int musicVolume() const { return m_musicVolume; }
 
     // Absolute path to weather_location.txt, so the setup screen can say exactly
     // where to put it.
@@ -90,15 +87,9 @@ public:
     // Pause/resume in place over mpv's IPC socket, so the current track survives
     // the toggle. Session-only: it deliberately does not write the setting.
     Q_INVOKABLE void toggleMusic();
-    // Set music volume (0-100). Sends command to mpv via IPC and triggers OSD bar.
-    Q_INVOKABLE void setMusicVolume(int volume);
-    // Settings-sync path: apply volume without feeding the OSD bar (opening a
-    // module re-applies music_volume; that is not a user volume change).
-    Q_INVOKABLE void setMusicVolumeSilent(int volume);
-
-    //
-    Q_INVOKABLE int  music_volume() const { return m_musicVolume; }
-    Q_INVOKABLE void set_music_volume(int percent);
+    // The music plays at full and lets the system mixer be the volume, so the
+    // only thing left to move it here is ducking under the guide's preview.
+    // A ducked track fades to silence and back; nothing else touches it.
     Q_INVOKABLE void duck_music(bool ducked, int ms = 400);
 
     // options_slot for the "displays" multiselect. Ids match Weather.qml's
@@ -121,9 +112,6 @@ public:
 signals:
     void dataChanged();
     void musicStateChanged();
-    // Volume-only: the OSD must NOT react to musicStateChanged (music starts
-    // when the module opens — that made the volume bar show on open).
-    void musicVolumeChanged(int volume);
     // reason ∈ {missing, unreadable, empty, notfound, network}
     void locationError(const QString &reason);
     void fetchError(const QString &message);
@@ -254,8 +242,6 @@ private:
     QTimer       *m_musicConnect = nullptr;
     QString       m_musicSocketPath;
     bool          m_musicPaused = false;
-    int           m_musicVolume  = 50;
-    bool          m_musicVolumeOverridden = false;
     double        m_musicApplied = 100.0;
     bool          m_musicDucked  = false;
     double        m_musicFadeTo  = 100.0;
