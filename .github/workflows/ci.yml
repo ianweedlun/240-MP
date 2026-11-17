@@ -215,18 +215,42 @@ jobs:
           echo "REV_SHA=$REV_SHA" >> "$GITHUB_ENV"
           # Function, not a string var: no word-splitting, no shellcheck SC2086.
           sshpi() { ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes "$@"; }
-          CUR=$(sshpi "${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}" "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
-          # An RC build deployed by pi-rc.yml leaves .240mp-rc-deployed-* behind and does not
-          # touch the official marker, so a matching official marker does not prove the
-          # running binary is the official one. Never skip while RC markers exist: the skip
-          # would bless an RC build as the beta deploy. (Observed 2026-11-17: the beta deploy
-          # of 55b129c left PR #77's rc markers in place and the Pi still read as "RC".)
-          RCMARK=$(sshpi "${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}" "ls \$HOME/.240mp-rc-deployed-rev 2>/dev/null || true")
-          if [ "$CUR" = "$REV_SHA" ] && [ -z "$RCMARK" ]; then
+          # Read the official marker AND every RC marker in ONE ssh round-trip, then prove the
+          # read completed with a trailing sentinel. Two reasons it is one call with a sentinel:
+          # a failed or partial read must never look like "no markers" (that ambiguity is exactly
+          # how a skip blesses a running RC build as the beta deploy), and two calls could observe
+          # a state that never existed.
+          #
+          # Why RC markers veto the skip: pi-rc.yml records an un-merged PR head in
+          # .240mp-rc-deployed-{rev,pr,md5} (plus .240mp-rc-restore-rev while it owns the lane) and
+          # never touches .240mp-last-deployed-rev, so a matching official marker does not prove
+          # the installed binary is the official one. Observed 2026-11-17: the beta deploy of
+          # 55b129c left PR #77's rc markers behind and the Pi kept reading as "carrying an RC
+          # build". All four files are checked — pi-rc.yml writes restore-rev BEFORE the deployed
+          # trio, so an aborted RC run can leave that one alone, and a skipped deploy would leave
+          # it claimed.
+          MARKERS=$(sshpi "${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}" '
+            if [ -e $HOME/.240mp-last-deployed-rev ]; then tr -d "[:space:]" < $HOME/.240mp-last-deployed-rev; fi
+            echo ""
+            echo "@@OFFICIAL-END"
+            for f in $HOME/.240mp-rc-deployed-rev $HOME/.240mp-rc-deployed-pr $HOME/.240mp-rc-deployed-md5 $HOME/.240mp-rc-restore-rev; do
+              if [ -e "$f" ]; then echo "RCMARK $f"; fi
+            done
+            echo "@@MARKERS-OK"
+          ' 2>/dev/null || true)
+          MARKERS_READ=0
+          case "$MARKERS" in *'@@MARKERS-OK'*) MARKERS_READ=1 ;; esac
+          CUR=$(printf '%s\n' "$MARKERS" | awk '/^@@OFFICIAL-END$/{exit} {printf "%s", $0}' | tr -d '[:space:]')
+          RC_COUNT=$(printf '%s\n' "$MARKERS" | awk '/^RCMARK /{n++} END{print n+0}')
+          RC_LIST=$(printf '%s\n' "$MARKERS" | awk '/^RCMARK /{sub(/^RCMARK /,""); printf "%s ", $0}')
+          echo "gate: official='$CUR' this_run='$REV_SHA' rc_markers=$RC_COUNT markers_read=$MARKERS_READ"
+          if [ "$MARKERS_READ" = "1" ] && [ "$CUR" = "$REV_SHA" ] && [ "$RC_COUNT" = "0" ]; then
             echo "SKIP_DEPLOY=1" >> "$GITHUB_ENV"
-            echo "Commit $REV_SHA already deployed and verified on the Pi — no transfer, no restart."
-          elif [ "$CUR" = "$REV_SHA" ]; then
-            echo "Official marker matches $REV_SHA but RC markers are present — the Pi may be carrying an RC build; redeploying instead of skipping."
+            echo "Commit $REV_SHA already deployed and verified on the Pi with no RC markers — no transfer, no restart."
+          elif [ "$MARKERS_READ" = "1" ] && [ "$CUR" = "$REV_SHA" ]; then
+            echo "Official marker matches $REV_SHA but RC markers are present (${RC_LIST}) — the Pi may be carrying an RC build; redeploying instead of skipping."
+          elif [ "$MARKERS_READ" != "1" ]; then
+            echo "::warning::Could not read the Pi's deploy markers (ssh error or truncated read) — deploying instead of skipping."
           fi
 
       - name: Download arm64 tarball from this run
@@ -304,7 +328,7 @@ jobs:
               # read as "carrying an RC build" to every later probe. Best-effort: a marker
               # miss only costs a redundant future deploy, never a wrong skip.
               if [ -n "${REV_SHA:-}" ]; then
-                sshpi "$USER@$HOST" "echo $REV_SHA > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" 2>/dev/null || true
+                sshpi "$USER@$HOST" "echo $REV_SHA > \$HOME/.240mp-last-deployed-rev; rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" 2>/dev/null || true
               fi
               echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($REV_SHA)"
               exit 0
