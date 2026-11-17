@@ -22,3 +22,11 @@ build-*/
 
 devbuild/
 .local-build-*/
+
+# Secrets and agent scratch state — never commit credentials or sweep live worktrees
+######################
+id_*
+*.pem
+*.key
+*.p12
+.worktrees/
