@@ -113,6 +113,7 @@ add_executable(240mp
     src/audio/PipeWireVolumeMixer.cpp
     src/audio/ALSAVolumeMixer.cpp
     src/audio/VolumeMixerFactory.cpp
+    src/audio/VolumeManager.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -334,6 +335,22 @@ if(BUILD_TESTS)
         target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME volume-mixer COMMAND volume-mixer-tests)
+
+    # App-wide volume owner (#34): the state machine above the mixers.
+    add_executable(volume-manager-tests
+        src/audio/VolumeManager.cpp
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/tests/VolumeManagerTest.cpp)
+    set_target_properties(volume-manager-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(volume-manager-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(volume-manager-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(volume-manager-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME volume-manager COMMAND volume-manager-tests)
 
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision

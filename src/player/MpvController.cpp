@@ -65,7 +65,11 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         sendCommand({"observe_property", 3, "playlist-pos"});
         sendCommand({"observe_property", 4, "pause"});
         sendCommand({"observe_property", 5, "volume"});
-        sendCommand({"set_property", "volume", m_volume});
+        // mpv is pinned at 100 on purpose (#34): the system mixer is the single
+        // loudness authority, so writing mpv's own volume as well would attenuate
+        // twice (50% app x 50% mpv = 25% out). The bar is drawn from the app's
+        // number via showVolumeOsd(), never from this property.
+        sendCommand({"set_property", "volume", 100});
 
         // Auto Fit watch wires: one-shot reads for the output DISPLAY size
         // (get_property + top-level integer request_id; request_id is an echo
@@ -603,6 +607,19 @@ void MpvController::showChannelOsd(const QVariantMap &options) {
            qPrintable(options.value("number").toString()));
 }
 
+void MpvController::showVolumeOsd(int level, bool muted) {
+    // Draw-only on purpose (#34): the level already lives in the system mixer and
+    // mpv plays through it, so writing mpv's own `volume` as well would attenuate
+    // twice (50% app x 50% mpv = 25% out). mpv keeps its volume; this renders the
+    // app's number while mpv owns the screen.
+    if (!m_hasMediaKeysScript)
+        return;
+    if (!m_ipc || m_ipc->state() != QLocalSocket::ConnectedState)
+        return;   // no child owns the screen: the QML bar is doing the drawing
+    sendCommand({"script-message", "240mp-volume-osd",
+                 QString::number(level), muted ? QStringLiteral("true") : QStringLiteral("false")});
+}
+
 void MpvController::clearOsdPrompt() {
     sendCommand({"script-message", "skip-overlay-state", "0"});
 }
@@ -800,13 +817,6 @@ void MpvController::onProcessFinished() {
     } else {
         emit playbackEnded(pos, dur, reason);
     }
-}
-
-void MpvController::setVolume(int percent) {
-    const int v = qBound(0, percent, 100);
-    m_volume = v;
-    if (m_ipc && m_ipc->state() == QLocalSocket::ConnectedState)
-        sendCommand({"set_property", "volume", v});
 }
 
 void MpvController::sendCommand(const QJsonArray &args)

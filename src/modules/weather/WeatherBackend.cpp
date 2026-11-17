@@ -272,16 +272,6 @@ void WeatherBackend::onSettingChanged(const QString &moduleId, const QString &ke
         fetchWeather();
         fetchOthers();
     }
-    // Music volume: parse "50%" -> 50 and apply if music is playing. This is
-    // the settings-sync path — silent apply, no OSD (a user volume change
-    // arrives via the QML volume keys through setMusicVolume).
-    if (key == QLatin1String("music_volume")) {
-        QString volStr = value.toString();
-        bool ok = false;
-        int volume = volStr.replace('%', "").toInt(&ok);
-        if (ok)
-            setMusicVolumeSilent(volume);
-    }
     // LOCATION setting (#37): the picker saves an explicit "lat, lon" spec
     // under this key; apply it as a rewrite of weather_location.txt.
     if (key == QLatin1String("location"))
@@ -394,14 +384,6 @@ void WeatherBackend::startMusic() {
         return;
     }
 
-    if (!m_musicVolumeOverridden) {
-        const QJsonValue volSetting = moduleConfig()[QStringLiteral("music_volume")];
-        QString volStr = volSetting.toString(QStringLiteral("50%"));
-        bool ok = false;
-        int volume = volStr.replace('%', "").toInt(&ok);
-        if (ok) m_musicVolume = qBound(0, volume, 100);
-    }
-
     QStringList args;
     args << QStringLiteral("--no-video")
          << QStringLiteral("--loop-playlist=inf")
@@ -410,7 +392,9 @@ void WeatherBackend::startMusic() {
          << QStringLiteral("--shuffle")
          << QStringLiteral("--no-terminal")
          << QStringLiteral("--really-quiet")
-         << QStringLiteral("--volume=%1").arg(m_musicDucked ? 0 : m_musicVolume)
+         // Full volume and no attenuation of its own: the system mixer is the
+         // volume, and a duck is the only thing this process applies.
+         << QStringLiteral("--volume=%1").arg(m_musicDucked ? 0 : 100)
          << QStringLiteral("--input-ipc-server=%1").arg(m_musicSocketPath)
          // Load media-keys script for volume OSD bar and key handling
          << QStringLiteral("--script=%1").arg(m_appRoot + "/scripts/mpv-media-keys.lua")
@@ -438,15 +422,7 @@ void WeatherBackend::startMusic() {
         m_musicIpc = new QLocalSocket(this);
         connect(m_musicIpc, &QLocalSocket::connected, this, [this]() {
             m_musicConnect->stop();
-            if (!m_musicVolumeOverridden) {
-                const QJsonValue volSetting = moduleConfig()[QStringLiteral("music_volume")];
-                QString volStr = volSetting.toString(QStringLiteral("50%"));
-                bool ok = false;
-                int volume = volStr.replace('%', "").toInt(&ok);
-                if (ok)
-                    m_musicVolume = qBound(0, volume, 100);
-            }
-            m_musicApplied = m_musicDucked ? 0.0 : double(m_musicVolume);
+            m_musicApplied = m_musicDucked ? 0.0 : 100.0;
             applyMusicVolume();
         });
     }
@@ -466,16 +442,10 @@ void WeatherBackend::startMusic() {
     emit musicStateChanged();
 }
 
-void WeatherBackend::set_music_volume(int percent) {
-    m_musicVolume = qBound(0, percent, 100);
-    m_musicVolumeOverridden = true;
-    if (!m_musicDucked) startMusicFade(m_musicVolume, 0);
-}
-
 void WeatherBackend::duck_music(bool ducked, int ms) {
     if (m_musicDucked == ducked) return;
     m_musicDucked = ducked;
-    startMusicFade(ducked ? 0.0 : double(m_musicVolume), qMax(0, ms));
+    startMusicFade(ducked ? 0.0 : 100.0, qMax(0, ms));
 }
 
 void WeatherBackend::startMusicFade(double target, int ms) {
@@ -533,7 +503,6 @@ void WeatherBackend::stopMusic() {
         p->deleteLater();
     }
     m_musicPaused = false;
-    m_musicVolumeOverridden = false;
     emit musicStateChanged();
 }
 
@@ -553,49 +522,6 @@ void WeatherBackend::toggleMusic() {
     };
     m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
     emit musicStateChanged();
-}
-
-void WeatherBackend::setMusicVolume(int volume) {
-    if (!m_music || m_music->state() == QProcess::NotRunning) return;
-    volume = qBound(0, volume, 100);
-    m_musicVolume = volume;
-    // Emit volume-only signal so the QML volume OSD shows immediately, even if
-    // IPC hasn't connected yet. musicStateChanged (music start/stop/toggle)
-    // must NOT feed the OSD — opening the module started music and showed a
-    // volume bar nobody had touched.
-    emit musicVolumeChanged(m_musicVolume);
-    if (m_musicIpc->state() != QLocalSocket::ConnectedState) {
-        qWarning("[Weather] music IPC not connected — volume change queued");
-        return;
-    }
-    // Send volume command to mpv. The OSD bar is drawn in QML (Weather.qml)
-    // because mpv's --vo=null doesn't reliably render OSD overlays.
-    const QJsonObject cmd{
-        { QStringLiteral("command"),
-          QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
-                      volume } }
-    };
-    m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
-}
-
-// Same apply, no OSD announce: the app re-applies module settings on open,
-// and that sync must not show a volume bar nobody touched (issue #27 design
-// note — the bar appears exactly on volume keys).
-void WeatherBackend::setMusicVolumeSilent(int volume)
-{
-    if (!m_music || m_music->state() == QProcess::NotRunning) return;
-    volume = qBound(0, volume, 100);
-    m_musicVolume = volume;
-    if (m_musicIpc->state() != QLocalSocket::ConnectedState) {
-        qWarning("[Weather] music IPC not connected — silent volume apply queued");
-        return;
-    }
-    const QJsonObject cmd{
-        { QStringLiteral("command"),
-          QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
-                      volume } }
-    };
-    m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
 }
 
 // ── Location ─────────────────────────────────────────────────────────────────

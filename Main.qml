@@ -1,5 +1,8 @@
 import QtQuick
 import QtQuick.Window
+// Shell-owned components (the app-wide volume bar, #34). Installed as a
+// directory, so shell overlays live here rather than beside Main.qml.
+import "views"
 
 Window {
     id: root
@@ -392,6 +395,13 @@ Window {
                 }
             }
         }
+    }
+
+    // App-wide volume bar (#34): one renderer for every screen we own. Shown by
+    // the manager's change signal, not by the view under it, so a keypress in
+    // Weather, a game, or a channel view all produce the same bar.
+    VolumeBar {
+        id: volumeBar
     }
 
     Item {

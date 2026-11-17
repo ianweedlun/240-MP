@@ -50,14 +50,20 @@ public:
     Q_INVOKABLE void seekTo(int positionMs);
     Q_INVOKABLE void sendKey(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
+    // mpv's own volume property, read-only: it is pinned at 100 so the system
+    // mixer stays the single loudness authority (#34). There is deliberately
+    // no setter — writing it as well would attenuate twice.
     Q_INVOKABLE int  volume() const { return m_volume; }
-    Q_INVOKABLE void setVolume(int percent);
     // Whether the next launch will crop the picture to fill the screen. A filter
     // that draws into the video frame has to know: panscan crops that frame
     // afterwards, and takes anything drawn near its edge with it.
     Q_INVOKABLE bool cropActive() const { return autoFitEnabled() && !cropUnavailable(); }
     Q_INVOKABLE void showOsdSkipPrompt();
     Q_INVOKABLE void showChannelOsd(const QVariantMap &options);
+    // The app's volume number, pushed to the lua bar so the child-owned renderer
+    // never counts its own deltas and drifts out of sync with the system mixer
+    // (#34). Safe to call with no child running — it is dropped.
+    Q_INVOKABLE void showVolumeOsd(int level, bool muted);
     Q_INVOKABLE void clearOsdPrompt();
 
     // True only on devices whose smooth-playback decode path can't crop/zoom (the

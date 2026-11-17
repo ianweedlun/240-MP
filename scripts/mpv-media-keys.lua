@@ -50,7 +50,14 @@ local function draw_text(ass, x, y, anchor, text, fs, colour)
         anchor, x, y, fs, colour, A_OPAQUE, text))
 end
 
-local function show_volume_bar()
+-- The app pushes its own volume number here (#34): volume keys are app-wide and
+-- move the SYSTEM mixer, so mpv's own `volume` property stays pinned at 100 and
+-- would draw a full bar. The app is the one truth; this renders it while mpv
+-- owns the screen, because the app's renderer is suspended then.
+-- (Registered below show_volume_bar: a closure over a local declared later would
+-- resolve to a nil global.)
+
+local function show_volume_bar(level, muted)
     -- Tell the navigation menu (mpv-osc.lua) to stand down — the two OSDs share
     -- the same spot and are mutually exclusive.
     mp.commandv("script-message", "240mp-osd-menu-hide")
@@ -58,12 +65,19 @@ local function show_volume_bar()
     local ww, wh = mp.get_osd_size()
     if ww == 0 or wh == 0 then return end
 
-    -- One tick per VOLUME_STEP across the full 0..volume-max range, so a config
-    -- that raises volume-max above 100 yields more (and thus thinner) ticks.
-    local volume   = mp.get_property_number("volume", 0) or 0
-    local vol_max  = mp.get_property_number("volume-max", 100) or 100
+    -- One tick per VOLUME_STEP across the full 0..100 range, so a config that
+    -- raises volume-max above 100 yields more (and thus thinner) ticks.
+    --
+    -- The app always pushes its own number; mpv's `volume` is pinned at 100 and
+    -- is never a source of truth here, so there is no fallback to read.
+    local volume   = level or 0
+    local vol_max  = 100
     local ticks    = math.max(1, math.floor(vol_max / VOLUME_STEP + 0.5))
     local filled   = math.max(0, math.min(math.floor(volume / VOLUME_STEP + 0.5), ticks))
+    if muted == nil then
+        muted = false
+    end
+    if muted then filled = 0 end
 
     local fs       = math.floor(wh * 0.0333333)
     local lm       = math.floor(ww * 0.12)
@@ -84,7 +98,7 @@ local function show_volume_bar()
     -- Bottom-left anchor (\an1) so the 3x label grows upward off the bar row and
     -- never overlaps the ticks below it. Label reflects mute state so a mute
     -- toggle (which leaves the volume ticks unchanged) is still legible.
-    local label = mp.get_property_bool("mute", false) and "MUTE" or "VOLUME"
+    local label = muted and "MUTE" or "VOLUME"
     draw_text(ass, lm, row1_y, 1, label, label_fs, C_WHITE)
 
     local x = lm
@@ -108,10 +122,9 @@ local function show_volume_bar()
     bar_timer = mp.add_timeout(BAR_TIMEOUT, hide_bar)
 end
 
-local function change_volume(delta)
-    mp.command("no-osd add volume " .. delta)
-    show_volume_bar()
-end
+mp.register_script_message("240mp-volume-osd", function(level, muted)
+    show_volume_bar(tonumber(level), muted == "true" or muted == true)
+end)
 
 -- Run a seek/chapter command, then open the nav menu (mpv-osc.lua) so the new
 -- position is shown.
@@ -120,9 +133,10 @@ local function seek_with_menu(command)
     mp.commandv("script-message", "240mp-osd-menu-show")
 end
 
-mp.add_forced_key_binding("VOLUME_UP",   "mk-vol-up",   function() change_volume(VOLUME_STEP)  end, {repeatable = true})
-mp.add_forced_key_binding("VOLUME_DOWN", "mk-vol-down", function() change_volume(-VOLUME_STEP) end, {repeatable = true})
-mp.add_forced_key_binding("MUTE",        "mk-mute",     function() mp.command("no-osd cycle mute"); show_volume_bar() end)
+-- Volume keys are NOT bound here any more (#34): the app owns them, moves the
+-- system mixer, and pushes the number in through 240mp-volume-osd above. Binding
+-- them to mpv's own volume as well would attenuate twice and let mpv drift out
+-- of step with the mixer.
 
 mp.add_forced_key_binding("PLAYPAUSE", "mk-playpause", function() mp.command("cycle pause") end)
 mp.add_forced_key_binding("STOP",      "mk-stop",      function() mp.command("quit") end)

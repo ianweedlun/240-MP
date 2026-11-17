@@ -27,7 +27,6 @@ FocusScope {
 
     property string previewMode: "VIDEO"
 
-    property int masterVolume: 100
     readonly property bool guideMusicOn:
         typeof weatherBackend !== "undefined" && weatherBackend && weatherBackend.musicPlaying
 
@@ -45,28 +44,13 @@ FocusScope {
         weatherBackend.duck_music(previewAudible, 400)
     }
 
-    // Muting silences what is playing without moving the number, so unmuting
-    // puts it back where it was rather than where it happened to be turned down
-    // to.
-    readonly property int audibleVolume: volumeOsd.muted ? 0 : masterVolume
-
+    // The mixer owns the volume, so both sources play at full and get out of
+    // each other's way here: the preview is silenced outright while the music
+    // is up, and the music bar is the app's own.
     function applyVolume() {
-        if (previewLoader.item) previewLoader.item.volume = guideMusicOn ? 0 : audibleVolume
-        if (weatherBackend)
-            weatherBackend.set_music_volume(audibleVolume)
+        if (previewLoader.item) previewLoader.item.volume = guideMusicOn ? 0 : 100
     }
 
-    function reloadVolume() {
-        var mv = appCore.get_setting(guideRoot.moduleId, "volume")
-        if (mv === undefined || mv === null || String(mv) === "") return
-        var v = Math.max(0, Math.min(100, parseInt(mv)))
-        if (v === masterVolume) return
-        masterVolume = v
-        // Pushed rather than bound: the bar writes its own level when a key is
-        // pressed, and a binding would be gone the first time it did.
-        volumeOsd.level = v
-        applyVolume()
-    }
     readonly property bool previewShowsPicture: previewMode !== "OFF"
     readonly property bool previewShowsVideo:   previewMode === "VIDEO"
 
@@ -341,10 +325,6 @@ FocusScope {
         var pv = appCore.get_setting(guideRoot.moduleId, "guide.preview")
         if (pv !== undefined && pv !== null && String(pv) !== "")
             previewMode = String(pv).toUpperCase()
-        var mv = appCore.get_setting(guideRoot.moduleId, "volume")
-        if (mv !== undefined && mv !== null && String(mv) !== "")
-            masterVolume = Math.max(0, Math.min(100, parseInt(mv)))
-        volumeOsd.level = masterVolume
         applyVolume()
         refresh()
         for (var k = 0; k < rows.length; k++) {
@@ -380,21 +360,7 @@ FocusScope {
             weatherBackend.stopMusic()
     }
 
-    // mpv is never the thing making a sound on the guide -- the preview is a
-    // QML player and the music is the weather module's -- so the volume keys
-    // are this screen's to answer.
-    VolumeOsd {
-        id: volumeOsd
-        moduleId: guideRoot.moduleId
-        z: 100
-        onAdjusted: {
-            guideRoot.masterVolume = level
-            guideRoot.applyVolume()
-        }
-    }
-
     Timer { interval: 30000; running: true; repeat: true; onTriggered: guideRoot.refresh() }
-    Timer { interval: 5000; running: true; repeat: true; onTriggered: guideRoot.reloadVolume() }
     Timer { interval: 5000; running: true; repeat: true
             onTriggered: {
                 guideRoot.nowMs = virtualChannelsBackend.now_ms()
@@ -603,7 +569,7 @@ FocusScope {
                 asynchronous: true
                 onLoaded: {
                     item.finished.connect(guideRoot.followSchedule)
-                    item.volume = guideRoot.guideMusicOn ? 0 : guideRoot.audibleVolume
+                    item.volume = guideRoot.guideMusicOn ? 0 : 100
                 }
                 active: guideRoot.previewShowsVideo
                 source: "ChannelPreview.qml"
