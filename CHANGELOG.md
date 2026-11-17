@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Display hand-off: stop the renderer instead of letting it draw into a dead DRM fd
+- **The app kept rendering for the whole session after handing the screen to a child.** The hand-off switches VT, which is supposed to suspend Qt's render thread through the kernel's VT signal — but on this Pi the app holds no console fd (only `/dev/dri/card1`), so Qt EGLFS never installed a VT handler and never stops drawing. The switch itself succeeds, so nothing warned: the renderer simply kept submitting atomic commits to a DRM device it no longer owned, at 60 Hz bursts. Measured on beta: 1573 `Failed to commit atomic request (code=-13)` lines across three RetroArch launches, ~10% CPU held while the game ran.
+- **Fix**: `DisplayHandoff` now emits `displayTaken()` when the hand-off completes, and the root window is hidden on it — EGLFS renders nothing while hidden — then shown again on `displayReturned()`. The CRTC state is still captured before the hide, so the post-exit restore is unchanged. `MP240_HANDOFF_KEEP_WINDOW=1` restores the old behaviour for A/B testing on hardware.
+
 ### Changed — App-wide volume: one level, two renderers (#34)
 - **Volume keys work everywhere**: volume up/down/mute used to be each module's private business (weather music, mpv only). `InputManager` now hands them to a single app-wide `VolumeManager`, so pressing the remote's volume keys on any screen — menu, Plex, YouTube, channels, a game — changes the same level, and RetroArch keeps doing its own thing while a game owns the screen.
 - **The system mixer is the truth**: `VolumeManager` reads and writes the ALSA mixer (via `amixer`), so the number in the bar is the number the speakers actually play at. mpv and the weather music player run pinned at 100 and no longer attenuate on their own; the only exception is the speech duck, which is transient by design.
