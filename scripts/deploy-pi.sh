@@ -18,7 +18,7 @@
 #   - No PI_SSH_PASSWORD anywhere — this Pi is key-only.
 #
 # Install runs through the Pi's root wrapper /usr/local/bin/240mp-ci-deploy (the
-# same one the CI deploy-pi.yml chain calls). It reboots the Pi; the caller's
+# same one the CI `deploy-pi` job calls from ci.yml). It reboots the Pi; the caller's
 # ssh dying mid-command is EXPECTED. We then re-SSH to verify service-active and
 # binary md5 against the tarball.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ TARGET="$PIUSER@$HOST"
 sshrun() { ssh -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
 scpput() { scp -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
 
-# ── Skip-gate fast path (mirrors .github/workflows/deploy-pi.yml) ────────────
+# ── Skip-gate fast path (mirrors the `deploy-pi` job in .github/workflows/ci.yml) ──
 # The authoritative marker lives in the CI user's home (/home/ghdeploy/.240mp-last-deployed-rev;
 # the workflow's PI_SSH_USERNAME is ghdeploy). Read that first (world-readable), then our own
 # copy (written by this path) — either marker satisfying the gate is a legitimate skip.

@@ -8,6 +8,9 @@ on:
   pull_request:
     # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
     branches: [beta]
+  # Manual re-run. Dispatched on beta it rebuilds that tip and deploys it; dispatched
+  # on any other branch it is build-only (the deploy-pi job is beta-gated).
+  workflow_dispatch:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────────
@@ -71,12 +74,13 @@ jobs:
           # Sanitize branch name for filename (replace / with -)
           BRANCH_SAFE="${BRANCH//\//-}"
           TARBALL_NAME="240-MP-${BRANCH_SAFE}-linux-arm64-${SHORT_SHA}"
-          # Carry the Pi-side CI wrapper inside the tarball: the deploy-pi.yml job is
-          # a workflow_run context with NO repo checkout, so the wrapper must ship as
-          # tarball payload (./scripts/...), never as a local scp path.
+          # Carry the Pi-side CI wrapper inside the tarball: the deploy-pi job ships
+          # the tarball as its payload, so the wrapper travels as tarball content
+          # (./scripts/...), never as a repo path the deploy job would have to
+          # check out and scp separately.
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           tar -czf "${TARBALL_NAME}.tar.gz" -C install .
-          echo "TARBALL_NAME=$TARBALL_NAME" >> $GITHUB_ENV
+          echo "TARBALL_NAME=$TARBALL_NAME" >> "$GITHUB_ENV"
 
       - name: Upload Linux arm64 build artifact
         uses: actions/upload-artifact@v4
@@ -150,3 +154,151 @@ jobs:
           name: 240mp-linux-x86_64
           path: build/240mp
           retention-days: 5
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Deploy to Raspberry Pi — beta only, ordered after the arm64 build by the DAG
+  # ──────────────────────────────────────────────────────────────────────────────
+  # WHY THE DEPLOY LIVES IN THIS FILE (2026-11-17, cards t_66ac06a0 / t_1da3cd4c):
+  # it used to be a standalone workflow triggered by
+  #   on.workflow_run: { workflows: ["CI"], branches: [beta], types: [completed] }
+  # and that trigger can never fire for beta. workflow_run only emits for runs of the
+  # named workflow on the repository DEFAULT branch (dev), so beta CI completions
+  # produced no event at all: 17 successful beta CI push runs, 0 deploy runs, ever
+  # (the 274-run deploy history is 227 dev + 47 main). Deploying as a job inside
+  # ci.yml deletes the cross-run event instead of patching around it:
+  #   * `needs: [build-linux-arm64]` = green build AND tests first, enforced by the
+  #     job DAG, not by polling check-runs;
+  #   * github.sha IS the beta commit that was pushed — the exact key the Pi's
+  #     ~/.240mp-last-deployed-rev skip-fast-path compares (no event payload, no API
+  #     call, no token-scope surprises);
+  #   * one file to read, one run to open.
+  # Branch gate: the push trigger already limits this file to dev/feature/**/beta, and
+  # the explicit `if` below keeps pull_request CI (github.ref = refs/pull/<n>/merge) and
+  # manual dispatches on non-beta branches from ever deploying.
+  #
+  # KNOWN AND INTENDED: this file carries `paths-ignore: ['**.md','**.yml']`, so a
+  # markdown/YAML-only promotion into beta produces NO CI run and therefore NO deploy.
+  # Docs-only waves are deploy-free by design; re-deploy an unchanged beta tip with
+  # `workflow_dispatch` on beta or `./scripts/deploy-pi.sh --latest beta`.
+  deploy-pi:
+    name: Deploy to Raspberry Pi
+    needs: [build-linux-arm64]
+    if: github.ref == 'refs/heads/beta'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    # One deploy at a time: a racing pair would share the Pi's staging area and could
+    # interleave an upload with an extract. Queued (not cancelled) so the last push
+    # still wins.
+    concurrency:
+      group: deploy-pi
+      cancel-in-progress: false
+    steps:
+      - name: Stage identity key (key-only auth, no password secrets)
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -q -lf /tmp/pi_id
+
+      - name: Skip fast path (same commit already deployed = no transfer, no restart)
+        # The Pi carries ~/.240mp-last-deployed-rev (written after each verified
+        # deploy). Gate key = github.sha, the commit this run built and the one a beta
+        # push just created. Same commit ⇒ same tree ⇒ byte-identical build output, so
+        # the skip is never wrong. Same TREE but a different commit re-deploys
+        # needlessly at worst — the asymmetric failure we allow. (Never key this on
+        # binary md5: the tarball also carries share/240mp QML assets.)
+        run: |
+          REV_SHA='${{ github.sha }}'
+          if [ -z "$REV_SHA" ]; then echo "no github.sha in context"; exit 1; fi
+          echo "REV_SHA=$REV_SHA" >> "$GITHUB_ENV"
+          # Function, not a string var: no word-splitting, no shellcheck SC2086.
+          sshpi() { ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes "$@"; }
+          CUR=$(sshpi "${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}" "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
+          if [ "$CUR" = "$REV_SHA" ]; then
+            echo "SKIP_DEPLOY=1" >> "$GITHUB_ENV"
+            echo "Commit $REV_SHA already deployed and verified on the Pi — no transfer, no restart."
+          fi
+
+      - name: Download arm64 tarball from this run
+        if: env.SKIP_DEPLOY != '1'
+        uses: actions/download-artifact@v4
+        with:
+          name: tarball-linux-arm64
+
+      - name: Verify tarball
+        if: env.SKIP_DEPLOY != '1'
+        run: |
+          ls -la ./*.tar.gz
+          file ./*.tar.gz
+          # The Pi is aarch64 — a non-ARM binary becomes a boot loop via
+          # 240mp-stop's poweroff-on-exit. Fail fast instead of bricking.
+          TARBALL=$(find . -maxdepth 1 -name '*.tar.gz' -print -quit)
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          tar -xzf "$TARBALL" -O ./usr/local/bin/240mp | file - | grep -q 'ARM aarch64' \
+            || { echo "Error: tarball binary is not ARM aarch64"; exit 1; }
+          LOCAL_MD5=$(tar -xzf "$TARBALL" -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
+          echo "LOCAL_MD5=$LOCAL_MD5" >> "$GITHUB_ENV"
+
+      - name: Deploy via ghdeploy + root wrapper, then verify
+        if: env.SKIP_DEPLOY != '1'
+        # The Pi's own /usr/local/bin/240mp-ci-deploy (run via sudo, granted by
+        # /etc/sudoers.d/240mp-ci) does the whole dance: arch guard, stop, extract,
+        # start, md5 report. Restart-safe (b391736 + b44a30d): stop/start only, no
+        # reboot, so the caller's ssh session survives.
+        run: |
+          HOST='${{ secrets.PI_SSH_HOSTNAME }}'
+          USER='${{ secrets.PI_SSH_USERNAME }}'
+          sshpi() { ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes "$@"; }
+
+          # If the Pi is off-network for the runner, stop after verify: the artifact +
+          # ARM check already proved the build. Deploy from a local machine instead.
+          if ! sshpi "$USER@$HOST" true 2>/tmp/ssh_err; then
+            echo "::warning::Pi not reachable from runner (likely cold/off). Build verified; transfer skipped. Land it with ./scripts/deploy-pi.sh --latest beta"
+            exit 0
+          fi
+
+          # Per-run unique path: concurrent deploy runs used to share one /tmp name and
+          # clobber each other's upload mid-stream — corrupted hybrid binaries.
+          PI_PATH="/tmp/240mp-deploy-${REV_SHA}.tar.gz"
+          echo "Uploading $TARBALL to $PI_PATH ..."
+          scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            "$TARBALL" "$USER@$HOST:$PI_PATH"
+
+          # Wrapper refresh convention (2026-11-04): ghdeploy's sudo grants ONLY the
+          # wrapper CALL (see /etc/sudoers.d/240mp-ci: NOPASSWD wrapper *). It can never
+          # `sudo install` a fresh copy — that sudo asks for a password (rc=1). Wrapper
+          # LOGIC changes are refreshed out-of-band by a privileged shell BEFORE the wave
+          # that depends on them. The tarball still carries the copy for reference.
+          if sshpi "$USER@$HOST" "test -x /usr/local/bin/240mp-ci-deploy" 2>/dev/null; then
+            echo "Wrapper present on Pi — invoking root-side dance"
+          else
+            echo "Wrapper MISSING on Pi — refresh via privileged shell first; deploy skipped"
+            exit 1
+          fi
+
+          echo "Root-side dance via /usr/local/bin/240mp-ci-deploy (restart-safe: stop/start, no reboot) ..."
+          rc=0
+          sshpi "$USER@$HOST" "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then echo "auth/sudo refused (rc=$rc)"; exit 1; fi
+          echo "wrapper call returned rc=$rc"
+
+          echo "Verify loop: waiting for the new build to be active on the Pi ..."
+          for i in $(seq 1 15); do
+            sleep 20
+            OUT=$(sshpi "$USER@$HOST" "systemctl is-active 240mp.service; md5sum /opt/240mp/bin/240mp" 2>/dev/null) || continue
+            echo "check $i:" "$(echo "$OUT" | tr '\n' ' ')"
+            if echo "$OUT" | head -1 | grep -q '^active' && echo "$OUT" | grep -q "$LOCAL_MD5"; then
+              # Record the deployed commit so a future re-push of it can skip
+              # transfer+restart (the fast path above). Best-effort: a marker miss only
+              # costs a redundant future deploy, never a wrong skip.
+              if [ -n "${REV_SHA:-}" ]; then
+                sshpi "$USER@$HOST" "echo $REV_SHA > \$HOME/.240mp-last-deployed-rev" 2>/dev/null || true
+              fi
+              echo "DEPLOYED+VERIFIED: service active, binary md5 matches tarball ($REV_SHA)"
+              exit 0
+            fi
+          done
+          echo "VERIFY FAILED: service active + md5 $LOCAL_MD5 not confirmed after 15 tries"
+          exit 1
