@@ -507,7 +507,11 @@ jobs:
               echo "-- sset 40% --"; amixer sset "$PICK" 40% 2>&1 || true
               echo "-- after sset 40% --"; amixer sget "$PICK" 2>&1 || true
 
-              echo "-- restore raw value(s) $RAWS --"; amixer sset "$PICK" "$RAWS" 2>&1 || true
+              # NOTE: a negative raw value ('-1196') is swallowed by amixer's own
+              # getopt as an option ('amixer: invalid option -- 1') unless '--'
+              # ends option parsing first. Without it the raw restore NEVER ran and
+              # only the percent fallback below restored anything (card t_04594e5a).
+              echo "-- restore raw value(s) $RAWS --"; amixer sset "$PICK" -- "$RAWS" 2>&1 || true
               AFTER_RESTORE=$(amixer sget "$PICK" 2>&1)
               echo "-- after restore, read back from the mixer --"
               printf '%s\n' "$AFTER_RESTORE" | sed 's/^/  /'
