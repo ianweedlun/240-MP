@@ -31,6 +31,7 @@
 #include "player/MpvController.h"
 #include "input/InputManager.h"
 #include "input/IdleTracker.h"
+#include "audio/VolumeManager.h"
 #include "update/UpdateManager.h"
 #include "util/ExecPath.h"
 #include "util/DisplayHandoff.h"
@@ -205,6 +206,12 @@ int main(int argc, char *argv[]) {
     InputManager        inputManager(dataRoot, &appCore);
     inputManager.setDisplayHandoff(&displayHandoff);
     inputManager.setGameObserver(&retroArchBackend);
+
+    // App-wide volume (#34): one number for the whole shell, backed by the system
+    // mixer so it means the same thing in every view and in every child process.
+    // Non-owned by InputManager, which routes every volume key through it.
+    VolumeManager       volumeManager(dataRoot);
+    inputManager.setVolumeManager(&volumeManager);
     IdleTracker         idleTracker(60);   // disabled until Main.qml applies the saved setting
     UpdateManager       updateManager(appRoot, dataRoot);
 
@@ -216,6 +223,14 @@ int main(int argc, char *argv[]) {
     // gamepad actions bypass QML and drive mpv directly over IPC.
     QObject::connect(&inputManager, &InputManager::mpvKeyRequested,
                      &mpvController, &MpvController::sendKey);
+
+    // The child-owned renderer for the same number: while mpv owns the screen the
+    // app's QML bar cannot draw, so the level is pushed to the mpv lua OSD. With
+    // no child running the call is dropped and Main.qml's bar does the drawing.
+    QObject::connect(&volumeManager, &VolumeManager::volumeChanged,
+                     &mpvController, [&mpvController](int level, bool muted) {
+                         mpvController.showVolumeOsd(level, muted);
+                     });
 
     // Each module backend is wired in one call: stored for action routing, exposed to QML
     // introspection. The module ID lives in exactly one place per module.
@@ -237,6 +252,7 @@ int main(int argc, char *argv[]) {
     ctx->setContextProperty("mpvController", &mpvController);
     ctx->setContextProperty("inputManager",  &inputManager);
     ctx->setContextProperty("updateManager", &updateManager);
+    ctx->setContextProperty("volumeManager", &volumeManager);
 #ifdef Q_OS_MAC
     // Target display geometry in Qt coordinates (top-left origin), so the QML
     // Window bindings position onto the chosen screen. The native fullscreen
