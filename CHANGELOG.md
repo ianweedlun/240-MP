@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — CI: the Pi deploy trigger that could never fire
+- **Beta pushes never reached the Pi.** `deploy-pi.yml` was triggered by `on.workflow_run: workflows: ["CI"], branches: [beta]` — and `workflow_run` only emits for runs of the triggering workflow on the repository's **default branch**, which is `dev`. Beta had 17 green `CI` push runs and produced **zero** deploy runs; the last Pi deploy (`43388847788`) came from a `dev` push, which the `head_branch == 'beta'` gate then rejected. Net effect: the Pi received deploys from no branch at all.
+- **One mechanism now, in one file:** the deploy is a job in `ci.yml` — `deploy-pi`, `needs: [build-linux-arm64]`, `if: github.ref == 'refs/heads/beta'` — so "deploy only after a green build" comes from the job DAG instead of an event that never arrives, and the standalone workflow is gone. Under a push trigger `github.sha` is the beta tip, so the existing `~/.240mp-last-deployed-rev` fast path and the tarball-md5 verify work unchanged.
+- **Docs and comments repointed** at the deploy's new home (`.hermes.md`, `scripts/deploy-pi.sh`). `paths-ignore: ['**.md','**.yml']` still means a docs/YAML-only promotion queues no CI and therefore no deploy — intended, not a regression; re-deploy an unchanged beta tip with `workflow_dispatch`.
+
 ### Fixed — Virtual channels: Guide video previews respect media-server transcode settings & stay smooth
 - **Plex / Jellyfin / Emby Guide previews**: `preview_stream()` now passes `m_previewPosition` and `transcodeAllowed = true` and honors `PlexBackend`'s resolution-aware `forceTranscode` decision (only transcoding items above the configured Video Quality threshold, starting at the live offset), while cleaning up active preview transcode sessions on channel change (`cancel_preview_stream`).
 - **Non-blocking preview teardown & real-time pacing**: replaced synchronous `waitForFinished()` in `stop_preview_video()` with async process teardown + per-launch `/dev/shm` directories (eliminating Guide navigation freezes), and moved `fps=8` before `scale=320:240` with `realtime` pacing when muted (`--no-audio`) so `mpv --vo=image` no longer runs untimed at 300%+ CPU.
