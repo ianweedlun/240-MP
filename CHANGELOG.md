@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — RetroArch: games sort direction and a game count on the Games screen
+- **Game Sort setting** (`A-Z` default, `Z-A` alternative) for the Games list. Leading `A`/`An`/`The` are ignored, matching the letter buckets the quick-scroll strip already used; the strip reverses in `Z-A` so its order matches the rows.
+- **The count and active direction show at the top right** of the Games screen (`5 GAMES · A-Z`), the same information the Playlists screen already showed per system.
+- **Changing direction keeps the selected game selected.** Indices mean different rows after a re-sort, so the view re-finds the game by name and persists its new index — a later visit (or restart) still lands on that game.
+- Unit tests cover boot defaults, live setting changes, article/case-insensitive ordering and stable ties; offscreen smoke checks both directions end to end, including the letter strip and header layout.
+
 ### Added — RetroArch: recently played, and your place in a playlist kept
 - **RECENTLY PLAYED at the top of the playlist screen**, when there is anything to show: a list of the last twelve games across all systems, newest first, launching straight from stored entries without re-reading a playlist. Re-playing a game moves it to the front instead of adding a second copy. Stored in `retroarch_recent.json` beside the rest of the app's data (atomic write: a power cut leaves the previous list, not a truncated one; a corrupt file reads as empty and is repaired on the next launch).
 - **Playlists remember where you stopped.** Backing out of a long list and coming back lands on the same row — including after a service restart, which in-session navigation state never covered; index 0 is stored as "no position", so the common case costs no write.

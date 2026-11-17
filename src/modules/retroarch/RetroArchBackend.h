@@ -34,6 +34,13 @@ public:
 
     // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
     QString playlistSort() const;
+    // Current games-view sort direction (A-Z / Z-A).
+    Q_INVOKABLE QString gameSort() const;
+
+    // Pure ordering used by the games view: case-insensitive, leading English
+    // articles ignored, ties broken by the original name. Exposed so the
+    // ordering can be unit-tested without a playlist file or a view.
+    static QVariantList sortedGames(const QVariantList &games, bool descending);
 
     // True while the RetroArch child process launched by launchGame() is alive.
     // InputManager consults this (the child owns the whole console — the app
@@ -106,6 +113,7 @@ private:
     QString m_thumbnailDir;
     QString m_retroarchPath;
     QString m_playlistSort;
+    QString m_gameSort = QStringLiteral("A-Z");
     DisplayHandoff *m_handoff = nullptr;
     // Persisted recently-played / playlist-position bookkeeping. Loaded on
     // construction so a view can ask synchronously; written on launch and on
