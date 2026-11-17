@@ -273,9 +273,11 @@ if(BUILD_TESTS)
     add_executable(retroarch-tests
         src/modules/retroarch/tests/RetroArchBackendTest.cpp
         src/modules/retroarch/RetroArchBackend.cpp
-        # RetroArchBackend.cpp references DisplayHandoff for the launch path;
-        # the tests never launch, but the symbols must resolve to link.
-        src/util/DisplayHandoff.cpp)
+        # RetroArchBackend.cpp references DisplayHandoff for the launch path and
+        # RecentGamesStore for the recently-played bookkeeping; the tests never
+        # launch, but the symbols must resolve to link.
+        src/util/DisplayHandoff.cpp
+        src/modules/retroarch/RecentGamesStore.cpp)
     set_target_properties(retroarch-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(retroarch-tests PRIVATE Qt6::Core Qt6::Test
         $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
