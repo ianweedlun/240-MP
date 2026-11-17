@@ -287,6 +287,9 @@ int main(int argc, char *argv[]) {
     // it, for A/B testing the old behaviour without a rebuild.
     if (rootWindow) {
         const bool keepWindow = !qgetenv("MP240_HANDOFF_KEEP_WINDOW").isEmpty();
+        // The restore path has to know whether EGLFS is being re-initialised on
+        // the way back — see DisplayHandoff::setRendererSuspendsWindow.
+        displayHandoff.setRendererSuspendsWindow(!keepWindow);
         QObject::connect(&displayHandoff, &DisplayHandoff::displayTaken,
                          rootWindow, [rootWindow, keepWindow] {
                              if (!keepWindow) rootWindow->setVisible(false);

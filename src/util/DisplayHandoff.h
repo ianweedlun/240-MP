@@ -100,6 +100,13 @@ public:
     // child's VT.
     void completeRestore();
 
+    // Told by whoever owns the QQuickWindow: true when the window is hidden for
+    // the duration of a hand-off and therefore re-initialises EGLFS on the way
+    // back. That re-init sets the mode itself, which makes the legacy CRTC
+    // restore a second, redundant modeset on the way out — and on composite each
+    // modeset is a visible blank. See doRestore().
+    void setRendererSuspendsWindow(bool on) { m_rendererSuspendsWindow = on; }
+
 signals:
     // Emitted once the hand-off is fully taken (VT switched, master dropped,
     // CRTC state saved). The owner of the QQuickWindow hides it here.
@@ -153,6 +160,7 @@ private:
     int     m_qtDrmFd      = -1;
     QTimer *m_releaseTimer = nullptr;
     QTimer *m_restoreTimer = nullptr;
+    bool m_rendererSuspendsWindow = false;
     std::function<void()> m_onRestored;
 #ifdef Q_OS_LINUX
     DrmSavedState m_savedDrm = {};

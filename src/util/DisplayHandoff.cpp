@@ -176,7 +176,17 @@ void DisplayHandoff::doRestore() {
             // drmModeSetCrtc. This re-enables the CRTC with the original mode and
             // Qt's last framebuffer, so EGLFS's first atomic page flip succeeds
             // instead of getting EINVAL from a disabled CRTC.
-            restoreDrmCrtcState(m_qtDrmFd);
+            //
+            // It is only needed when EGLFS stayed alive across the hand-off. If
+            // the window was hidden, showing it re-initialises EGLFS, which sets
+            // the CRTC and mode itself — doing both is two modesets back to back,
+            // and each one blanks a composite output. Owner testing on the Pi
+            // showed exactly that: an intermittent single-frame flash, timing
+            // dependent, after the fix that made everything else deterministic.
+            if (m_rendererSuspendsWindow)
+                qDebug("[DisplayHandoff] CRTC restore skipped: EGLFS re-initialises on show");
+            else
+                restoreDrmCrtcState(m_qtDrmFd);
         }
         m_qtDrmFd = -1;
     }
