@@ -14,16 +14,21 @@ name: CI macOS
 # A dispatch-time probe of the four hosted labels settled it (run 44124734968):
 #   macos-15-intel -> runner acquired in 11s, x86_64 / macOS 15.7.9 / Xcode 16.4, green
 #   macos-14       -> arm64, cancelled immediately (same starved arm64 pool)
-#   macos-15       -> arm64, still queued past 100s, cancelled
-#   macos-13       -> still queued (retired image)
-# So the per-push lane runs on `macos-15-intel` (x64), which is the only hosted
-# macOS pool that reliably allocates. NOTE: `runs-on: [macos-15, macos-14]` is
-# NOT a fallback list — a label array is ANDed ("any runner that matches all of
-# the specified values"), so it would never match anything.
+#   macos-15       -> arm64, acquired after 5m04s (and 10m04s on a later run)
+#   macos-13       -> never acquired (retired image)
+# Every starved arm64 job is cancelled at exactly 15m00s with no runner, so the
+# arm64 pool is not absent, it is latency-unbounded: fine for an on-request
+# build, useless as a per-push gate. Hence the per-push lane runs on
+# `macos-15-intel` (x64), which allocates in seconds. NOTE:
+# `runs-on: [macos-15, macos-14]` is NOT a fallback list — a label array is
+# ANDed ("any runner that matches all of the specified values"), so it would
+# never match anything.
 #
-# The arm64 lane is kept as an OPT-IN advisory job (workflow_dispatch only,
-# continue-on-error) so Apple-Silicon coverage can be requested when the pool
-# recovers without ever painting a red X on an unrelated code push.
+# The arm64 lane survives as an OPT-IN job behind the `arch` dispatch input:
+# Apple-Silicon coverage on request, and no arm64 leg on pushes at all. Job-level
+# `continue-on-error` was tried first and does not work for this failure mode — a
+# job cancelled before it ever starts still fails the run (run 44128689188:
+# arm64 leg cancelled at 15m01s, run conclusion `failure`).
 on:
   push:
     # burst/* work branches deliberately absent: lab/local only, CI runs when they merge into dev
@@ -35,10 +40,17 @@ on:
   # yml-only changes are filtered out by the push paths-ignore above, so a manual
   # trigger is the only way to exercise this lane without a code push.
   workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Which macOS arch to build (pushed builds are always x64)'
+        type: choice
+        default: x64
+        options: [x64, arm64, both]
 
 jobs:
   build-macos:
     name: macOS x64 (intel)
+    if: github.event_name != 'workflow_dispatch' || inputs.arch != 'arm64'
     runs-on: macos-15-intel
 
     steps:
@@ -117,21 +129,29 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure -j4
 
+      # MACOSX_BUNDLE is TRUE in CMakeLists, so the binary lives inside the .app.
+      # if-no-files-found: error — the old `build/240mp` path matched nothing and
+      # the step still reported success (upload-artifact only warns), so the lane
+      # was green with no artifact at all.
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-macos-x64
-          path: build/240mp
+          path: build/240mp.app
+          if-no-files-found: error
           retention-days: 5
 
-  # Apple-Silicon coverage, on demand only. Hosted arm64 capacity is starvation-
-  # prone (see the header), and a job that never gets a runner must not read as a
-  # code failure — hence dispatch-only + continue-on-error: the run stays green
-  # and the job detail tells you whether the capacity showed up.
-  build-macos-arm64-advisory:
-    name: macOS arm64 (advisory, dispatch only)
-    if: github.event_name == 'workflow_dispatch'
-    continue-on-error: true
+  # Apple-Silicon coverage, on request only — never on a push. Hosted arm64
+  # allocation is starvation-prone (see the header), and a job that is cancelled
+  # before it ever gets a runner still fails the whole run: job-level
+  # `continue-on-error` does NOT cover a pre-start cancel (proved by run
+  # 44128689188 — arm64 leg cancelled at 15m01s with no runner, run conclusion
+  # `failure`). So the arm64 leg is opt-in via the `arch` dispatch input: ask for
+  # it, and "capacity said no" is a truthful red on a run you asked for, instead
+  # of a red X on somebody's unrelated push.
+  build-macos-arm64:
+    name: macOS arm64 (on request)
+    if: github.event_name == 'workflow_dispatch' && inputs.arch != 'x64'
     runs-on: macos-15
 
     steps:
@@ -188,5 +208,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-macos-arm64
-          path: build/240mp
+          path: build/240mp.app
+          if-no-files-found: error
           retention-days: 5
