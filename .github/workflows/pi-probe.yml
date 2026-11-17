@@ -6,6 +6,28 @@ on:
     # PR CI also on beta so the maintainer sees green before clicking merge (the gate).
     branches: [beta]
     paths-ignore: ['**.md','**.yml'] # docs & CI PRs don't trigger actions
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: 'Git sha whose CI artifact the deployed Pi binary should match (dev tip)'
+        required: false
+        default: '431c5e8'
+      force_schedule:
+        description: 'Proving aid: exercise the SCHEDULED (read-only) code path — skips FACT 4 exactly as a cron run does'
+        required: false
+        type: choice
+        options: ['false', 'true']
+        default: 'false'
+  # ──────────────────────────────────────────────────────────────────────────
+  # Weekly canary. Read-only by design: a scheduled run never writes to the Pi
+  # (FACT 4's `amixer sset` is guarded off — see CANARY_MODE below).
+  # '0 9 * * 1' = Mondays 09:00 UTC = 04:00/05:00 US-Eastern: low traffic, and
+  # the result is waiting when the maintainer starts the week.
+  # Caveat: `schedule` only fires from the repo's DEFAULT branch, and GitHub
+  # disables scheduled workflows after ~60 days of repository inactivity.
+  # ──────────────────────────────────────────────────────────────────────────
+  schedule:
+    - cron: '0 9 * * 1'
 
 jobs:
   probe:
@@ -31,4 +53,679 @@ jobs:
             124|126) echo "VERDICT: ssh connected, command denied (auth issue)" ;;
             *) echo "VERDICT: NOT REACHABLE (rc=$rc) — Pi cold, DNS stale, or WAN blocked" ;;
           esac
+          exit 0
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Audio ground truth. Read-only EXCEPT fact 4's attenuation test, which sets
+  # the code-preferred control to 40% and restores its original RAW value.
+  # workflow_dispatch = full measurement (FACT 4 included). schedule = the same
+  # collection with every write guarded off (CANARY_MODE=1), so the PR/beta lane
+  # is unchanged and a cron run can never move the volume under a viewer.
+  # ────────────────────────────────────────────────────────────────────────────
+  audio-probe:
+    name: Audio ground truth (backend + control name + real attenuation)
+    # workflow_dispatch = full measurement (FACT 4 included, as before).
+    # schedule          = canary: identical collection, writes guarded off.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Stage identity key
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -lf /tmp/pi_id
+
+      - name: Collect facts 1-4 from the Pi
+        env:
+          # 1 = scheduled/canary path: read-only, FACT 4 (a mixer WRITE) is skipped.
+          # Keyed on event_name == 'schedule', or on the force_schedule dispatch
+          # input, which exists purely so the guard can be proven with a real run
+          # instead of waiting for a Monday.
+          CANARY_MODE: ${{ (github.event_name == 'schedule' || inputs.force_schedule == 'true') && '1' || '0' }}
+        run: |
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes"
+          REMOTE="${{ secrets.PI_SSH_USERNAME }}@${{ secrets.PI_SSH_HOSTNAME }}"
+          echo "REMOTE=$REMOTE"
+          echo "CANARY_MODE=$CANARY_MODE  (event_name=${{ github.event_name }}, force_schedule='${{ inputs.force_schedule }}')"
+          echo "${{ inputs.expected_sha }}" > /tmp/expected_sha.txt
+          if ! $SSH "$REMOTE" true; then
+            echo "PI_UNREACHABLE=1" >> $GITHUB_ENV
+            echo "PROBE: ssh to $REMOTE failed — Pi cold, DNS stale, or WAN blocked."
+            exit 0
+          fi
+          set +e
+          $SSH "$REMOTE" "CANARY_MODE=${CANARY_MODE:-0} bash -s" > /tmp/pi_audio_facts.txt 2>&1 <<'REMOTE_SCRIPT'
+          set -u
+          hr(){ printf '\n===== %s =====\n' "$1"; }
+
+          hr "FACT 1: deployed identity"
+          echo "-- id --"; id
+          echo "-- HOME --"; echo "$HOME"
+          echo "-- /home/ghdeploy/.240mp-last-deployed-rev --"
+          cat /home/ghdeploy/.240mp-last-deployed-rev 2>&1 || true
+          echo "-- CI user \$HOME copy --"
+          cat "$HOME/.240mp-last-deployed-rev" 2>&1 || true
+          echo "-- /home/ian/.240mp-last-deployed-rev (context, may be unreadable) --"
+          cat /home/ian/.240mp-last-deployed-rev 2>&1 || true
+          echo "-- md5sum /opt/240mp/bin/240mp --"
+          md5sum /opt/240mp/bin/240mp 2>&1 || true
+          echo "-- binary size/date --"
+          ls -l /opt/240mp/bin/240mp 2>&1 || true
+          echo "-- RUNNING binary (ExecStart=/usr/local/bin/240mp) --"
+          ls -l /usr/local/bin/240mp 2>&1 || true
+          readlink -f /usr/local/bin/240mp 2>&1 || true
+          md5sum /usr/local/bin/240mp 2>&1 || true
+          echo "-- proc exe of the live service process (authoritative: what is actually executing) --"
+          SVC_PID=$(systemctl show -p MainPID --value 240mp.service 2>/dev/null)
+          echo "MainPID=$SVC_PID"
+          if [ -n "${SVC_PID:-}" ] && [ "$SVC_PID" != "0" ]; then
+            ls -l "/proc/$SVC_PID/exe" 2>&1 || true
+            md5sum "/proc/$SVC_PID/exe" 2>&1 || true
+          fi
+          echo "-- service state --"
+          systemctl is-active 240mp.service 2>&1 || true
+          echo "-- service User/Group --"
+          systemctl show -p User -p Group 240mp.service 2>&1 | sed 's/^/  /' || true
+          echo "-- uptime --"; uptime
+
+          hr "FACT 2: mixer backend (factory picks wpctl, else amixer, else noop)"
+          for b in wpctl amixer pactl aplay pipewire wireplumber; do
+            printf '%-12s -> %s\n' "$b" "$(command -v "$b" 2>/dev/null || echo MISSING)"
+          done
+          echo "-- PATH as seen here --"; echo "$PATH"
+          echo "-- service Environment (findExecutable uses the app's PATH) --"
+          systemctl show -p Environment 240mp.service 2>&1 | sed 's/^/  /' || true
+          echo "-- unit file (PATH/User hints) --"
+          systemctl cat 240mp.service 2>&1 | sed 's/^/  /' || true
+          echo "-- pipewire/wireplumber processes --"
+          pgrep -a -f 'pipewire|wireplumber' 2>&1 || echo "(none running)"
+          echo "-- wpctl status (head 25) --"
+          if command -v wpctl >/dev/null 2>&1; then timeout 10 wpctl status 2>&1 | head -25; else echo "(wpctl absent)"; fi
+          echo "-- pactl info --"
+          if command -v pactl >/dev/null 2>&1; then timeout 10 pactl info 2>&1 | head -15; else echo "(pactl absent)"; fi
+
+          hr "FACT 3: ALSA control names (code runs amixer WITHOUT -c, i.e. default card)"
+          echo "-- /proc/asound/cards --"; cat /proc/asound/cards 2>&1 || true
+          echo "-- aplay -l --"; aplay -l 2>&1 || true
+          echo "-- amixer scontrols (DEFAULT card = what the code sees) --"
+          amixer scontrols 2>&1 || true
+          echo "-- amixer -c 0 scontrols --"; amixer -c 0 scontrols 2>&1 || true
+          echo "/etc/asound.conf:"; cat /etc/asound.conf 2>&1 || true
+          echo "~/.asoundrc:"; cat "$HOME/.asoundrc" 2>&1 || true
+
+          # Mirror ALSAVolumeMixer::pickControl() exactly: Master, PCM, Headphone,
+          # Headphones, Speaker (case-insensitive), on the DEFAULT card.
+          PICK=""
+          SC=$(amixer scontrols 2>/dev/null || true)
+          for c in Master PCM Headphone Headphones Speaker; do
+            if printf '%s' "$SC" | grep -qiF "control '$c'"; then PICK="$c"; break; fi
+          done
+          echo "-- code-preferred control: [${PICK:-NONE FOUND}] --"
+          if [ -n "$PICK" ]; then
+            echo "-- amixer sget '$PICK' (no -c, as the code does) --"
+            amixer sget "$PICK" 2>&1 || true
+            echo "-- amixer -c 0 sget '$PICK' --"
+            amixer -c 0 sget "$PICK" 2>&1 || true
+          fi
+          echo "-- state of every candidate control (default card) --"
+          for c in Master PCM Headphone Headphones Speaker Digital; do
+            if amixer sget "$c" >/dev/null 2>&1; then
+              echo "  ## $c"; amixer sget "$c" 2>&1 | sed 's/^/    /'
+            fi
+          done
+
+          hr "FACT 3b: control names from SAVED ALSA state (read-only; works without card access)"
+          echo "-- base element names (suffixes stripped the way pickControl() strips them) --"
+          SAVED_BASES=""
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state; do
+            [ -r "$f" ] || continue
+            NAMES=$(sed -n "s/.*name '\(.*\)'.*/\1/p" "$f" 2>/dev/null \
+              | sed -e 's/ Playback Volume$//' -e 's/ Playback Switch$//' \
+                    -e 's/ Capture Volume$//' -e 's/ Capture Switch$//' -e 's/ Playback Route$//')
+            SAVED_BASES=$(printf '%s\n%s\n' "$SAVED_BASES" "$NAMES")
+          done
+          SAVED_BASES=$(printf '%s\n' "$SAVED_BASES" | sed '/^[[:space:]]*$/d' | sort -u)
+          printf '%s\n' "$SAVED_BASES" | sed 's/^/    /'
+          SAVED_PICK=""
+          for c in Master PCM Headphone Headphones Speaker; do
+            if printf '%s\n' "$SAVED_BASES" | grep -qixF "$c"; then SAVED_PICK="$c"; break; fi
+          done
+          echo "-- code-preferred control from SAVED STATE: [${SAVED_PICK:-NONE FOUND}] --"
+          echo "SAVED_PICK=${SAVED_PICK:-none}"
+
+          hr "FACT 4: attenuation test on [${PICK:-NONE}] (set 40%, restore original RAW value)"
+          if [ "${CANARY_MODE:-0}" = "1" ]; then
+            echo "GUARD: FACT 4 SKIPPED on the scheduled canary path (CANARY_MODE=1, event_name=schedule|force_schedule)."
+            echo "GUARD: this block runs 'amixer sset' — a WRITE to a live mixer value — and a cron run must never"
+            echo "GUARD: move the volume under a viewer. FACT 4 stays workflow_dispatch-only."
+            echo "FACT4_STATUS=skipped-scheduled-guard"
+          elif [ -z "$PICK" ]; then
+            echo "SKIPPED: no candidate control present — nothing to set."
+            echo "FACT4_STATUS=skipped-no-control"
+          else
+            echo "FACT4_STATUS=ran"
+            BEFORE=$(amixer sget "$PICK" 2>&1)
+            echo "-- before --"; echo "$BEFORE"
+            RAW=$(printf '%s' "$BEFORE" | grep -oE 'Playback [0-9]+ \[' | head -1 | grep -oE '[0-9]+')
+            echo "parsed raw value: ${RAW:-<none>}"
+            echo "-- sset 40% --"; amixer sset "$PICK" 40% 2>&1 || true
+            echo "-- after sset 40% --"; amixer sget "$PICK" 2>&1 || true
+            if [ -n "${RAW:-}" ]; then
+              echo "-- restore raw $RAW --"; amixer sset "$PICK" "$RAW" 2>&1 || true
+              echo "-- after restore --"; amixer sget "$PICK" 2>&1 || true
+            else
+              echo "RESTORE SKIPPED: original raw value unparsed — MIXER LEFT AT 40%, manual restore needed."
+            fi
+          fi
+
+          hr "APP-USER CONTEXT"
+          AUSER=$(systemctl show -p User --value 240mp.service 2>/dev/null || true)
+          echo "240mp.service User='${AUSER}'"
+          if [ -n "${AUSER:-}" ]; then id "$AUSER" 2>&1 || true; fi
+          echo "-- groups of this ssh user --"; id -Gn
+          echo "-- supplementary groups systemd actually grants the service --"
+          systemctl show -p SupplementaryGroups --value 240mp.service 2>&1 || true
+          echo "-- /dev/snd --"; ls -l /dev/snd/ 2>&1 || true
+          echo "-- perms/ACLs on the mixer node (who else could reach it) --"
+          stat -c '%A %U:%G %n' /dev/snd/* 2>&1 || true
+          getfacl -p /dev/snd/controlC0 2>&1 || true
+          ls -l /dev/snd/by-path/ 2>&1 || true
+
+          # ── ROUND 2: why facts 3/4 came back permission-shaped, and whether
+          # any route exists for this ssh user to touch the mixer at all. ──
+          hr "FACT 5: mixer access routes for the probe user"
+          echo "-- /dev/snd/controlC0 open test (root cause of 'cannot find card') --"
+          dd if=/dev/snd/controlC0 bs=1 count=1 of=/dev/null 2>&1 || true
+          echo "-- audio group membership in the group db --"
+          getent group audio 2>&1 || echo "(no audio group)"
+          getent group pulse 2>&1 || echo "(no pulse group)"
+          getent group pulse-access 2>&1 || echo "(no pulse-access group)"
+          echo "-- sudo -n -l (what this user may run as root) --"
+          sudo -n -l 2>&1 || true
+          echo "-- saved ALSA state (control NAMES live here even without card access) --"
+          ls -l /var/lib/alsa/ 2>&1 || true
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state /var/lib/alsa/state; do
+            if [ -r "$f" ]; then
+              echo "=== $f (FULL DUMP) ==="
+              cat "$f" 2>&1 || true
+              echo "=== end $f ==="
+            else
+              echo "$f: NOT READABLE by $(id -un)"
+            fi
+          done
+          echo "-- control NAMES extracted from saved state --"
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state; do
+            [ -r "$f" ] || continue
+            echo "  from $f:"
+            sed -n "s/.*name '\(.*\)'.*/    \1/p" "$f" 2>/dev/null | sort -u || true
+          done
+          echo "-- sysfs card identity --"
+          cat /sys/class/sound/card0/id 2>&1 || true
+          cat /proc/asound/card0/id 2>&1 || true
+          echo "-- world-readable hardware volume readout (OSS emulation) --"
+          ls -l /proc/asound/card0/ 2>&1 || true
+          cat /proc/asound/card0/oss_mixer 2>&1 || true
+          echo "-- OSS mixer device nodes --"
+          ls -l /dev/mixer /dev/dsp 2>&1 || true
+          echo "-- key-channel writability (would allow driving the shipped code path) --"
+          for f in /tmp/240mp_key.in; do
+            if [ -e "$f" ]; then
+              ls -l "$f"
+              if [ -w "$f" ]; then echo "  $f: WRITABLE by $(id -un)"; else echo "  $f: NOT writable by $(id -un)"; fi
+            else
+              echo "  $f: absent"
+            fi
+          done
+          echo "-- amixer with explicit devices (clearer error than -c 0) --"
+          amixer -D default scontrols 2>&1 || true
+          amixer -D hw:Headphones scontrols 2>&1 || true
+          amixer -D hw:0 scontrols 2>&1 || true
+          echo "-- app state surfaces this user can read --"
+          ls -l /tmp/240mp_state.log /tmp/240mp_key.in 2>&1 || true
+          tail -n 25 /tmp/240mp_state.log 2>&1 || true
+          echo "-- app-persisted volume state (only written when mixer->setLevel() returned true) --"
+          for p in /home/ian/.local/share/240mp/volume.json /home/ian/.config/240mp/volume.json /tmp/240mp_volume.json; do
+            echo "  ## $p"; cat "$p" 2>&1 || true; echo
+          done
+          echo "-- journald read access for the app unit --"
+          journalctl -u 240mp.service -n 5 --no-pager 2>&1 | head -12 || true
+
+          echo "-- if sudo happens to allow the mixer, take the measurement here --"
+          if [ "${CANARY_MODE:-0}" = "1" ]; then
+            echo "GUARD: sudo attenuation measurement SKIPPED on the scheduled canary path — same write rule as FACT 4."
+          elif sudo -n amixer -c 0 scontrols >/dev/null 2>&1; then
+            SPICK=""
+            SSC=$(sudo -n amixer -c 0 scontrols 2>/dev/null || true)
+            for c in Master PCM Headphone Headphones Speaker; do
+              if printf '%s' "$SSC" | grep -qiF "control '$c'"; then SPICK="$c"; break; fi
+            done
+            echo "SUDO ROUTE WORKS — picked [${SPICK:-NONE}]"
+            echo "-- sudo amixer -c 0 scontrols --"; echo "$SSC"
+            if [ -n "$SPICK" ]; then
+              SBEF=$(sudo -n amixer -c 0 sget "$SPICK" 2>&1); echo "-- before --"; echo "$SBEF"
+              SRAW=$(printf '%s' "$SBEF" | grep -oE 'Playback [0-9]+ \[' | head -1 | grep -oE '[0-9]+')
+              sudo -n amixer -c 0 sset "$SPICK" 40% 2>&1 || true
+              echo "-- after sset 40% --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 || true
+              if [ -n "${SRAW:-}" ]; then
+                sudo -n amixer -c 0 sset "$SPICK" "$SRAW" 2>&1 || true
+                echo "-- restored raw $SRAW --"; sudo -n amixer -c 0 sget "$SPICK" 2>&1 || true
+              fi
+            fi
+          else
+            echo "SUDO ROUTE: unavailable (sudo cannot run amixer) — attenuation not measurable by this user."
+          fi
+
+          # ── FACT 6: what systemd actually GRANTED the live process, read from
+          # /proc — not from the unit's configured SupplementaryGroups list.
+          # Read-only: grep/ls/stat/getent only.
+          hr "FACT 6: live service process credentials (/proc/MainPID/status, read-only)"
+          LPID=$(systemctl show -p MainPID --value 240mp.service 2>/dev/null | tr -d '[:space:]')
+          echo "LPID=${LPID:-<none>}"
+          echo "-- systemctl show -p ExecMainPID -p ExecMainStatus --"
+          systemctl show -p ExecMainPID -p ExecMainStatus 240mp.service 2>&1 | sed 's/^/  /' || true
+          echo "-- group db, for the record --"
+          echo -n "  getent group audio: "; getent group audio 2>&1 || echo "(none)"
+          echo -n "  getent group 29   : "; getent group 29 2>&1 || echo "(none)"
+          echo -n "  primary group of the service user: "; id -gn "$(systemctl show -p User --value 240mp.service 2>/dev/null || echo ian)" 2>&1 || true
+          echo "-- mixer node perms (what a holder of gid 29 would get) --"
+          stat -c '  %A %U:%G %n' /dev/snd/controlC0 2>&1 || true
+          if [ -z "${LPID:-}" ] || [ "${LPID:-0}" = "0" ]; then
+            echo "  NO MainPID — 240mp.service is not running; live-process groups are not observable."
+            echo "PROC_GROUPS_STATUS=no-mainpid"
+            echo "PROC_HAS_AUDIO_GID=unknown"
+            echo "LIBASOUND_MAP_COUNT=unknown"
+            echo "PROC_HOLDS_SND_NODE=unknown"
+          else
+            echo "-- /proc/$LPID/status (Uid/Gid/Groups), verbatim --"
+            PROC_LINES=$(grep -E '^(Uid|Gid|Groups):' "/proc/$LPID/status" 2>&1)
+            PROC_RC=$?
+            echo "  grep rc=$PROC_RC"
+            printf '%s\n' "$PROC_LINES"
+            GLINE=$(printf '%s\n' "$PROC_LINES" | sed -n 's/^Groups:[[:space:]]*//p' | head -1 | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')
+            if [ -n "${GLINE:-}" ]; then
+              echo "PROC_GROUPS_STATUS=readable"
+              echo "PROC_GROUPS_LINE=$GLINE"
+              echo "-- live process supplementary groups, gid -> name --"
+              for g in $GLINE; do
+                GN=$(getent group "$g" 2>/dev/null | cut -d: -f1)
+                echo "  gid $g -> ${GN:-<no group-db entry>}"
+              done
+              case " $GLINE " in
+                *" 29 "*) echo "PROC_HAS_AUDIO_GID=yes" ;;
+                *)        echo "PROC_HAS_AUDIO_GID=no" ;;
+              esac
+            else
+              echo "  UNREADABLE: /proc/$LPID/status yielded no Groups line (see verbatim output above)."
+              echo "PROC_GROUPS_STATUS=unreadable"
+              echo "PROC_GROUPS_ERROR=$(printf '%s' "$PROC_LINES" | tr '\n' ' ')"
+              echo "PROC_HAS_AUDIO_GID=unknown"
+            fi
+            echo "-- is the ALSA backend actually LIVE in the running process? --"
+            LCM=$(grep -c libasound "/proc/$LPID/maps" 2>&1)
+            echo "  grep -c libasound /proc/$LPID/maps -> $LCM"
+            case "$LCM" in
+              ''|*[!0-9]*) echo "LIBASOUND_MAP_COUNT=unreadable" ;;
+              *)           echo "LIBASOUND_MAP_COUNT=$LCM" ;;
+            esac
+            echo "  (note: /proc/PID/maps needs PTRACE_MODE_READ — root or the owning uid; unreadable here is expected, not a Pi fault)"
+            echo "-- which process actually drives ALSA? linkage evidence --"
+            echo "  ALSAVolumeMixer::setLevel() runs QProcess(\"amixer\") — src/audio/ALSAVolumeMixer.cpp — so the process that opens /dev/snd/controlC0 is the amixer CHILD, which inherits this process's uid/gids."
+            for b in /opt/240mp/bin/240mp /usr/bin/amixer; do
+              echo "  ldd $b | grep asound:"
+              ldd "$b" 2>&1 | grep -i 'asound\|libasound' | sed 's/^/    /' || echo "    (no libasound line / ldd unavailable)"
+            done
+            echo "  readelf -d (if available) on the amixer that the app spawns:"
+            if command -v readelf >/dev/null 2>&1; then
+              readelf -d /usr/bin/amixer 2>&1 | grep -i asound | sed 's/^/    /' || echo "    (no NEEDED libasound — amixer may dlopen it)"
+            else
+              echo "    (readelf absent)"
+            fi
+            echo "-- path traversal to the node (dirs must be o+x) --"
+            if command -v namei >/dev/null 2>&1; then namei -l /dev/snd/controlC0 2>&1 | sed 's/^/    /'; else stat -c '    %A %U:%G %n' /dev /dev/snd 2>&1; fi
+            echo "  ACL check: '+' in the mode string above would mean an ACL is present; getfacl is not installed on this image."
+            echo "-- ALSA nodes held open by the live process --"
+            FD_OUT=$(ls -l "/proc/$LPID/fd" 2>&1); FD_RC=$?
+            FD_SND=$(printf '%s\n' "$FD_OUT" | grep -i snd)
+            if [ -n "${FD_SND:-}" ]; then
+              echo "  HELD:"; printf '%s\n' "$FD_SND" | sed 's/^/    /'
+              echo "PROC_HOLDS_SND_NODE=yes"
+            elif [ "$FD_RC" = "0" ]; then
+              echo "  nothing snd-named held — expected: the mixer is opened on demand, not held."
+              echo "PROC_HOLDS_SND_NODE=no"
+            else
+              echo "  UNREADABLE: cannot list /proc/$LPID/fd as $(id -un) (ls rc=$FD_RC) — held-node state is NOT observable from CI."
+              echo "  $FD_OUT"
+              echo "PROC_HOLDS_SND_NODE=unreadable"
+            fi
+            echo "-- fallback identity surfaces --"
+            echo -n "  /proc/$LPID/status readable: "; if [ -r "/proc/$LPID/status" ]; then echo yes; else echo NO; fi
+            echo -n "  /proc/$LPID/attr/current: "; cat "/proc/$LPID/attr/current" 2>&1 || true; echo
+            echo "  /proc/$LPID/cgroup (head 3):"; head -3 "/proc/$LPID/cgroup" 2>&1 | sed 's/^/    /' || true
+          fi
+
+          hr "FACT 7: CANARY inputs (read-only, key=value — one run in, one line out)"
+          C_MARK_MAIN=$(cat /home/ghdeploy/.240mp-last-deployed-rev 2>/dev/null | tr -d '[:space:]')
+          echo "C_MARK_MAIN=${C_MARK_MAIN:-<none>}"
+          C_MARK_HOME=$(cat "$HOME/.240mp-last-deployed-rev" 2>/dev/null | tr -d '[:space:]')
+          echo "C_MARK_HOME=${C_MARK_HOME:-<none>}"
+          if C_IAN_RAW=$(cat /home/ian/.240mp-last-deployed-rev 2>/dev/null); then
+            C_MARK_IAN=$(printf '%s' "$C_IAN_RAW" | tr -d '[:space:]')
+          else
+            C_MARK_IAN="<unreadable>"
+          fi
+          echo "C_MARK_IAN=${C_MARK_IAN:-<none>}"
+          C_MD5=$(md5sum /opt/240mp/bin/240mp 2>/dev/null | awk '{print $1}')
+          echo "C_BINARY_MD5=${C_MD5:-<none>}"
+          echo "C_BINARY_STAT=$(stat -c '%s bytes %y' /opt/240mp/bin/240mp 2>/dev/null || echo '<none>')"
+          C_SVC=$(systemctl is-active 240mp.service 2>/dev/null | tr -d '[:space:]')
+          echo "C_SERVICE=${C_SVC:-unknown}"
+          C_PID=$(systemctl show -p MainPID --value 240mp.service 2>/dev/null | tr -d '[:space:]')
+          echo "C_MAINPID=${C_PID:-0}"
+          # backend resolved exactly as the factory resolves it
+          if command -v wpctl >/dev/null 2>&1; then
+            C_MIXER=wpctl
+          elif command -v amixer >/dev/null 2>&1; then
+            C_MIXER=alsa
+          else
+            C_MIXER=none
+          fi
+          echo "C_MIXER=$C_MIXER"
+          if [ "$C_MIXER" = "wpctl" ]; then
+            if timeout 10 wpctl status >/dev/null 2>&1; then echo "C_WPCTL_OK=yes"; else echo "C_WPCTL_OK=no"; fi
+          else
+            echo "C_WPCTL_OK=n/a"
+          fi
+          C_SC=$(timeout 10 amixer scontrols 2>/dev/null || true)
+          C_PICK=""
+          for c in Master PCM Headphone Headphones Speaker; do
+            if printf '%s' "$C_SC" | grep -qiF "control '$c'"; then C_PICK="$c"; break; fi
+          done
+          echo "C_PICK_LIVE=${C_PICK:-none}"
+          C_BASES=""
+          for f in /var/lib/alsa/asound.state /etc/alsa/asound.state; do
+            [ -r "$f" ] || continue
+            C_BASES=$(printf '%s\n%s\n' "$C_BASES" \
+              "$(sed -n "s/.*name '\(.*\)'.*/\1/p" "$f" 2>/dev/null \
+                 | sed -e 's/ Playback Volume$//' -e 's/ Playback Switch$//' \
+                       -e 's/ Capture Volume$//' -e 's/ Capture Switch$//' -e 's/ Playback Route$//')")
+          done
+          C_BASES=$(printf '%s\n' "$C_BASES" | sed '/^[[:space:]]*$/d' | sort -u)
+          echo "C_SAVED_NAMES=$(printf '%s' "$C_BASES" | tr '\n' ',' | sed 's/,$//')"
+          C_SPICK=""
+          for c in Master PCM Headphone Headphones Speaker; do
+            if printf '%s\n' "$C_BASES" | grep -qixF "$c"; then C_SPICK="$c"; break; fi
+          done
+          echo "C_PICK_STATE=${C_SPICK:-none}"
+          if [ -n "$C_PICK" ]; then
+            echo "C_CONTROL=$C_PICK"
+            echo "C_CONTROL_SOURCE=live-amixer-scontrols"
+          elif [ -n "$C_SPICK" ]; then
+            echo "C_CONTROL=$C_SPICK"
+            echo "C_CONTROL_SOURCE=saved-alsa-state"
+          else
+            echo "C_CONTROL=none"
+            echo "C_CONTROL_SOURCE=none"
+          fi
+          # ci_audio: can THIS uid actually open /dev/snd/controlC0? Functional test
+          # (amixer scontrols must open the control device), with dd as fallback/evidence.
+          C_DD=$(dd if=/dev/snd/controlC0 bs=1 count=1 of=/dev/null 2>&1)
+          C_DD_RC=$?
+          echo "C_CI_AUDIO_DD_RC=$C_DD_RC"
+          echo "C_CI_AUDIO_DD_OUT=$(printf '%s' "$C_DD" | tr '\n' ' ' | cut -c1-200)"
+          if printf '%s' "$C_SC" | grep -q "control '"; then
+            echo "C_CI_AUDIO=yes"
+            echo "C_CI_AUDIO_EVIDENCE=amixer scontrols listed control names => this uid opened /dev/snd/controlC0"
+          elif [ "$C_DD_RC" = "0" ]; then
+            echo "C_CI_AUDIO=yes"
+            echo "C_CI_AUDIO_EVIDENCE=dd read 1 byte from /dev/snd/controlC0; amixer scontrols listed nothing"
+          else
+            echo "C_CI_AUDIO=no"
+            echo "C_CI_AUDIO_EVIDENCE=$(printf '%s' "$C_DD" | tr '\n' ' ' | cut -c1-160)"
+          fi
+          echo "C_AUDIO_GROUP=$(getent group audio 2>/dev/null || echo '<no audio group>')"
+          echo "C_CI_USER=$(id -un)"
+          echo "C_CI_GROUPS=$(id -Gn 2>/dev/null | tr ' ' ',')"
+          echo "C_CANARY_MODE=${CANARY_MODE:-0}"
+
+          hr "END OF REMOTE PROBE"
+          REMOTE_SCRIPT
+          RC=$?
+          cat /tmp/pi_audio_facts.txt
+          echo "REMOTE_PROBE_RC=$RC"
+          exit 0
+
+      - name: Compare deployed binary with the dev-tip CI artifact (fact 1)
+        # expected_sha is a workflow_dispatch input only; a scheduled run has none.
+        if: env.PI_UNREACHABLE != '1' && github.event_name == 'workflow_dispatch'
+        run: |
+          TOKEN='${{ github.token }}'
+          REPO='ianweedlun/240-MP'
+          SHA=$(cat /tmp/expected_sha.txt)
+          echo "expected sha: $SHA"
+          RUN=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
+            | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
+          echo "$RUN" > /tmp/ci_run_id.txt
+          echo "CI push run for $SHA: ${RUN:-<none>}"
+          if [ -z "$RUN" ]; then
+            echo "ARTIFACT_MD5=" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "run: https://github.com/$REPO/actions/runs/$RUN"
+          ARTS=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN/artifacts?per_page=50")
+          echo "$ARTS" | jq -r '.artifacts[]? | "  artifact: \(.name) id=\(.id) expired=\(.expired)"'
+          DL=$(echo "$ARTS" | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
+          if [ -z "$DL" ]; then
+            echo "ARTIFACT_MD5=" >> $GITHUB_ENV
+            echo "240mp-linux-arm64 missing or expired for run $RUN."
+            exit 0
+          fi
+          curl -sSL -H "Authorization: Bearer $TOKEN" "$DL" -o /tmp/art.zip
+          echo "downloaded $(wc -c < /tmp/art.zip) bytes ($(file -b /tmp/art.zip))"
+          rm -rf /tmp/art; mkdir -p /tmp/art; unzip -o -q /tmp/art.zip -d /tmp/art
+          ls -l /tmp/art
+          ART=$(md5sum /tmp/art/240mp | awk '{print $1}')
+          echo "CI artifact md5: $ART"
+          echo "ARTIFACT_MD5=$ART" >> $GITHUB_ENV
+          exit 0
+
+      - name: Compare deployed binary with ITS OWN rev's CI artifact (fact 1b)
+        if: env.PI_UNREACHABLE != '1'
+        run: |
+          TOKEN='${{ github.token }}'
+          REPO='ianweedlun/240-MP'
+          FACTS=/tmp/pi_audio_facts.txt
+          PREV=$(sed -n '/-- \/home\/ghdeploy\/.240mp-last-deployed-rev --/{n;p;}' "$FACTS" | tr -d '[:space:]')
+          if [ -z "$PREV" ]; then PREV=$(grep -A1 -- '-- /home/' "$FACTS" | grep -oE '^[0-9a-f]{40}$' | head -1); fi
+          echo "deployed rev: ${PREV:-<unknown>}"
+          echo "PREV_REV=$PREV" >> $GITHUB_ENV
+          if [ -z "$PREV" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
+          RUN=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/$REPO/actions/runs?head_sha=$PREV&per_page=50" \
+            | jq -r '[.workflow_runs[] | select(.name=="CI" and .event=="push")] | first | .id // empty')
+          echo "CI push run for deployed rev: ${RUN:-<none>}" >> $GITHUB_STEP_SUMMARY
+          if [ -z "$RUN" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
+          DL=$(curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/repos/$REPO/actions/runs/$RUN/artifacts?per_page=50" \
+            | jq -r '[.artifacts[]? | select(.name=="240mp-linux-arm64" and .expired==false)] | first | .archive_download_url // empty')
+          if [ -z "$DL" ]; then echo "PREV_MD5=" >> $GITHUB_ENV; exit 0; fi
+          curl -sSL -H "Authorization: Bearer $TOKEN" "$DL" -o /tmp/prev.zip
+          rm -rf /tmp/prev; mkdir -p /tmp/prev; unzip -o -q /tmp/prev.zip -d /tmp/prev
+          PM=$(md5sum /tmp/prev/240mp | awk '{print $1}')
+          echo "CI artifact md5 for deployed rev $PREV: $PM"
+          echo "PREV_MD5=$PM" >> $GITHUB_ENV
+          exit 0
+
+      - name: Verdict and summary
+        if: always()
+        run: |
+          FACTS=/tmp/pi_audio_facts.txt
+          EXP=$(cat /tmp/expected_sha.txt 2>/dev/null || echo n/a)
+          RUN=$(cat /tmp/ci_run_id.txt 2>/dev/null || echo none)
+          echo "################ RAW PROBE OUTPUT ################"
+          cat "$FACTS" 2>/dev/null || echo "(no probe output)"
+          echo "##################################################"
+
+          if [ "${PI_UNREACHABLE:-0}" = "1" ]; then
+            echo "VERDICT: BLOCKED — Pi unreachable from the runner; zero audio facts measured."
+          else
+            PI_MD5=$(grep -oE '^[0-9a-f]{32}  /opt/240mp/bin/240mp' "$FACTS" | awk '{print $1}' | head -1)
+            PI_REV=$(sed -n '/-- \/home\/ghdeploy\/.240mp-last-deployed-rev --/{n;p;}' "$FACTS" | tr -d '[:space:]')
+            echo
+            echo "FACT 1  expected_sha=$EXP  ci_run=$RUN"
+            echo "        pi_deployed_rev=${PI_REV:-<empty/missing>}"
+            echo "        pi_binary_md5=${PI_MD5:-<not found>}"
+            echo "        ci_artifact_md5=${ARTIFACT_MD5:-<unavailable>}"
+            echo "        deployed_rev=${PREV_REV:-<unknown>}  deployed_rev_artifact_md5=${PREV_MD5:-<unavailable>}"
+            if [ -n "${PI_MD5:-}" ] && [ -n "${PREV_MD5:-}" ]; then
+              if [ "$PI_MD5" = "$PREV_MD5" ]; then
+                echo "        IDENTITY(self): MATCH — deployed binary is byte-identical to the CI artifact of its own rev ${PREV_REV}."
+              else
+                echo "        IDENTITY(self): MISMATCH — deployed binary differs from its own rev's CI artifact."
+              fi
+            else
+              echo "        IDENTITY(self): UNDETERMINED (missing deployed-rev artifact)."
+            fi
+            if [ -n "${PI_MD5:-}" ] && [ -n "${ARTIFACT_MD5:-}" ]; then
+              if [ "$PI_MD5" = "${ARTIFACT_MD5}" ]; then
+                echo "        IDENTITY: MATCH — deployed binary is byte-identical to the $EXP CI artifact."
+              else
+                echo "        IDENTITY: MISMATCH — deployed binary is NOT the $EXP CI artifact."
+              fi
+            else
+              echo "        IDENTITY: UNDETERMINED (missing Pi md5 or artifact)."
+            fi
+            echo
+            echo "FACT 2  wpctl=$(sed -n 's/^wpctl *-> //p' "$FACTS" | head -1)  amixer=$(sed -n 's/^amixer *-> //p' "$FACTS" | head -1)"
+            echo "FACT 3  default-card scontrols:"
+            sed -n '/-- amixer scontrols (DEFAULT card/,/-- amixer -c 0 scontrols --/p' "$FACTS" | sed 's/^/          /'
+            echo "FACT 4  attenuation:"
+            sed -n '/FACT 4: attenuation test/,/APP-USER CONTEXT/p' "$FACTS" | sed 's/^/          /'
+            echo "FACT 5  mixer access routes / permission root cause:"
+            sed -n '/FACT 5: mixer access routes/,/FACT 6: live service process credentials/p' "$FACTS" | sed 's/^/          /'
+            echo
+            echo "FACT 6  live-process credentials (systemd initgroups() result, measured from /proc):"
+            P6=$(sed -n '/FACT 6: live service process credentials/,/END OF REMOTE PROBE/p' "$FACTS")
+            printf '%s\n' "$P6" | sed 's/^/          /'
+            HAS29=$(printf '%s\n' "$P6" | sed -n 's/^PROC_HAS_AUDIO_GID=//p' | head -1)
+            LAS=$(printf '%s\n' "$P6" | sed -n 's/^LIBASOUND_MAP_COUNT=//p' | head -1)
+            LPIDV=$(printf '%s\n' "$P6" | sed -n 's/^LPID=//p' | head -1)
+            GRPLINE=$(printf '%s\n' "$P6" | sed -n 's/^PROC_GROUPS_LINE=//p' | head -1)
+            PERR=$(printf '%s\n' "$P6" | sed -n 's/^PROC_GROUPS_ERROR=//p' | head -1)
+            NODEP=$(grep -oE '[cbps-][rwxsStT-]{9} [^ ]+ /dev/snd/controlC0' "$FACTS" | head -1)
+            AUSERV=$(sed -n "s/^240mp.service User='\(.*\)'$/\1/p" "$FACTS" | head -1)
+            echo
+            if [ "$HAS29" = "yes" ]; then
+              case "${LAS:-}" in
+                ''|unreadable) LAS_TXT="libasound mapping in the app process is NOT observable from CI (/proc/PID/maps needs root or the owning uid)" ;;
+                *)             LAS_TXT="libasound is mapped ${LAS}x in the app process" ;;
+              esac
+              echo "VERDICT: LIVE PROCESS HOLDS gid 29 (audio) — /proc/${LPIDV:-?}/status Groups='${GRPLINE}' (gid 29 -> audio) and the mixer node is ${NODEP:-perms not captured} (mode/owner:group/path, no ACL '+' marker), so the amixer child that ALSAVolumeMixer::setLevel() spawns inherits uid 1000 + gid 29 and passes the kernel DAC check: app-wide volume CAN physically open the mixer with NO further change on the Pi. ${LAS_TXT} — and that is not the mechanism anyway: the shipped ALSA path shells out to amixer (src/audio/ALSAVolumeMixer.cpp), not an in-process libasound client. Still unmeasured after this run: FACT 4's before/after/restore attenuation numbers, gated on Ian running 'usermod -aG audio ghdeploy' so the probe itself can drive the mixer."
+            elif [ "$HAS29" = "no" ]; then
+              echo "VERDICT: LIVE PROCESS DOES NOT HOLD gid 29 — /proc/${LPIDV:-?}/status Groups='${GRPLINE}', so the group-db inference was wrong for this image; the fix is to add the unit's own User= (${AUSERV:-unknown}) to group 29 and restart the service to re-run initgroups() — 'usermod -aG audio ghdeploy' alone cannot help, because the live group set comes from the unit's User=, not the CI login. Still unmeasured: FACT 4."
+            else
+              echo "VERDICT: LIVE-PROCESS GROUP SET NOT OBSERVABLE from CI on this image (MainPID=${LPIDV:-none}; reason: ${PERR:-${GRPLINE:-no Groups line}}), so gid-29 holding remains inference from the group db, not a measurement; libasound mapped=${LAS:-unknown}. Still unmeasured: FACT 4, gated on 'usermod -aG audio ghdeploy'."
+            fi
+          fi
+
+          # ── CANARY ────────────────────────────────────────────────────────
+          # Exactly one machine-readable line for this lane. Read it, don't parse
+          # the rest. state=DRIFT means at least one invariant below is broken;
+          # every DRIFT reason is spelled out on the CANARY-DRIFT line after it.
+          CGET() { sed -n "s/^$1=//p" "$FACTS" 2>/dev/null | head -1 || true; }
+          STATE=OK
+          REV12=none
+          REVM=missing
+          SVC=unknown
+          MIX=none
+          CTL=none
+          CIA=no
+          DRIFT_WHY=""
+          echo
+          echo "################ CANARY ################"
+          echo "canary mode: CANARY_MODE=$(CGET C_CANARY_MODE) (event=${{ github.event_name }})  FACT4_STATUS=$(CGET FACT4_STATUS)"
+          if [ "${PI_UNREACHABLE:-0}" = "1" ]; then
+            STATE=UNREACHABLE
+            echo "CANARY-NOTE: Pi unreachable from the runner — every field except state is a placeholder, nothing was measured."
+            echo "CANARY-NOTE: this is NOT a failure. The Pi being asleep must never turn this lane red."
+          else
+            CM=$(CGET C_MARK_MAIN)
+            CH=$(CGET C_MARK_HOME)
+            CIAN=$(CGET C_MARK_IAN)
+            CB=$(CGET C_BINARY_MD5)
+            CSVC=$(CGET C_SERVICE)
+            MIX=$(CGET C_MIXER)
+            [ -n "$MIX" ] || MIX=none
+            CTL=$(CGET C_CONTROL)
+            [ -n "$CTL" ] || CTL=none
+            CIA=$(CGET C_CI_AUDIO)
+            [ -n "$CIA" ] || CIA=no
+            WOK=$(CGET C_WPCTL_OK)
+            [ -n "$CM" ] || CM="<none>"
+
+            # rev: 12-char prefix of the deploy marker; rev_marker: do all readable
+            # copies of .240mp-last-deployed-rev agree?
+            case "$CM" in
+              ""|"<none>") REV12=none; REVM=missing ;;
+              *)
+                REV12=$(printf '%s' "$CM" | cut -c1-12)
+                REVM=match
+                if [ -n "$CH" ] && [ "$CH" != "<none>" ] && [ "$CH" != "$CM" ]; then
+                  REVM=mismatch
+                  echo "CANARY-DETAIL: marker copies disagree — \$HOME says '${CH}' , /home/ghdeploy says '${CM}'."
+                fi
+                if [ -n "$CIAN" ] && [ "$CIAN" != "<none>" ] && [ "$CIAN" != "<unreadable>" ] && [ "$CIAN" != "$CM" ]; then
+                  REVM=mismatch
+                  echo "CANARY-DETAIL: marker copies disagree — /home/ian says '${CIAN}' , /home/ghdeploy says '${CM}'."
+                fi
+                ;;
+            esac
+
+            if [ "$CSVC" = "active" ]; then SVC=active; else SVC=inactive; fi
+
+            if [ "$REVM" != "match" ]; then DRIFT_WHY="$DRIFT_WHY rev_marker=$REVM"; fi
+            if [ -n "$CB" ] && [ "$CB" != "<none>" ] && [ -n "${PREV_MD5:-}" ]; then
+              if [ "$CB" != "$PREV_MD5" ]; then
+                DRIFT_WHY="$DRIFT_WHY binary_md5_mismatch"
+                echo "CANARY-DETAIL: deployed binary md5 $CB is NOT the CI artifact md5 $PREV_MD5 for rev ${PREV_REV:-unknown} — the Pi is running something CI never produced."
+              else
+                echo "CANARY-DETAIL: deployed binary md5 $CB == CI artifact for rev ${PREV_REV:-unknown} (identity verified)."
+              fi
+            else
+              echo "CANARY-WARN: identity UNDETERMINED — no CI artifact available for the marker's rev (>90d expiry, or no CI push run for it). state=OK then means 'no drift detected', NOT 'byte-identical proven'."
+            fi
+            if [ "$SVC" != "active" ]; then DRIFT_WHY="$DRIFT_WHY service=$SVC"; fi
+            if [ "$MIX" = "none" ]; then DRIFT_WHY="$DRIFT_WHY mixer=none"; fi
+            if [ "$CTL" = "none" ]; then DRIFT_WHY="$DRIFT_WHY control=none"; fi
+            if [ "$WOK" = "no" ]; then DRIFT_WHY="$DRIFT_WHY wpctl-selected-but-broken"; fi
+            if [ -n "$DRIFT_WHY" ]; then STATE=DRIFT; fi
+
+            if [ "$CIA" = "yes" ]; then
+              echo "CANARY-NOTE: ci_audio=yes — the CI identity can now open /dev/snd/controlC0, so the FACT 4 attenuation test is RUNNABLE VIA workflow_dispatch (dispatch this workflow as-is; no force_schedule)."
+              echo "CANARY-NOTE: the scheduled run still does not take it on purpose — FACT 4 writes a live mixer value and a cron run must never move the volume under a viewer."
+            else
+              echo "CANARY-NOTE: ci_audio=no — $(CGET C_CI_AUDIO_EVIDENCE)"
+              echo "CANARY-NOTE: FACT 4 stays unrunnable until someone runs 'sudo usermod -aG audio $(CGET C_CI_USER)' on the Pi (t_2177f3dc is blocked on exactly this)."
+            fi
+            echo "CANARY-DETAIL: backend=$MIX  control=$CTL ($(CGET C_CONTROL_SOURCE))  saved_state_names=$(CGET C_SAVED_NAMES)  audio_group=$(CGET C_AUDIO_GROUP)"
+            echo "CANARY-CAVEAT: a scheduled run's own control/backend view is the CI uid's, not the app user's; 'control' therefore falls back to the saved ALSA state when /dev/snd is unreadable, which is the element the app would select."
+          fi
+          echo "CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA"
+          if [ -n "$DRIFT_WHY" ]; then echo "CANARY-DRIFT:${DRIFT_WHY}"; fi
+
+          {
+            echo "## Pi audio ground truth"
+            echo '```'
+            cat "$FACTS" 2>/dev/null || echo "(no probe output)"
+            echo '```'
+            echo "- expected sha: \`$EXP\`"
+            echo "- CI run for that sha: \`$RUN\`"
+            echo "- CI artifact md5: \`${ARTIFACT_MD5:-unavailable}\`"
+            echo "- canary: \`CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA\`"
+            if [ -n "$DRIFT_WHY" ]; then echo "- drift:${DRIFT_WHY}"; fi
+          } >> $GITHUB_STEP_SUMMARY
           exit 0

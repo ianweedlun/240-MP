@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — CI: the weekly Pi canary existed only on an unmerged branch
+- **The canary never ran.** `t_b0f88741` added `schedule: - cron: '0 9 * * 1'` to `pi-probe.yml` on `probe/pi-canary`, but that branch was never merged and a scheduled workflow only fires from the repo's **default branch** (`dev`). `dev` still carried the original 1,254-byte one-shot probe: no `schedule`, no audio job. Weekly deploy-drift and audio-grant monitoring was a no-op.
+- **One merged workflow now:** `dev`'s `pi-probe.yml` carries `workflow_dispatch` (with the `force_schedule` proving aid), the FACT 1–7 audio ground-truth job inherited from `probe/pi-audio-facts`, and the Monday 09:00 UTC cron. The audio job runs on both `workflow_dispatch` and `schedule`, with `CANARY_MODE=1` guarding every write (FACT 4's `amixer sset` and the sudo attenuation block) so a cron run can never move the volume under a viewer.
+- **Caveats kept in the file:** `schedule` only fires from the default branch, and GitHub disables scheduled workflows after ~60 days of repository inactivity.
+
 ### Changed — App-wide volume: one level, two renderers (#34)
 - **Volume keys work everywhere**: volume up/down/mute used to be each module's private business (weather music, mpv only). `InputManager` now hands them to a single app-wide `VolumeManager`, so pressing the remote's volume keys on any screen — menu, Plex, YouTube, channels, a game — changes the same level, and RetroArch keeps doing its own thing while a game owns the screen.
 - **The system mixer is the truth**: `VolumeManager` reads and writes the ALSA mixer (via `amixer`), so the number in the bar is the number the speakers actually play at. mpv and the weather music player run pinned at 100 and no longer attenuate on their own; the only exception is the speech duck, which is transient by design.
