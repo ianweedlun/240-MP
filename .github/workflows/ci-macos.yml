@@ -117,11 +117,16 @@ jobs:
         run: |
           ctest --test-dir build --output-on-failure -j4
 
+      # MACOSX_BUNDLE is TRUE in CMakeLists, so the binary lives inside the .app.
+      # if-no-files-found: error — the old `build/240mp` path matched nothing and
+      # the step still reported success (upload-artifact only warns), so the lane
+      # was green with no artifact at all.
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-macos-x64
-          path: build/240mp
+          path: build/240mp.app
+          if-no-files-found: error
           retention-days: 5
 
   # Apple-Silicon coverage, on demand only. Hosted arm64 capacity is starvation-
@@ -188,5 +193,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 240mp-macos-arm64
-          path: build/240mp
+          path: build/240mp.app
+          if-no-files-found: error
           retention-days: 5
