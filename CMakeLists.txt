@@ -540,6 +540,26 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-sponsor-edl COMMAND yt-sponsor-edl-tests)
 
+    # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
+    # exactly once per completed hand-off and only AFTER the CRTC state is
+    # captured, displayReturned() once per return, and a refused hand-off stays
+    # silent. Needs no DRM device and no VT: the capture step is injected through
+    # setCrtcCaptureHookForTest() and the privileged steps fail cleanly when
+    # unprivileged, so this runs in the lab and on CI alike.
+    add_executable(display-handoff-tests
+        src/util/tests/DisplayHandoffSignalTest.cpp
+        src/util/DisplayHandoff.cpp)
+    set_target_properties(display-handoff-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(display-handoff-tests PRIVATE Qt6::Core Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    if(NOT APPLE)
+        target_include_directories(display-handoff-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    if(NOT MSVC)
+        target_compile_options(display-handoff-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
+
 endif()
 
 include(CPack)

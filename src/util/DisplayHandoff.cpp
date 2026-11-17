@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QTimer>
+#include <QThread>
 #include <QDebug>
 
 #ifdef Q_OS_LINUX
@@ -28,6 +29,11 @@ DisplayHandoff::DisplayHandoff(QObject *parent)
     // A member timer rather than QTimer::singleShot so releaseNow() can cancel a
     // pending release during shutdown — the stored callback captures an object
     // that is being destroyed.
+    m_restoreTimer = new QTimer(this);
+    m_restoreTimer->setSingleShot(true);
+    m_restoreTimer->setInterval(800);
+    connect(m_restoreTimer, &QTimer::timeout, this, &DisplayHandoff::completeRestore);
+
     m_releaseTimer = new QTimer(this);
     m_releaseTimer->setSingleShot(true);
     connect(m_releaseTimer, &QTimer::timeout, this, [this] {
@@ -116,16 +122,30 @@ int DisplayHandoff::acquire(const QString &owner) {
                  "may not.");
     }
 
-    m_qtDrmFd = findQtDrmFd();
-    if (m_qtDrmFd < 0) {
-        qWarning("[DisplayHandoff] Could not find Qt DRM fd");
+    if (m_crtcCaptureHook) {
+        // Test seam (see setCrtcCaptureHookForTest): stands in for the whole
+        // capture step so the ordering asserted below is testable without a DRM
+        // device. No fd discovery, no ioctls.
+        m_crtcCaptureHook();
     } else {
-        qDebug("[DisplayHandoff] DRM master dropped (fd %d)", m_qtDrmFd);
-        // Save the current CRTC state so we can restore it exactly after the
-        // child exits. An atomic cleanup disables the CRTC (CRTC_ACTIVE=0);
-        // without this restore, Qt EGLFS gets EINVAL on its next page flip.
-        saveDrmCrtcState(m_qtDrmFd);
+        m_qtDrmFd = findQtDrmFd();
+        if (m_qtDrmFd < 0) {
+            qWarning("[DisplayHandoff] Could not find Qt DRM fd");
+        } else {
+            qDebug("[DisplayHandoff] DRM master dropped (fd %d)", m_qtDrmFd);
+            // Save the current CRTC state so we can restore it exactly after the
+            // child exits. An atomic cleanup disables the CRTC (CRTC_ACTIVE=0);
+            // without this restore, Qt EGLFS gets EINVAL on its next page flip.
+            saveDrmCrtcState(m_qtDrmFd);
+        }
     }
+    // Last, once the hand-off is complete — the CRTC state above is captured
+    // BEFORE the window goes away, because hiding it re-initialises EGLFS on the
+    // way back (see doRestore) — hide the app window and with it EGLFS's render
+    // loop. See the signal's comment: the VT switch alone does not stop this
+    // build from drawing. src/util/tests/DisplayHandoffSignalTest.cpp fails if
+    // this emit is ever moved above the capture step.
+    emit displayTaken();
     return freeVt;
 #else
     return 0;
@@ -166,13 +186,61 @@ void DisplayHandoff::doRestore() {
             // drmModeSetCrtc. This re-enables the CRTC with the original mode and
             // Qt's last framebuffer, so EGLFS's first atomic page flip succeeds
             // instead of getting EINVAL from a disabled CRTC.
-            restoreDrmCrtcState(m_qtDrmFd);
+            //
+            // It is only needed when EGLFS stayed alive across the hand-off. If
+            // the window was hidden, showing it re-initialises EGLFS, which sets
+            // the CRTC and mode itself — doing both is two modesets back to back,
+            // and each one blanks a composite output. Owner testing on the Pi
+            // showed exactly that: an intermittent single-frame flash, timing
+            // dependent, after the fix that made everything else deterministic.
+            if (m_rendererSuspendsWindow)
+                qDebug("[DisplayHandoff] CRTC restore skipped: EGLFS re-initialises on show");
+            else
+                restoreDrmCrtcState(m_qtDrmFd);
         }
         m_qtDrmFd = -1;
     }
 #endif
-    // Only switch back if we actually switched away — otherwise this just logs a
-    // second, confusing permission error on a VT we never left.
+    finishRestore();
+}
+
+// Order matters for what the viewer sees when a game exits.
+//
+// The window was hidden for the duration of the hand-off, so showing it again
+// makes EGLFS build a fresh swapchain and set the mode once. Done after the VT
+// switch back, that re-init lands in plain sight: the restored CRTC paints the
+// stale pre-game frame, then the screen blanks for the re-init, then the live
+// frame arrives — a visible flicker on the TV, right after the list appears.
+//
+// So the app is brought back while the display is still parked on the child's
+// VT, where nobody can see it: master restored, CRTC restored, window shown, and
+// only then switched back — so the re-init happens off-screen and the switch
+// lands on a live, already-correct frame.
+//
+// "Only then" has to mean a frame that was actually presented, not a nap. The
+// re-init is not the same cost on every device: a fixed 80 ms covered a desktop
+// GPU and not a Pi 4, which switched VTs onto an uninitialized scanout buffer
+// and showed a moment of black. Hence completeRestore() off frameSwapped.
+void DisplayHandoff::finishRestore() {
+#ifdef Q_OS_LINUX
+    // The window is shown here, on the child's VT, where the re-init is unseen.
+    // completeRestore() does the switch itself — main.cpp calls it from
+    // QQuickWindow::frameSwapped — so the switch cannot land before a real frame
+    // exists. A fixed delay was not enough: EGLFS's re-init on a Pi 4 takes
+    // longer than a few frames, and the switch then exposed an uninitialized
+    // scanout buffer as a moment of black.
+    emit displayReturned();
+    if (m_switchedVt && m_previousVt > 0) {
+        m_restoreTimer->start();
+        return;
+    }
+#endif
+    completeRestore();
+}
+
+void DisplayHandoff::completeRestore() {
+    m_restoreTimer->stop();
+    // Idempotent: frameSwapped and the safety timer can both land.
     if (m_previousVt > 0 && m_switchedVt) {
         qDebug("[DisplayHandoff] Switching back to VT %d", m_previousVt);
         switchToVt(m_previousVt);
@@ -180,8 +248,6 @@ void DisplayHandoff::doRestore() {
     m_previousVt = -1;
     m_switchedVt = false;
     m_owner.clear();
-
-    emit displayReturned();
 }
 
 int DisplayHandoff::getActiveVt() const {

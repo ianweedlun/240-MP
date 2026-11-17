@@ -35,6 +35,7 @@
 #include "update/UpdateManager.h"
 #include "util/ExecPath.h"
 #include "util/DisplayHandoff.h"
+#include "util/HandoffWindowPolicy.h"
 #ifdef Q_OS_MAC
 #include "util/MacosUtils.h"
 #endif
@@ -279,9 +280,37 @@ int main(int argc, char *argv[]) {
     inputManager.setTargetWindow(rootWindow);
 
     //
+    // The hand-off brackets the app window, not just the DRM device: on this Pi
+    // Qt EGLFS never installed a VT_PROCESS handler (the app holds no console fd),
+    // so the kernel VT switch does not stop it drawing. Hiding the window is what
+    // actually suspends rendering while a child owns the screen; see the
+    // displayTaken comment in DisplayHandoff.h. MP240_HANDOFF_KEEP_WINDOW=1 skips
+    // it, for A/B testing the old behaviour without a rebuild — the predicate
+    // lives in util/HandoffWindowPolicy.h so it can be unit-tested.
     if (rootWindow) {
+        // One value drives both the hide and the "EGLFS re-initialises on the way
+        // back" flag, so the two can never disagree.
+        const bool hidesWindow = handoffwindow::hideWindowOnTake();
+        // The restore path has to know whether EGLFS is being re-initialised on
+        // the way back — see DisplayHandoff::setRendererSuspendsWindow.
+        displayHandoff.setRendererSuspendsWindow(hidesWindow);
+        QObject::connect(&displayHandoff, &DisplayHandoff::displayTaken,
+                         rootWindow, [rootWindow, hidesWindow] {
+                             if (hidesWindow) rootWindow->setVisible(false);
+                         });
+
+        // Showing the window makes EGLFS rebuild its swapchain and set the mode,
+        // so the VT switch back waits for the frame that proves that is done. A
+        // timer inside DisplayHandoff covers the case where no frame arrives.
         QObject::connect(&displayHandoff, &DisplayHandoff::displayReturned,
-                         rootWindow, [rootWindow] { rootWindow->requestUpdate(); });
+                         rootWindow, [rootWindow, &displayHandoff] {
+                             rootWindow->setVisible(true);
+                             rootWindow->requestUpdate();
+                             QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
+                                              &displayHandoff,
+                                              &DisplayHandoff::completeRestore,
+                                              Qt::SingleShotConnection);
+                         });
     }
 
     // eventFilter() must be installed on the window or it never runs — without

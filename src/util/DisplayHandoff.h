@@ -93,8 +93,49 @@ public:
     // would receive it is being torn down).
     void releaseNow(const QString &owner);
 
+    // Second half of the restore, called once the restored window has actually
+    // presented a frame: switches the VT back and clears the hand-off state.
+    // main.cpp calls this from QQuickWindow::frameSwapped; a timer here covers the
+    // case where no frame ever arrives so the Pi cannot be stranded on the
+    // child's VT.
+    void completeRestore();
+
+    // Told by whoever owns the QQuickWindow: true when the window is hidden for
+    // the duration of a hand-off and therefore re-initialises EGLFS on the way
+    // back. That re-init sets the mode itself, which makes the legacy CRTC
+    // restore a second, redundant modeset on the way out — and on composite each
+    // modeset is a visible blank. See doRestore().
+    void setRendererSuspendsWindow(bool on) { m_rendererSuspendsWindow = on; }
+
+    // TEST SEAM — src/util/tests/DisplayHandoffSignalTest.cpp only, production
+    // never calls it. Replaces the CRTC capture step of acquire() (Qt DRM fd
+    // discovery + saveDrmCrtcState) with a hook, because the ordering that
+    // displayTaken() depends on — capture, THEN announce — cannot be observed
+    // on a machine with no /dev/dri. With the hook set, acquire() runs no DRM
+    // ioctls at all. When unset, the real capture happens exactly as before.
+    void setCrtcCaptureHookForTest(std::function<void()> hook)
+    {
+        m_crtcCaptureHook = std::move(hook);
+    }
+
 signals:
+    // Emitted once the hand-off is fully taken (VT switched, master dropped,
+    // CRTC state saved). The owner of the QQuickWindow hides it here.
     //
+    // This is not belt-and-braces. The VT switch is supposed to suspend Qt's
+    // render thread through the kernel's VT_PROCESS signal, and on this Pi it
+    // does NOT: the app holds no console fd (only /dev/dri/card1), so QFbVtHandler
+    // was never installed and nothing tells EGLFS to stop drawing. The switch
+    // still completes, so there is no warning and no failed-looking state — but
+    // the renderer keeps submitting atomic commits to a DRM device it no longer
+    // owns: ~500 EACCES lines per RetroArch launch, ~10% CPU for the whole
+    // session, and a child that draws nothing would leave the stale UI on screen.
+    // Hiding the window is the only lever that actually stops EGLFS rendering
+    // from inside the app.
+    void displayTaken();
+
+    // Emitted after the display is put back (master restored, CRTC restored, VT
+    // switched back). The window becomes visible again here.
     void displayReturned();
 
 private:
@@ -119,12 +160,20 @@ private:
 #endif
     void doRestore();
 
+    // Tail of doRestore: brings the window back while the display is still on the
+    // child's VT, waits for frames to settle, then switches back — so EGLFS's
+    // re-init never happens in view. See the comment on the definition.
+    void finishRestore();
+
     QString m_owner;                    // empty when not handed off
     int     m_previousVt   = -1;
     bool    m_switchedVt   = false;     // did the VT switch actually succeed?
     int     m_qtDrmFd      = -1;
     QTimer *m_releaseTimer = nullptr;
+    QTimer *m_restoreTimer = nullptr;
+    bool m_rendererSuspendsWindow = false;
     std::function<void()> m_onRestored;
+    std::function<void()> m_crtcCaptureHook;   // test seam, see the setter
 #ifdef Q_OS_LINUX
     DrmSavedState m_savedDrm = {};
     //
