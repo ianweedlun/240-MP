@@ -135,6 +135,11 @@ private:
 #endif
     void doRestore();
 
+    // Tail of doRestore: brings the window back while the display is still on the
+    // child's VT, waits for frames to settle, then switches back — so EGLFS's
+    // re-init never happens in view. See the comment on the definition.
+    void finishRestore();
+
     QString m_owner;                    // empty when not handed off
     int     m_previousVt   = -1;
     bool    m_switchedVt   = false;     // did the VT switch actually succeed?

@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QTimer>
+#include <QThread>
 #include <QDebug>
 
 #ifdef Q_OS_LINUX
@@ -175,17 +176,39 @@ void DisplayHandoff::doRestore() {
         m_qtDrmFd = -1;
     }
 #endif
-    // Only switch back if we actually switched away — otherwise this just logs a
-    // second, confusing permission error on a VT we never left.
+    finishRestore();
+}
+
+// Order matters for what the viewer sees when a game exits.
+//
+// The window was hidden for the duration of the hand-off, so showing it again
+// makes EGLFS build a fresh swapchain and set the mode once. Done after the VT
+// switch back, that re-init lands in plain sight: the restored CRTC paints the
+// stale pre-game frame, then the screen blanks for the re-init, then the live
+// frame arrives — a visible flicker on the TV, right after the list appears.
+//
+// So the app is brought back while the display is still parked on the child's
+// VT, where nobody can see it: master restored, CRTC restored, window shown and
+// given a few frames to settle, and only then switched back. The re-init happens
+// off-screen and the VT switch lands on a live, already-correct frame.
+void DisplayHandoff::finishRestore() {
+#ifdef Q_OS_LINUX
+    emit displayReturned();
+    if (m_switchedVt) {
+        // Frames are drawn on QSGRenderThread; sleeping the GUI thread here still
+        // lets it present. ~5 frames at 60 Hz.
+        QThread::msleep(80);
+    }
     if (m_previousVt > 0 && m_switchedVt) {
         qDebug("[DisplayHandoff] Switching back to VT %d", m_previousVt);
         switchToVt(m_previousVt);
     }
+#else
+    emit displayReturned();
+#endif
     m_previousVt = -1;
     m_switchedVt = false;
     m_owner.clear();
-
-    emit displayReturned();
 }
 
 int DisplayHandoff::getActiveVt() const {
