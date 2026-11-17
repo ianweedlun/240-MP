@@ -200,7 +200,17 @@ FocusScope {
         Keys.onReturnPressed: {
             var game = model[currentIndex]
             if (!game) return
-            retroarchBackend.launchGame(game, navParams.systemId)
+            // Copy, don't mutate the model entry: the row still needs its own
+            // identity, and the payload needs the playlist it came from so the
+            // recently-played entry can be launched without re-reading a playlist.
+            var payload = Object.assign({}, game)
+            payload.playlistPath = gamesRoot.playlistPath
+            payload.playlistBasename = gamesRoot.playlistBasename
+            payload.shortName = gamesRoot.shortName
+            payload.systemId = navParams.systemId
+            // Where we were, remembered before the child takes the screen.
+            retroarchBackend.recordGamePosition(gamesRoot.playlistPath, gameList.currentIndex)
+            retroarchBackend.launchGame(payload, navParams.systemId)
         }
 
         Keys.onRightPressed: {
@@ -398,13 +408,26 @@ FocusScope {
         return game
     }
 
+    // Back out of a 1746-game list and the next visit lands where you left it,
+    // including after a service restart.
+    Component.onDestruction: {
+        if (gameList.count > 0)
+            retroarchBackend.recordGamePosition(playlistPath, gameList.currentIndex)
+    }
+
     Component.onCompleted: {
         var games = retroarchBackend.refreshGames(playlistPath)
         gameList.model = games
         gamesRoot.letterIndex = gamesRoot.buildLetterIndex(games)
         gamesRoot.listLoaded = true
         if (games.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
+            // gamePosition() answers -1 for "never been here" — it must not reach
+            // currentIndex, which would open the list on a nonexistent row and eat
+            // the first Down press.
+            var restore = (navListState.currentIndex !== undefined)
+                ? navListState.currentIndex
+                : retroarchBackend.gamePosition(playlistPath)
+            if (!(restore >= 0)) restore = 0
             gameList.currentIndex = Math.min(restore, games.length - 1)
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Contain)
             gamesRoot.syncLetterToGame()

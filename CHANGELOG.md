@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — RetroArch: recently played, and your place in a playlist kept
+- **RECENTLY PLAYED at the top of the playlist screen**, when there is anything to show: a list of the last twelve games across all systems, newest first, launching straight from stored entries without re-reading a playlist. Re-playing a game moves it to the front instead of adding a second copy. Stored in `retroarch_recent.json` beside the rest of the app's data (atomic write: a power cut leaves the previous list, not a truncated one; a corrupt file reads as empty and is repaired on the next launch).
+- **Playlists remember where you stopped.** Backing out of a long list and coming back lands on the same row — including after a service restart, which in-session navigation state never covered; index 0 is stored as "no position", so the common case costs no write.
+- The playlist screen restores its own selection by row identity rather than a bare index, so the row that appears when the recent list becomes non-empty (and disappears when it empties) no longer shifts what gets highlighted.
+- Unit tests: `recent-games` (12 cases — dedupe/move-to-front, cap, corrupt and missing files, atomic round trip, position clamping) alongside the existing 15-test suite.
+
 ### Fixed — CI: an official deploy could skip over an RC build, and never cleared the RC markers
 - **The skip fast path trusted a marker the RC lane never touches.** `pi-rc.yml` deploys un-merged PR heads and records them in `.240mp-rc-deployed-{rev,pr,md5}`; the official deploy gate only compared `.240mp-last-deployed-rev`. So "same commit already deployed" could be true while the Pi was actually running an RC build, and the deploy would skip — blessing an RC binary as the beta deploy.
 - **Stale RC markers survived a real deploy.** Observed on the promotion of `55b129c`: the official deploy overwrote the official marker and left PR #77's `rc-deployed-*` files in place, so the Pi still read as "carrying an RC build" to every later probe (and the leftover `pr-77` owner makes a future PR close think it may need to restore).

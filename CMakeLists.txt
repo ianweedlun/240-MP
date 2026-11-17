@@ -89,6 +89,7 @@ add_executable(240mp
     src/modules/scripts/ScriptsBackend.cpp
     src/modules/scripts/ScriptLauncher.cpp
     src/modules/retroarch/RetroArchBackend.cpp
+    src/modules/retroarch/RecentGamesStore.cpp
     src/modules/virtual_channels/VirtualChannelsBackend.cpp
     src/modules/virtual_channels/ChannelSchedule.cpp
     src/modules/virtual_channels/ChannelTuner.cpp
@@ -286,6 +287,19 @@ if(BUILD_TESTS)
     endif()
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
+
+    # Recently-played / playlist-position bookkeeping (pure logic, no QObject).
+    # Lives beside the RetroArch tests because it is the same module's state, but
+    # as its own target so it cannot be broken by anything that needs a display.
+    add_executable(recent-games-tests
+        src/modules/retroarch/tests/RecentGamesStoreTest.cpp
+        src/modules/retroarch/RecentGamesStore.cpp)
+    set_target_properties(recent-games-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(recent-games-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(recent-games-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME recent-games COMMAND recent-games-tests)
 
     # Weather code-mapping tests: pure table lookups and METAR reduction, no
     # files, no network. WeatherCodes.h is self-contained, so this target

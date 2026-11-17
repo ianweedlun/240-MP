@@ -2,6 +2,7 @@
 #include "../../util/DisplayHandoff.h"
 #include <QBuffer>
 #include <QDir>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -17,8 +18,10 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
     : QObject(parent)
     , m_appRoot(appRoot)
     , m_dataRoot(dataRoot)
-    , m_handoff(handoff) {
+    , m_handoff(handoff)
+    , m_recent(dataRoot + QStringLiteral("/retroarch_recent.json")) {
     loadSettings();
+    m_recent.load();
 }
 
 RetroArchBackend::~RetroArchBackend() = default;
@@ -714,4 +717,30 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     });
     process->start();
     m_gameProcess = process;
+
+    // Recorded after start() so a launch that never spawned (bad binary, missing
+    // core) cannot claim the RECENT slot. One file write per launch is nothing;
+    // the alternative is losing the list on a power cut.
+    QVariantMap entry = game;
+    entry.insert(QStringLiteral("systemId"), systemId);
+    m_recent.recordLaunch(entry, QDateTime::currentSecsSinceEpoch());
+    if (!m_recent.save())
+        qWarning("[RetroArch] could not persist recently-played list");
+}
+
+QVariantList RetroArchBackend::recentGames() const {
+    return m_recent.entries();
+}
+
+QVariantMap RetroArchBackend::lastPlayedGame() const {
+    return m_recent.lastPlayed();
+}
+
+void RetroArchBackend::recordGamePosition(const QString &playlistPath, int index) {
+    m_recent.recordPosition(playlistPath, index);
+    m_recent.save();
+}
+
+int RetroArchBackend::gamePosition(const QString &playlistPath) const {
+    return m_recent.position(playlistPath);
 }
