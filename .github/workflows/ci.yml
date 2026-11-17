@@ -38,6 +38,7 @@ jobs:
             qml6-module-qtquick \
             qml6-module-qtquick-controls \
             qml6-module-qtquick-window \
+            qml6-module-qtqml-workerscript \
             libdrm-dev \
             libssl-dev \
             libsdl2-dev \
