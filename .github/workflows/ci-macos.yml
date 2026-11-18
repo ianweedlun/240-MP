@@ -54,18 +54,6 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4.5.0
-        with:
-          version: '6.7.3'
-          host: mac
-          target: desktop
-          arch: clang_64
-          cache: true
-
       # ccache lane (issue #32 spring-clean follow-through): the macOS lane kept
       # re-running from zero on identity re-pushes and re-queued PR builds - the
       # chronic bottleneck (mac runners intermittently refuse capacity). With a
@@ -90,32 +78,15 @@ jobs:
 
       # Native arch on purpose: the runner is x86_64, so no CMAKE_OSX_ARCHITECTURES
       # override (the old hardcoded arm64 was only correct on an Apple-Silicon host).
-      - name: Install SDL2 from source
-        run: |
-          SDL2_VERSION=2.32.10
-          SRC="${RUNNER_TEMP}/SDL2-src"
-          BUILD="${RUNNER_TEMP}/SDL2-build"
-          git clone --depth 1 --branch "release-${SDL2_VERSION}" \
-            https://github.com/libsdl-org/SDL "$SRC"
-          cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
-            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
-          cmake --build "$BUILD" --parallel
-          cmake --install "$BUILD"
-          echo "SDL2_PREFIX=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_ENV"
-
-      - name: Configure (with tests)
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
-            -DBUILD_TESTS=ON \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAPP_VERSION="${{ github.sha }}"
-
-      - name: Build
-        run: cmake --build build --parallel
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
+        with:
+          qt-host: mac
+          qt-version: '6.7.3'
+          qt-arch: clang_64
+          apt-packages: ""
+          build-sdl2-source: 'true'
+          app-version: ${{ github.sha }}
 
       # Saved right after Build (not at workflow end): test/install steps must not
       # throw away the compile results, so the store step sits before them.
@@ -155,54 +126,23 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4.5.0
-        with:
-          version: '6.7.3'
-          host: mac
-          target: desktop
-          arch: clang_64
-          cache: true
-
       - name: Install ccache (brew unless preinstalled)
         run: |
           if ! command -v ccache >/dev/null 2>&1; then brew install ccache; fi
           mkdir -p "${RUNNER_TEMP}/ccache"
           echo "CCACHE_DIR=${RUNNER_TEMP}/ccache" >> "$GITHUB_ENV"
 
-      - name: Install SDL2 from source
-        run: |
-          SDL2_VERSION=2.32.10
-          SRC="${RUNNER_TEMP}/SDL2-src"
-          BUILD="${RUNNER_TEMP}/SDL2-build"
-          git clone --depth 1 --branch "release-${SDL2_VERSION}" \
-            https://github.com/libsdl-org/SDL "$SRC"
-          cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
-            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
-          cmake --build "$BUILD" --parallel
-          cmake --install "$BUILD"
-          echo "SDL2_PREFIX=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_ENV"
-
-      - name: Configure (with tests)
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
-            -DBUILD_TESTS=ON \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAPP_VERSION="${{ github.sha }}"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Run tests
-        run: |
-          ctest --test-dir build --output-on-failure -j4
+      # Native arch on purpose: the runner is Apple-Silicon, so no
+      # CMAKE_OSX_ARCHITECTURES override.
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
+        with:
+          qt-host: mac
+          qt-version: '6.7.3'
+          qt-arch: clang_64
+          apt-packages: ""
+          build-sdl2-source: 'true'
+          app-version: ${{ github.sha }}
 
       - name: Upload macOS build artifact
         uses: actions/upload-artifact@v4.6.2
