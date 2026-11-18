@@ -120,10 +120,11 @@ void YouTubeBackend::load_channels(bool forceRefresh) {
     m_emitChannelsWhenDone = true;
     if (!m_accessToken.isEmpty()) {
         if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
-            m_pendingFeChannels = true;
+            m_pendingReplay.deferChannels();
             requestRefresh(); // success leg replays load_channels with a fresh bearer
             return;
         }
+        m_pendingReplay.clearChannels(); // going out live: no deferred work left
         // Signed-in truth (user rule: InnerTube primary; text files are
         // legacy fallback): FEchannels returns the whole subscribed-channel
         // list in ONE page — 313 channelRenderer-free but TV-tiled tiles
@@ -1633,26 +1634,18 @@ void YouTubeBackend::requestRefresh()
                 m_refreshToken = rotated;
             saveAuthFile();
             qWarning("[Youtube] access token refreshed — account paths live again");
-            if (m_pendingFeChannels) {
-                m_pendingFeChannels = false;
+            if (m_pendingReplay.takeChannels())
                 load_channels(false); // FEchannels retry now that the bearer is fresh
-            }
-            if (!m_pendingListKind.isEmpty()) {
-                const QString kind = m_pendingListKind;
-                m_pendingListKind.clear();
-                loadAccountList(kind); // retry now that the token is live
-            } else if (!m_pendingPlaylistVideos.isEmpty()) {
-                const QString id = m_pendingPlaylistVideos;
-                m_pendingPlaylistVideos.clear();
-                loadAccountPlaylistVideos(id); // same re-entry, videos path
-            }
+            const ytui::PendingReplay::ListRequest replay = m_pendingReplay.takeListOrVideos();
+            if (replay.kind == ytui::PendingReplay::ListRequest::Kind::AccountList)
+                loadAccountList(replay.value); // retry now that the token is live
+            else if (replay.kind == ytui::PendingReplay::ListRequest::Kind::PlaylistVideos)
+                loadAccountPlaylistVideos(replay.value); // same re-entry, videos path
         } else {
             m_accessToken = QString(); // dead auth — views fall back to files
             saveAuthFile();
             qWarning("[Youtube] token refresh declined — signed out, re-pair on the CRT");
-            m_pendingListKind.clear();
-            m_pendingPlaylistVideos.clear();
-            m_pendingFeChannels = false;
+            m_pendingReplay.clearAll();
         }
     });
 }
@@ -1669,11 +1662,12 @@ void YouTubeBackend::loadAccountList(const QString &kind)
         emit errorOccurred(QStringLiteral("NOT SIGNED IN"));
         return;
     }
-    m_pendingListKind = kind;
     if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
-        requestRefresh(); // the list re-enters from requestRefresh's success leg
+        m_pendingReplay.deferList(kind); // re-enters from requestRefresh's success leg
+        requestRefresh();
         return;
     }
+    m_pendingReplay.clearList(); // live request: nothing to replay later
     // feed/history/watch-later have stable entry points; the playlists
     // account surface is the LIBRARY (FElibrary) — the account home's Playlists
     // tab chip is unselectable and cursor-less on the TV client (verified
@@ -1846,10 +1840,11 @@ void YouTubeBackend::loadAccountPlaylistVideos(const QString &playlistId)
     if (playlistId.isEmpty())
         return;
     if (ytauth::accessExpired(m_accessExpiresEpoch, QDateTime::currentMSecsSinceEpoch() / 1000)) {
-        m_pendingPlaylistVideos = playlistId; // re-enters from requestRefresh's success leg
+        m_pendingReplay.deferPlaylistVideos(playlistId); // re-enters from requestRefresh's success leg
         requestRefresh();
         return;
     }
+    m_pendingReplay.clearVideos(); // live request: nothing to replay later
     // Account playlist ids come as PL…/UU…/LL/RD…; contents are browsed with
     // the VL-prefixed cursor for PL/UU/LL (LL -> VLLL, the liked-videos
     // pseudo-playlist; RD mixes browse directly). The emit echoes
