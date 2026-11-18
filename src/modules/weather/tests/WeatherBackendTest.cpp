@@ -381,6 +381,31 @@ private slots:
                  QStringLiteral("TOKYO"));
         wb.stop();
     }
+
+    // Pressure must be present and self-labelled in both unit systems. A US
+    // bare number was easy to mistake for an absent field on the CRT row.
+    void pressureVisibleInBothUnitSystems() {
+        for (const QString &units : { QStringLiteral("Metric"), QStringLiteral("US") }) {
+            writeConfig(units);
+            writeLocation(QStringLiteral("38.8, -77.0, OLD"));
+            WeatherBackend wb(QString(), m_dir.path());
+            wb.start();
+            QVERIFY(waitFor([&] { return wb.hasData(); }));
+            settle(200);
+            const QString pressure = wb.current().value(QStringLiteral("pressure")).toString();
+            QVERIFY2(!pressure.isEmpty(), qPrintable(units + QStringLiteral(" pressure present")));
+            if (units == QLatin1String("US")) {
+                QVERIFY2(pressure.contains(QStringLiteral("INHG")), "US pressure names its scale");
+                const double inHg = pressure.split(QLatin1Char(' ')).first().toDouble();
+                QVERIFY(inHg > 29.0 && inHg < 30.5);
+            } else {
+                QVERIFY2(pressure.contains(QStringLiteral("MB")), "metric pressure names its scale");
+                const double mb = pressure.split(QLatin1Char(' ')).first().toDouble();
+                QVERIFY(mb > 1000.0 && mb < 1020.0);
+            }
+            wb.stop();
+        }
+    }
 };
 
 int main(int argc, char **argv) {

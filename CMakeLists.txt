@@ -532,6 +532,17 @@ if(BUILD_TESTS)
     set(MP240_RECENT_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
+
+    # Current conditions row parity: Metric and US must both show PRESSURE.
+    add_executable(weather-current-smoke src/tests/weather-current-smoke-test.cpp)
+    set_target_properties(weather-current-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-current-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(weather-current-smoke PRIVATE src)
+    set(MP240_WEATHER_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(weather-current-smoke PRIVATE ${MP240_WEATHER_ROOT_DEF})
+    add_test(NAME weather-current-smoke COMMAND weather-current-smoke)
+    set_tests_properties(weather-current-smoke PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 endif()
 
 # Plex Player retry smoke: drives the failed-direct-play -> transcode fallback

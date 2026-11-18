@@ -909,6 +909,7 @@ void WeatherBackend::fetchWeather() {
         m["dewPoint"]    = QString::number(qRound(cur["dew_point_2m"].toDouble())) + QStringLiteral("°");
         m["pressure"]    = us
             ? QString::number(cur["pressure_msl"].toDouble() * 0.0295299830714, 'f', 2)
+              + QStringLiteral(" INHG")
             : QString::number(cur["pressure_msl"].toDouble(), 'f', 1) + QStringLiteral(" MB");
         m["wind"] = QStringLiteral("%1 %2")
                         .arg(cardinal(cur["wind_direction_10m"].toDouble()))
@@ -1120,7 +1121,7 @@ void WeatherBackend::applyObservation() {
     if (has("pressure")) {
         const double hPa = num("pressure") / 100.0;   // NWS reports pascals
         m_current["pressure"] = us
-            ? QString::number(hPa * 0.0295299830714, 'f', 2)
+            ? QString::number(hPa * 0.0295299830714, 'f', 2) + QStringLiteral(" INHG")
             : QString::number(hPa, 'f', 1) + QStringLiteral(" MB");
     }
     // Direction is null when the wind is calm or variable, and a bearing is the
