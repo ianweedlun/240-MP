@@ -290,6 +290,12 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # pi-rc decide-mode regression (issue #91): pure shell logic, no Qt/display.
+    # Pins that a closed-unmerged PR with a matching pr-N marker selects MODE=restore
+    # instead of silently skipping. Runs in both CI lanes via the existing ctest steps.
+    add_test(NAME pi-rc-decide COMMAND bash
+        ${CMAKE_CURRENT_SOURCE_DIR}/scripts/pi-rc-decide-test.sh)
+
     # Recently-played / playlist-position bookkeeping (pure logic, no QObject).
     # Lives beside the RetroArch tests because it is the same module's state, but
     # as its own target so it cannot be broken by anything that needs a display.
