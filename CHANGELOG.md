@@ -4,6 +4,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — RetroArch: the sort header is now a control in every list view
+- In **Games** and **RECENTLY PLAYED**, pressing **Up** on the first letter of the letter strip moves focus to the `N GAMES · A-Z/Z-A` header instead of wrapping to the last letter. **Down** returns to the same highlighted letter, **Enter** toggles Game Sort and persists it through the normal setting, and only the direction word (`A-Z`/`Z-A`) highlights on focus — the `N GAMES ·` prefix stays plain text.
+- **Playlists** gets the same control for its `playlist_sort` setting: **Up** from the first row focuses the `N PLAYLISTS · SYSTEM/COMPANY` header, **Enter** toggles and persists the sort, **Down** returns to the list, and only the direction word highlights. All RetroArch list views now share the same contract.
+
+### Changed — RetroArch: Recently played now has full list-view parity
+- **Game Sort (`A-Z` / `Z-A`) applies to RECENTLY PLAYED too**, using the same backend ordering as the Games screen. The stored list stays newest-first; only the view's order changes. `lastPlayedGame()` (one press from the main menu to the last game you launched) still reports true recency.
+- **The header now reads `N GAMES · A-Z` / `N GAMES · Z-A`**, matching the Games screen, and the letter-strip buckets are sorted by the active direction (`#` leads A-Z, trails Z-A).
+- **Changing direction keeps the selected game selected**, re-finding it by name after the re-sort, exactly like the Games list.
+- Unit tests cover both sort directions and the recency-preserved one-press accessor; the offscreen smoke test checks the header, strip order and selection sync in both directions.
+
 ### Fixed — RetroArch: Recently played now matches the other game lists
 - **Thumbnail preview restored on the RECENTLY PLAYED view**, using the same `GamePreview.qml` panel and `thumbnail_display` setting as the Games screen (LEFT / RIGHT / OFF). Thumbnails are resolved on demand from each stored entry's playlist basename, so moved ROM folders can't leave a cached stale path.
 - **Letter-strip quick-scroll restored**, with `A`/`An`/`The` removed from bucketing like the games list. Buckets follow the view's newest-first display order (no alphabetical re-sort) so jumping to a letter lands on the row actually showing it. The games count header and BROWSE hint are shown too.

@@ -8,16 +8,26 @@ import Components
 // complete launch payload (see RecentGamesStore), so Return starts the game
 // directly without touching a playlist file.
 //
-// Layout contract: same as Games.qml — thumbnail preview column (gated by the
-// thumbnail_display setting) plus the A-Z letter-strip quick-scroll. The strip
-// follows the rows' DISPLAY order (newest first here), not an alpha re-sort:
-// jumping to a bucket has to land on the first row actually showing that letter.
+// Layout contract: identical to Games.qml — thumbnail preview column (gated by
+// the thumbnail_display setting), `N GAMES · A-Z/Z-A` count header, and the A-Z
+// letter-strip quick-scroll. The backend applies the Game Sort setting here too;
+// the strip follows that display order, so jumping to a letter lands on the row
+// actually showing it.
 FocusScope {
     id: recentRoot
 
     property var navParams: ({})
     property var navListState: navParams.navListState || ({})
     property bool listLoaded: false
+    property string gameSortLabel: "A-Z"
+    property bool sortHeaderFocused: false
+
+    // Same persisted setting the Settings menu writes; the moduleSettingChanged
+    // connection below reloads this view with the new order.
+    function toggleGameSort() {
+        var next = retroarchBackend.gameSort() === "Z-A" ? "A-Z" : "Z-A"
+        appCore.save_setting(moduleRoot.moduleId, "game_sort", next)
+    }
 
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
@@ -64,8 +74,16 @@ FocusScope {
                 result.push({ letter: letter, firstIndex: i })
             }
         }
-        // No alpha sort: the recent list is newest-first, so the strip must
-        // follow first appearance order to jump to the right row.
+        result.sort(function(a, b) {
+            // Same contract as Games.qml: the strip follows the list direction.
+            // '#' leads A-Z and trails Z-A so its order matches the rows it jumps to.
+            var descending = recentRoot.gameSortLabel === "Z-A"
+            if (a.letter === '#') return descending ? 1 : -1
+            if (b.letter === '#') return descending ? -1 : 1
+            if (a.letter === b.letter) return 0
+            if (descending) return a.letter > b.letter ? -1 : 1
+            return a.letter < b.letter ? -1 : 1
+        })
         return result
     }
 
@@ -118,19 +136,72 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
     }
 
-    // Count, right-aligned like the games list's "N GAMES · A-Z" header.
-    Text {
-        id: recentCountHeader
+    // Sort header: only the direction word is the control. The count prefix
+    // stays plain text; Up from the letter strip focuses the direction, whose
+    // Enter toggles Game Sort and whose accent block shows the focused state.
+    Row {
+        id: recentSortHeader
+        objectName: "recentSortHeader" // lab smoke-test handle
         visible: recentRoot.listLoaded && recentList.count > 0
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.195
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125
-        text: recentList.count + " GAMES"
-        color: root.secondaryColor
-        font.family: root.globalFont
-        font.capitalization: Font.AllUppercase
-        font.pixelSize: root.sh * 0.027
+        spacing: 0
+
+        Text {
+            id: recentCountLabel
+            objectName: "recentSortCount" // lab smoke-test handle
+            text: recentList.count + " GAMES  ·  "
+            color: root.secondaryColor
+            font.family: root.globalFont
+            font.capitalization: Font.AllUppercase
+            font.pixelSize: root.sh * 0.027
+        }
+
+        Item {
+            id: recentSortButton
+            width: recentCountHeader.implicitWidth + root.sw * 0.02
+            height: recentCountHeader.implicitHeight + root.sh * 0.012
+
+            Rectangle {
+                id: sortHeaderHighlight
+                objectName: "sortHeaderHighlight" // lab smoke-test handle
+                anchors.fill: parent
+                visible: recentRoot.sortHeaderFocused
+                color: root.accentColor
+            }
+
+            Text {
+                id: recentCountHeader
+                objectName: "recentSortDirection" // lab smoke-test handle
+                anchors.centerIn: parent
+                text: recentRoot.gameSortLabel
+                color: recentRoot.sortHeaderFocused ? root.surfaceColor : root.secondaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                font.pixelSize: root.sh * 0.027
+
+                Keys.enabled: true
+                Keys.onReturnPressed: function(event) {
+                    recentRoot.toggleGameSort()
+                    event.accepted = true
+                }
+                Keys.onUpPressed: function(event) { event.accepted = true } // top of the tab order
+                Keys.onDownPressed: function(event) {
+                    recentRoot.sortHeaderFocused = false
+                    letterList.forceActiveFocus() // keeps its current letter highlighted
+                    event.accepted = true
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                        recentRoot.sortHeaderFocused = false
+                        letterList.forceActiveFocus()
+                        event.accepted = true
+                    }
+                }
+            }
+        }
     }
 
     // Empty state — reachable only if the list was emptied between opening the
@@ -297,14 +368,19 @@ FocusScope {
         clip: true
         focus: false
 
-        Keys.onUpPressed: {
+        Keys.onUpPressed: function(event) {
             if (count === 0) return
             if (currentIndex > 0) {
                 currentIndex--
             } else {
-                currentIndex = count - 1
-                letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
+                // Past the top letter: focus the sort header instead of
+                // wrapping to the bottom. Its Enter toggles Game Sort.
+                recentRoot.sortHeaderFocused = true
+                recentCountHeader.forceActiveFocus()
+                event.accepted = true
+                return
             }
+            letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
             recentList.currentIndex = recentRoot.letterIndex[currentIndex].firstIndex
             recentList.positionViewAtIndex(recentList.currentIndex, ListView.Beginning)
         }
@@ -387,18 +463,53 @@ FocusScope {
         return game
     }
 
-    Component.onCompleted: {
+    // One reload path for boot and for a live Game Sort change. A direction
+    // flip keeps the same GAME selected by name (indices now mean different
+    // rows), exactly like Games.qml; RECENT has no persisted index of its own.
+    function refreshRecentModel(preserveSelection) {
+        var oldModel = recentList.model
+        var currentName = ""
+        if (preserveSelection && oldModel && oldModel.length > 0 &&
+                recentList.currentIndex >= 0 && recentList.currentIndex < oldModel.length) {
+            currentName = (oldModel[recentList.currentIndex] || {}).name || ""
+        }
+
         var games = retroarchBackend.recentGames()
         recentList.model = games
-        recentRoot.listLoaded = true
+        // Direction first: buildLetterIndex() orders the jump strip by it.
+        recentRoot.gameSortLabel = retroarchBackend.gameSort()
         recentRoot.letterIndex = recentRoot.buildLetterIndex(games)
-        if (games.length > 0) {
-            var restore = (navListState.currentIndex !== undefined) ? navListState.currentIndex : 0
-            recentList.currentIndex = Math.min(restore, games.length - 1)
-            recentList.positionViewAtIndex(recentList.currentIndex, ListView.Contain)
-            recentRoot.syncLetterToGame()
-            previewLoader.item.game = recentRoot.ensureThumbnail(games[recentList.currentIndex])
+        recentRoot.listLoaded = true
+        if (games.length === 0) return
+
+        var target = -1
+        if (currentName !== "") {
+            for (var i = 0; i < games.length; i++) {
+                if (games[i].name === currentName) { target = i; break }
+            }
         }
+        if (target < 0) {
+            var fromState = (navListState && navListState.currentIndex >= 0)
+                ? navListState.currentIndex : -1
+            target = (fromState >= 0 && fromState < games.length) ? fromState : 0
+        }
+        recentList.currentIndex = target
+        recentList.positionViewAtIndex(target, ListView.Contain)
+        recentRoot.syncLetterToGame()
+        if (previewLoader.item)
+            previewLoader.item.game = recentRoot.ensureThumbnail(games[target])
+    }
+
+    Connections {
+        target: appCore
+        function onModuleSettingChanged(mid, key, value) {
+            if (mid === moduleRoot.moduleId && key === "game_sort")
+                recentRoot.refreshRecentModel(true)
+        }
+    }
+
+    Component.onCompleted: {
+        recentRoot.refreshRecentModel(false)
         recentList.forceActiveFocus()
     }
 }

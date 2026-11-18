@@ -19,6 +19,15 @@ FocusScope {
     // "No games in this playlist" state was unreachable.
     property bool listLoaded: false
     property string gameSortLabel: "A-Z"
+    property bool sortHeaderFocused: false
+
+    // Same persisted setting the Settings menu writes; the moduleSettingChanged
+    // connection below reloads this view with the new order.
+    function toggleGameSort() {
+        var next = retroarchBackend.gameSort() === "Z-A" ? "A-Z" : "Z-A"
+        appCore.save_setting(moduleRoot.moduleId, "game_sort", next)
+    }
+
     readonly property string thumbDisplay: {
         var v = appCore.get_setting(moduleRoot.moduleId, "thumbnail_display")
         // null/undefined means "never set" — the manifest default (RIGHT),
@@ -132,20 +141,72 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125 //80
     }
 
-    // Game count + active direction, right-aligned to the list's edge. Playlists
-    // already show per-system counts; the games list had no equivalent.
-    Text {
-        id: gamesCountHeader
+    // Sort header: only the direction word is the control. The count prefix
+    // stays plain text; Up from the letter strip focuses the direction, whose
+    // Enter toggles Game Sort and whose accent block shows the focused state.
+    Row {
+        id: gamesSortHeader
+        objectName: "gamesSortHeader" // lab smoke-test handle
         visible: gamesRoot.listLoaded
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.195 //94
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125 //80
-        text: gameList.count + " GAMES  ·  " + gamesRoot.gameSortLabel
-        color: root.secondaryColor
-        font.family: root.globalFont
-        font.capitalization: Font.AllUppercase
-        font.pixelSize: root.sh * 0.027
+        spacing: 0
+
+        Text {
+            id: gamesCountLabel
+            objectName: "gamesSortCount" // lab smoke-test handle
+            text: gameList.count + " GAMES  ·  "
+            color: root.secondaryColor
+            font.family: root.globalFont
+            font.capitalization: Font.AllUppercase
+            font.pixelSize: root.sh * 0.027
+        }
+
+        Item {
+            id: gamesSortButton
+            width: gamesCountHeader.implicitWidth + root.sw * 0.02
+            height: gamesCountHeader.implicitHeight + root.sh * 0.012
+
+            Rectangle {
+                id: sortHeaderHighlight
+                objectName: "sortHeaderHighlight" // lab smoke-test handle
+                anchors.fill: parent
+                visible: gamesRoot.sortHeaderFocused
+                color: root.accentColor
+            }
+
+            Text {
+                id: gamesCountHeader
+                objectName: "sortHeader" // lab smoke-test handle
+                anchors.centerIn: parent
+                text: gamesRoot.gameSortLabel
+                color: gamesRoot.sortHeaderFocused ? root.surfaceColor : root.secondaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                font.pixelSize: root.sh * 0.027
+
+                Keys.enabled: true
+                Keys.onReturnPressed: function(event) {
+                    gamesRoot.toggleGameSort()
+                    event.accepted = true
+                }
+                Keys.onUpPressed: function(event) { event.accepted = true } // top of the tab order
+                Keys.onDownPressed: function(event) {
+                    gamesRoot.sortHeaderFocused = false
+                    letterList.forceActiveFocus() // keeps its current letter highlighted
+                    event.accepted = true
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                        gamesRoot.sortHeaderFocused = false
+                        letterList.forceActiveFocus()
+                        event.accepted = true
+                    }
+                }
+            }
+        }
     }
 
     // Loading indicator
@@ -329,6 +390,7 @@ FocusScope {
     // Letter navigation panel (Plex parity)
     ListView {
         id: letterList
+        objectName: "letterList" // lab smoke-test handle
         model: gamesRoot.letterIndex
         visible: gamesRoot.showLetterNav
         opacity: gamesRoot.letterNavActive ? 1.0 : 0.3
@@ -339,14 +401,19 @@ FocusScope {
         clip: true
         focus: false
 
-        Keys.onUpPressed: {
+        Keys.onUpPressed: function(event) {
             if (count === 0) return
             if (currentIndex > 0) {
                 currentIndex--
             } else {
-                currentIndex = count - 1
-                letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
+                // Past the top letter: focus the sort header instead of
+                // wrapping to the bottom. Its Enter toggles Game Sort.
+                gamesRoot.sortHeaderFocused = true
+                gamesCountHeader.forceActiveFocus()
+                event.accepted = true
+                return
             }
+            letterList.positionViewAtIndex(letterList.currentIndex, ListView.Beginning)
             gameList.currentIndex = gamesRoot.letterIndex[currentIndex].firstIndex
             gameList.positionViewAtIndex(gameList.currentIndex, ListView.Beginning)
         }
