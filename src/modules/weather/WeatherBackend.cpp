@@ -22,6 +22,7 @@
 #include <QTimeZone>
 #include <QtMath>
 #include <QDebug>
+#include <cmath>
 
 // The WMO/METAR code mapping is shared with the test suite in WeatherCodes.h;
 // pull the names into scope so the call sites read exactly as before.
@@ -32,9 +33,35 @@ namespace {
 const char *kModuleId   = "com.240mp.weather";
 const char *kForecastUrl = "https://api.open-meteo.com/v1/forecast";
 const char *kGeocodeUrl  = "https://geocoding-api.open-meteo.com/v1/search";
-const char *kNwsPointsUrl = "https://api.weather.gov/points";
+const char *kNwsBaseUrl  = "https://api.weather.gov";
 // Same coordinates, same free API as the forecast call — separate host.
 const char *kAirQualityUrl = "https://air-quality-api.open-meteo.com/v1/air-quality";
+
+// Endpoint overrides for the adversarial loopback suite. Same seam
+// UpdateManager uses for MP240_UPDATE_FEED_URL: unset in production, so the
+// shipped app always talks to the real APIs.
+QString endpointUrl(const char *envName, const char *fallback) {
+    const QString override = qEnvironmentVariable(envName);
+    return override.isEmpty() ? QString::fromLatin1(fallback) : override;
+}
+QString nwsUrl(const QString &suffix) {
+    return endpointUrl("MP240_WEATHER_NWS_URL", kNwsBaseUrl) + suffix;
+}
+
+// Whether the first two comma-separated fields are numbers at all. Used by
+// the LOCATION gate to distinguish a bad coordinate attempt ("nan, nan") from
+// a place name ("Boston, MA") — only the former may be rejected up front.
+bool isNumericPair(const QString &spec, double *lat, double *lon) {
+    const QStringList parts = spec.split(QLatin1Char(','));
+    if (parts.size() < 2) return false;
+    bool okLat = false, okLon = false;
+    const double la = parts.at(0).trimmed().toDouble(&okLat);
+    const double lo = parts.at(1).trimmed().toDouble(&okLon);
+    if (!okLat || !okLon) return false;
+    *lat = la;
+    *lon = lo;
+    return true;
+}
 
 // api.weather.gov answers 403 to requests without a User-Agent, and asks for
 // contact information in it. Qt sends none by default.
@@ -269,6 +296,10 @@ void WeatherBackend::onSettingChanged(const QString &moduleId, const QString &ke
     // Locations table in the old units while its °C/°F heading — which reads
     // config live — had already flipped.
     if (key == QLatin1String("units") && m_resolved) {
+        // AQ is cached in both scales, so fix the label now instead of leaving
+        // the old scale's number under a newly flipped °F/°C heading.
+        applyAirQuality();
+        emit dataChanged();
         fetchWeather();
         fetchOthers();
     }
@@ -559,6 +590,10 @@ bool WeatherBackend::parseCoordLine(const QString &line, double *lat, double *lo
     const double la = parts.at(0).trimmed().toDouble(&okLat);
     const double lo = parts.at(1).trimmed().toDouble(&okLon);
     if (!okLat || !okLon) return false;
+    // QString::toDouble() accepts "nan" and "inf" with ok=true, and NaN slips
+    // through both range comparisons below. Such a line used to be written to
+    // weather_location.txt and requested from the forecast API as latitude=nan.
+    if (!std::isfinite(la) || !std::isfinite(lo)) return false;
     if (la < -90.0 || la > 90.0 || lo < -180.0 || lo > 180.0) return false;
 
     const QString given = parts.mid(2).join(QLatin1Char(',')).trimmed();
@@ -616,6 +651,30 @@ void WeatherBackend::resolveLocation() {
     });
 }
 
+// Everything cached from a previous point belongs to that point. Called on a
+// LOCATION change before the new resolve starts; the epoch makes replies from
+// the old point harmless even if they land after this function returns.
+void WeatherBackend::retireLocationState() {
+    ++m_locationEpoch;
+    m_stations.clear();
+    m_stationsResolved = false;
+    m_obs.clear();
+    m_obsTime = QDateTime();
+    m_obsStation.clear();
+    m_otherStations.clear();
+    m_otherObs.clear();
+    m_otherObsTime.clear();
+    m_otherRowPoint.clear();
+    m_otherIsDay.clear();
+    m_aqiEu = -1.0;
+    m_aqiUs = -1.0;
+    m_hasData = false;
+    m_current.clear();
+    m_forecast.clear();
+    m_almanac.clear();
+    m_otherLocations.clear();
+}
+
 // Applies the LOCATION setting (#37): the picker composed an explicit
 // "lat, lon" spec, so write it as the new primary line of weather_location.txt
 // — same text the conf edit would have carried, extras kept — then re-resolve
@@ -625,6 +684,18 @@ void WeatherBackend::applyLocationSetting(const QString &spec)
 {
     const QString trimmed = spec.trimmed();
     if (trimmed.isEmpty()) return;
+    // Reject a coordinate-shaped spec that is not a coordinate: QString's
+    // toDouble() accepts "nan", and range checks alone do not catch it.
+    double probeLat = 0.0, probeLon = 0.0;
+    if (isNumericPair(trimmed, &probeLat, &probeLon)
+        && (!std::isfinite(probeLat) || !std::isfinite(probeLon)
+            || probeLat < -90.0 || probeLat > 90.0
+            || probeLon < -180.0 || probeLon > 180.0)) {
+        qWarning("[Weather] LOCATION rejected: invalid coordinates \"%s\"",
+                 qPrintable(trimmed));
+        emitError(QStringLiteral("invalid_coordinates"));
+        return;
+    }
 
     QStringList lines = readLocationLines();
     if (lines.isEmpty())
@@ -647,6 +718,10 @@ void WeatherBackend::applyLocationSetting(const QString &spec)
         if (m_refresh) m_refresh->stop();
         m_resolved = false;
     }
+    // Drop the old point's station/observation/AQ/extras caches *before* the
+    // new resolve. Otherwise a still-resolved station list from the old city
+    // is reused and its last observation overwrites the new forecast.
+    retireLocationState();
     resolveLocation();
 }
 
@@ -665,7 +740,7 @@ void WeatherBackend::geocodeLine(const QString &line,
         if (!q.isEmpty()) qualifiers << q;
     }
 
-    QUrl url(QString::fromLatin1(kGeocodeUrl));
+    QUrl url(endpointUrl("MP240_WEATHER_GEOCODE_URL", kGeocodeUrl));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("name"),     name);
     q.addQueryItem(QStringLiteral("count"),    QStringLiteral("10"));
@@ -770,8 +845,9 @@ void WeatherBackend::fetchWeather() {
     if (!m_resolved) return;
     const quint64 requestGeneration = ++m_weatherRequestGeneration;
     const bool us = useUsUnits();
+    const quint64 epoch = m_locationEpoch;
 
-    QUrl url(QString::fromLatin1(kForecastUrl));
+    QUrl url(endpointUrl("MP240_WEATHER_FORECAST_URL", kForecastUrl));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("latitude"),  QString::number(m_lat, 'f', 4));
     q.addQueryItem(QStringLiteral("longitude"), QString::number(m_lon, 'f', 4));
@@ -791,9 +867,11 @@ void WeatherBackend::fetchWeather() {
     url.setQuery(q);
 
     QNetworkReply *reply = m_nam->get(QNetworkRequest(url));
-    connect(reply, &QNetworkReply::finished, this, [this, reply, us, requestGeneration]() {
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, us, requestGeneration, epoch]() {
         reply->deleteLater();
         if (requestGeneration != m_weatherRequestGeneration) return;
+        if (epoch != m_locationEpoch) return;
         if (reply->error() != QNetworkReply::NoError) {
             qWarning("[Weather] fetch failed: %s", qPrintable(reply->errorString()));
             emit fetchError(reply->errorString());
@@ -879,10 +957,9 @@ void WeatherBackend::fetchWeather() {
 // is one.
 void WeatherBackend::resolveStationsFor(double lat, double lon,
                                         const std::function<void(const QStringList &)> &done) {
-    const QUrl url(QStringLiteral("%1/%2,%3")
-                       .arg(QString::fromLatin1(kNwsPointsUrl))
-                       .arg(lat, 0, 'f', 4)
-                       .arg(lon, 0, 'f', 4));
+    const QUrl url(nwsUrl(QStringLiteral("/points/%1,%2")
+                              .arg(lat, 0, 'f', 4)
+                              .arg(lon, 0, 'f', 4)));
 
     QNetworkReply *reply = m_nam->get(nwsRequest(url));
     connect(reply, &QNetworkReply::finished, this, [this, reply, lat, lon, done]() {
@@ -944,8 +1021,8 @@ void WeatherBackend::fetchObservationChain(
     if (index < 0 || index >= stations.size()) { done({}, {}, {}); return; }
     const QString station = stations.at(index);
 
-    const QUrl url(QStringLiteral("https://api.weather.gov/stations/%1/observations/latest")
-                       .arg(station));
+    const QUrl url(nwsUrl(QStringLiteral("/stations/%1/observations/latest")
+                              .arg(station)));
 
     QNetworkReply *reply = m_nam->get(nwsRequest(url));
     connect(reply, &QNetworkReply::finished, this,
@@ -979,7 +1056,12 @@ void WeatherBackend::resolveStations() {
     if (m_stationsResolved || !m_resolved) return;
     m_stationsResolved = true;   // one attempt per location, however it ends
 
-    resolveStationsFor(m_lat, m_lon, [this](const QStringList &stations) {
+    // A LOCATION change invalidates every reply already in flight. Without the
+    // epoch check, a station list from the old city lands after the new point
+    // resolves and its observation is overlaid on the new forecast.
+    const quint64 epoch = m_locationEpoch;
+    resolveStationsFor(m_lat, m_lon, [this, epoch](const QStringList &stations) {
+        if (epoch != m_locationEpoch) return;
         m_stations = stations;
         if (m_stations.isEmpty()) return;
         qInfo("[Weather] observation stations: %s", qPrintable(m_stations.join(", ")));
@@ -989,9 +1071,11 @@ void WeatherBackend::resolveStations() {
 
 void WeatherBackend::fetchObservation() {
     if (m_stations.isEmpty()) return;
+    const quint64 epoch = m_locationEpoch;
     fetchObservationChain(m_stations, 0,
-                          [this](const QVariantMap &obs, const QDateTime &stamp,
+                          [this, epoch](const QVariantMap &obs, const QDateTime &stamp,
                                  const QString &station) {
+        if (epoch != m_locationEpoch) return;
         if (obs.isEmpty()) return;   // every station tried; keep the model's values
         m_obs        = obs;
         m_obsTime    = stamp;
@@ -1061,7 +1145,7 @@ void WeatherBackend::applyObservation() {
 // answer without the layers we ask for, and the line simply never appears.
 void WeatherBackend::fetchAirQuality() {
     if (!m_resolved) return;
-    QUrl url(QString::fromLatin1(kAirQualityUrl));
+    QUrl url(endpointUrl("MP240_WEATHER_AIR_QUALITY_URL", kAirQualityUrl));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("latitude"),  QString::number(m_lat, 'f', 4));
     q.addQueryItem(QStringLiteral("longitude"), QString::number(m_lon, 'f', 4));
@@ -1069,9 +1153,11 @@ void WeatherBackend::fetchAirQuality() {
                    QStringLiteral("european_aqi,us_aqi"));
     url.setQuery(q);
 
+    const quint64 epoch = m_locationEpoch;
     QNetworkReply *reply = m_nam->get(QNetworkRequest(url));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, epoch]() {
         reply->deleteLater();
+        if (epoch != m_locationEpoch) return;
         if (reply->error() != QNetworkReply::NoError) {
             qWarning("[Weather] air-quality fetch failed: %s",
                      qPrintable(reply->errorString()));
@@ -1083,28 +1169,35 @@ void WeatherBackend::fetchAirQuality() {
             qWarning("[Weather] air-quality response has no current object");
             return;
         }
-        const bool us = useUsUnits();
-        // A layer the model lacks arrives as null; toDouble() would read that
-        // as a deceiving zero, so presence is checked before the value.
-        const QString layer = us ? QStringLiteral("us_aqi")
-                                 : QStringLiteral("european_aqi");
-        if (!cur.contains(layer) || cur[layer].isNull()) {
-            qInfo("[Weather] air-quality layer '%s' not offered for this location",
-                  layer.toUtf8().constData());
+        // Keep both scales raw. The Units setting picks the label at display
+        // time, so a units flip can reformat instantly with no stale scale.
+        const auto layer = [&cur](const char *key) -> double {
+            const QJsonValue v = cur.value(QLatin1String(key));
+            return (v.isNull() || !v.isDouble()) ? -1.0 : v.toDouble();
+        };
+        const double eu = layer("european_aqi");
+        const double us = layer("us_aqi");
+        if (eu < 0.0 && us < 0.0) {
+            qInfo("[Weather] air-quality layers not offered for this location");
             return;
         }
-        const double v = cur[layer].toDouble();
-        m_airQuality = us
-            ? QStringLiteral("%1 %2").arg(qRound(v)).arg(aqiCategoryUs(v))
-            : QStringLiteral("%1 %2").arg(v, 0, 'f', 1).arg(aqiCategoryEu(v));
+        m_aqiEu = eu;
+        m_aqiUs = us;
         applyAirQuality();
     });
 }
 
 void WeatherBackend::applyAirQuality() {
     if (m_current.isEmpty()) return;
-    if (m_airQuality.isEmpty()) m_current.remove(QStringLiteral("airQuality"));
-    else m_current[QStringLiteral("airQuality")] = m_airQuality;
+    const bool us = useUsUnits();
+    const double v = us ? m_aqiUs : m_aqiEu;
+    if (v < 0.0) {
+        m_current.remove(QStringLiteral("airQuality"));
+        return;
+    }
+    m_current[QStringLiteral("airQuality")] = us
+        ? QStringLiteral("%1 %2").arg(qRound(v)).arg(aqiCategoryUs(v))
+        : QStringLiteral("%1 %2").arg(v, 0, 'f', 1).arg(aqiCategoryEu(v));
 }
 
 void WeatherBackend::buildForecast(const QJsonObject &daily) {
@@ -1295,7 +1388,7 @@ void WeatherBackend::fetchOthers() {
         lons << QString::number(m["lon"].toDouble(), 'f', 4);
     }
 
-    QUrl url(QString::fromLatin1(kForecastUrl));
+    QUrl url(endpointUrl("MP240_WEATHER_FORECAST_URL", kForecastUrl));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("latitude"),  lats.join(QLatin1Char(',')));
     q.addQueryItem(QStringLiteral("longitude"), lons.join(QLatin1Char(',')));

@@ -125,13 +125,18 @@ private:
     QJsonObject moduleConfig() const;
     bool        useUsUnits() const;
 
-    // Open-Meteo air-quality companion to fetchWeather(): a display-ready
-    // string ("42 GOOD" / "3.6 MODERATE"), empty when the model lacks the
-    // layer. applyAirQuality() re-inserts it after any current-map rebuild,
-    // same as applyObservation() does for stations.
+    // Raw AQ values (metric EU scale and US scale) so a units change reformats
+    // immediately instead of leaving the previous scale's number on screen.
+    // -1 means "no reading from this scale yet".
     void fetchAirQuality();
     void applyAirQuality();
-    QString m_airQuality;
+    double m_aqiEu = -1.0;
+    double m_aqiUs = -1.0;
+
+    // A LOCATION change retires everything derived from the old point: station
+    // cache, last observation, extras, air quality and displayed data. The
+    // epoch also invalidates replies already in flight from that point.
+    void retireLocationState();
 
     void resolveLocation();
     // Applies the LOCATION setting: rewrite the primary line of
@@ -196,6 +201,10 @@ private:
     // that finish out of order cannot overwrite the newest snapshot.
     quint64 m_weatherRequestGeneration = 0;
     quint64 m_otherRequestGeneration = 0;
+    // Incremented only by a LOCATION change. Async replies capture it so a
+    // superseded point can never write its station/observation/AQ data into
+    // the new point's snapshot.
+    quint64 m_locationEpoch = 0;
 
     // Resolved location, cached for the life of the process. Deliberately not
     // persisted: the project writes config.json only on direct user
