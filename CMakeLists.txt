@@ -290,6 +290,21 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # Ambient Mode backend: filesystem scans, settings fallback and companion
+    # audio process lifecycle. QtCore only; a fake `mpv` on PATH stands in for
+    # the real player so the suite never touches audio hardware.
+    add_executable(ambient-mode-tests
+        src/modules/ambient_mode/tests/AmbientModeBackendTest.cpp
+        src/modules/ambient_mode/AmbientModeBackend.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(ambient-mode-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(ambient-mode-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(ambient-mode-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ambient-mode-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME ambient-mode COMMAND ambient-mode-tests)
+
     # pi-rc decide-mode regression (issue #91): pure shell logic, no Qt/display.
     # Pins that a closed-unmerged PR with a matching pr-N marker selects MODE=restore
     # instead of silently skipping. Runs in both CI lanes via the existing ctest steps.
@@ -521,6 +536,9 @@ endif()
 
 # Plex Player retry smoke: drives the failed-direct-play -> transcode fallback
 # offscreen with stubbed backends and checks mpv gets transcode-shaped tracks.
+# Local Files Player smoke: loads the real Player.qml offscreen with stub
+# backends and checks the exact flags handed to mpv. Guards the legacy "OFF"
+# toggle string and playlist resume with a saved item index but zero time.
 if(BUILD_TESTS)
     add_executable(plex-player-smoke src/tests/plex-player-smoke-test.cpp)
     set_target_properties(plex-player-smoke PROPERTIES AUTOMOC ON)
@@ -530,6 +548,14 @@ if(BUILD_TESTS)
     set(MP240_PLEX_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
     add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
+
+    add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
+    set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-player-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
