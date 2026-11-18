@@ -50,6 +50,15 @@ jobs:
       AGENT_TOK: ${{ secrets.AGENT_GH_TOKEN }}
 
     steps:
+      # The decide helper is a repo script, so it must be on disk before the
+      # decide step. For pull_request events (opened/labeled/synchronize/closed)
+      # the PR-head SHA is the ref whose pi-rc.yml defines this run — using it
+      # keeps the helper and the workflow definition from the same commit.
+      - name: Checkout PR head (decide helper)
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
       - name: Stage identity key (key-only auth, no password secrets)
         run: |
           umask 077
@@ -61,33 +70,32 @@ jobs:
       - name: Decide mode + target ref (rc = PR head, restore = Pi's saved rev)
         run: |
           PR='${{ github.event.pull_request.number }}'
+          ACTION='${{ github.event.action }}'
           post_comment() { local b resp code; b=$(cat); resp=$(jq -n --arg b "$b" '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/$PR/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; return 1; }; }
-          echo "PR=$PR" >> $GITHUB_ENV
-          echo "PR_NUM=pr-$PR" >> $GITHUB_ENV
-          if [ '${{ github.event.action }}' != 'closed' ]; then
-            echo "MODE=rc" >> $GITHUB_ENV
-            echo "REF=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+          # Delegate the decision to a repo script with unit tests (issue #91).
+          # NEVER write PR_NUM to $GITHUB_ENV and then read $PR_NUM in this same
+          # step: GITHUB_ENV only exports to LATER steps, so $PR_NUM here was an
+          # unset (empty) shell var and a matching `pr-N` marker always read as
+          # a mismatch -> MODE=skip silently won on PRs #89 and #90.
+          if [ "$ACTION" != 'closed' ]; then
+            bash scripts/pi-rc-decide.sh "$ACTION" "$PR" "" "" >> "$GITHUB_ENV"
+            echo "REF=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_ENV"
             exit 0
           fi
+
           # closed & unmerged: only this PR gets restored, and only if it
           # actually RC-deployed (marker carries the owning PR number).
           SSH_HOST='${{ secrets.PI_SSH_HOSTNAME }}'
           SSH_USER='${{ secrets.PI_SSH_USERNAME }}'
           SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $SSH_USER@$SSH_HOST"
           RC_PR=$($SSH "cat \$HOME/.240mp-rc-deployed-pr 2>/dev/null" || true)
-          if [ "$RC_PR" != "$PR_NUM" ]; then
-            echo "This PR never RC-deployed (or a later RC owns the Pi) — nothing to restore."
-            echo "MODE=skip" >> $GITHUB_ENV
-            exit 0
-          fi
           REV=$($SSH "cat \$HOME/.240mp-rc-restore-rev 2>/dev/null" || true)
-          if [ -z "$REV" ]; then
+          echo "RC marker read from Pi: '$RC_PR' (want 'pr-$PR'); restore rev: '$REV'"
+          DECISION=$(bash scripts/pi-rc-decide.sh "$ACTION" "$PR" "$RC_PR" "$REV")
+          echo "$DECISION" >> "$GITHUB_ENV"
+          if echo "$DECISION" | grep -q '^SKIP_REASON=unknown-rev$'; then
             echo "PR closed without merge but the Pi carried its RC build; **auto-restore target unknown** — land beta manually: ./scripts/deploy-pi.sh --latest beta" | post_comment
-            echo "MODE=skip" >> $GITHUB_ENV
-            exit 0
           fi
-          echo "MODE=restore" >> $GITHUB_ENV
-          echo "REF=$REV" >> $GITHUB_ENV
 
       - name: Checkout PR head (rc mode)
         if: env.MODE == 'rc'
@@ -110,8 +118,12 @@ jobs:
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+          # APP_VERSION is set by the tested decide helper: "<PR>-pi-rc" for an
+          # RC deploy, or the saved official rev for a restore. The latter is
+          # what ci.yml stamps on the beta build (github.sha), so the restored
+          # binary is byte-identical to official beta, md5 included.
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ github.event.pull_request.number }}-pi-rc"
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
           cmake --build build --parallel
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
@@ -159,14 +171,12 @@ jobs:
             fi
             OFFICIAL=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
             [ -n "$OFFICIAL" ] && $SSH "echo $OFFICIAL > \$HOME/.240mp-rc-restore-rev" || true
-          else
-            CUR=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
-            if [ "$CUR" = "$REF" ]; then
-              $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" || true
-              echo "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot." | post_comment
-              exit 0
-            fi
           fi
+          # Restore mode ALWAYS redeploys. The decide step already confirmed
+          # this PR owns the Pi's RC marker, and RC deploys deliberately never
+          # touch .240mp-last-deployed-rev — so the old "official marker still
+          # equals REF" fast path fired for every real RC build and cleared the
+          # markers while leaving the RC binary installed (issue #91).
 
           PI_PATH="/tmp/240mp-rc-$REF.tar.gz"
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \

@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — CI: closing a pi-test PR unmerged now restores the Pi even when its RC marker matches
+- The `pi-rc.yml` "Decide mode" step wrote `PR_NUM=pr-N` to `$GITHUB_ENV` and then compared the Pi's marker against `$PR_NUM` **in the same step**, where that name was still an unset shell variable (empty). A matching `pr-N` marker therefore always read as a mismatch, so closed-unmerged PRs #89 and #90 silently chose `MODE=skip` and left the RC build on the Pi despite a valid saved beta rev (issue #91).
+- The decision is now a repo script (`scripts/pi-rc-decide.sh`) that computes `pr-N` from its argument, with the marker and saved rev passed in by the caller over SSH. The workflow runs that tested script and writes its output to `$GITHUB_ENV`; the marker read is also logged for diagnosis.
+- `scripts/pi-rc-decide-test.sh` (registered as CTest `pi-rc-decide`, so both CI lanes run it) covers matching-marker restore, later-owner mismatch, missing rev, no marker, non-closed rc mode, and a stale `PR_NUM` in the environment. A stale env value can no longer produce a false skip.
+- A second bug surfaced in the real-PR proof: restore treated "official marker still equals the saved rev" as "the Pi was never displaced" and skipped the redeploy. RC deploys deliberately never touch the official marker, so that fast path fired for every real RC build — it cleared the RC markers but left the RC binary installed. Restore now always redeploys the saved rev.
+- The restore build stamps the binary with the saved rev, exactly as `ci.yml` stamps the beta build with `github.sha`, so the restored binary is byte-identical to official beta (md5 included) rather than carrying a `-pi-rc` version string.
+
 ### Added — RetroArch: the sort header is now a control in every list view
 - In **Games** and **RECENTLY PLAYED**, pressing **Up** on the first letter of the letter strip moves focus to the `N GAMES · A-Z/Z-A` header instead of wrapping to the last letter. **Down** returns to the same highlighted letter, **Enter** toggles Game Sort and persists it through the normal setting, and only the direction word (`A-Z`/`Z-A`) highlights on focus — the `N GAMES ·` prefix stays plain text.
 - **Playlists** gets the same control for its `playlist_sort` setting: **Up** from the first row focuses the `N PLAYLISTS · SYSTEM/COMPANY` header, **Enter** toggles and persists the sort, **Down** returns to the list, and only the direction word highlights. All RetroArch list views now share the same contract.
