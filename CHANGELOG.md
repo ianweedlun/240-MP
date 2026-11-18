@@ -4,6 +4,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — YouTube: in-process Innertube resolver replaces the per-play yt-dlp spawn
+- The cold-play resolve was a `yt-dlp -g` subprocess (~5 s on the Pi). It is now an in-process Innertube Player request against the public IOS client (`com.google.ios.youtube/20.10.4`), built on `third_party/innertube-qt` with vendored verdigris and expected-lite, so the build needs no network fetch. The spike measured 172–385 ms; a lab probe of the new wrapper measured 180–216 ms, and the returned itag 135 (480p H.264) + itag 140 (m4a) URLs answered **HTTP 206** with the right MIME from a `Range` request.
+- Stream selection is a pure, unit-tested function (`src/util/YtStreamSelect.h`, new `yt-stream-select` CTest): the tallest H.264 track at or under the resolution cap, itag 140 preferred for audio, a muxed single stream only when no audio-only track exists, and expiry taken from the URL's own `expire=` with the response's `expiresInSeconds` as fallback.
+- The yt-dlp path is kept as a fallback for one release: a key gets exactly one Innertube attempt, then the spawn owns it — no retry loop, never two resolvers at once. The fallback's elapsed figure is backdated to the original launch, so the state log shows the whole ladder.
+- The warm pass now covers a whole list page (was the front 12 rows; queue cap 24 → 64), and the highlighted row warms its URL pair on every focus change, so a cold pick can still take the direct path. Both are idempotent: already-fresh, in-flight, or queued rows are skipped.
+- The Player's bounded resolve wait drops from 15 s to 4 s — the in-process resolve answers in well under a second, so a dead network reaches mpv's ytdl hook sooner.
+- New `yt-resolve vid=… source=… ms=…` state-log lines (source = `innertube`, `ytdlp`, `cache`, or a failure class) make the win measurable on the Pi from `/tmp/240mp_state.log`.
+- Gates: `yt-stream-select` unit suite, `youtube-player-smoke` (23 assertions over the real `Player.qml`), full `ctest` 27/27 green locally, and the real app starts offscreen and shuts down cleanly. No owner CRT yet — implemented, unvalidated.
+
 ### Changed — YouTube: SponsorBlock no longer gates playback launch
 - The Player's cold path held first frame for up to 6 s waiting for `sponsorReady`. The hold, `launchAfterSponsor` and the 6 s `sponsorWaitTimer` are gone: `onPlaybackUrlReady` now launches on the stream URL pair alone, so an unreachable `sponsor.ajay.app` adds zero wait to first frame. The EDL is frozen from whatever is cached at the launch instant; a window that lands later is cached and applies on the **next** play (no live re-apply, per the card's accepted gap).
 - Segment windows are prefetched for the **whole list page** (not just the 12 URL-warmed rows) and for the focused row on every highlight change, so the common cold play already has its EDL on file. The bulk prefetch is bounded (50) and the focus prefetch covers anything past it while scrolling.
