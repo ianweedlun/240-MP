@@ -12,15 +12,18 @@ namespace InnertubeObjects
             return InnertubeString(content);
 
         using namespace Qt::StringLiterals;
-        static const QHash<QLatin1String, QFont::Weight> weightMap = {
-            { "FONT_WEIGHT_THIN"_L1, QFont::Thin },
-            { "FONT_WEIGHT_EXTRA_LIGHT"_L1, QFont::ExtraLight },
-            { "FONT_WEIGHT_LIGHT"_L1, QFont::Light },
-            { "FONT_WEIGHT_MEDIUM"_L1, QFont::Medium },
-            { "FONT_WEIGHT_SEMI_BOLD"_L1, QFont::DemiBold },
-            { "FONT_WEIGHT_BOLD"_L1, QFont::Bold },
-            { "FONT_WEIGHT_EXTRA_BOLD"_L1, QFont::ExtraBold },
-            { "FONT_WEIGHT_BLACK"_L1, QFont::Black }
+        // Keyed by QString, not QLatin1String: the lookup passes a QString, and
+        // older Qt (the CI runner's) has no QString->QLatin1String conversion
+        // for QHash::value(), so the _L1-keyed map fails to compile there.
+        static const QHash<QString, QFont::Weight> weightMap = {
+            { QStringLiteral("FONT_WEIGHT_THIN"), QFont::Thin },
+            { QStringLiteral("FONT_WEIGHT_EXTRA_LIGHT"), QFont::ExtraLight },
+            { QStringLiteral("FONT_WEIGHT_LIGHT"), QFont::Light },
+            { QStringLiteral("FONT_WEIGHT_MEDIUM"), QFont::Medium },
+            { QStringLiteral("FONT_WEIGHT_SEMI_BOLD"), QFont::DemiBold },
+            { QStringLiteral("FONT_WEIGHT_BOLD"), QFont::Bold },
+            { QStringLiteral("FONT_WEIGHT_EXTRA_BOLD"), QFont::ExtraBold },
+            { QStringLiteral("FONT_WEIGHT_BLACK"), QFont::Black }
         };
 
         const QJsonArray commandRunsArr = commandRuns.toArray();
