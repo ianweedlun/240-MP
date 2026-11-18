@@ -181,6 +181,16 @@ static QObject *loadView(QQmlEngine &engine, StubBackend &backend,
     return obj;
 }
 
+// Qt 6.11 offscreen: a ListView ignores the first currentIndex write until its
+// delegates exist. Prime with a no-op write + event turn so index assertions in
+// this harness exercise the view's real selection, not a stale index 0.
+static void primeListIndex(QObject *list, int index) {
+    QQmlProperty prop(list, QStringLiteral("currentIndex"));
+    prop.write(index);
+    QCoreApplication::processEvents();
+    QQmlProperty::write(list, QStringLiteral("currentIndex"), index);
+}
+
 static void sendKey(QObject *target, Qt::Key key) {
     QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
     QCoreApplication::sendEvent(target, &event);
@@ -220,6 +230,7 @@ int main(int argc, char **argv) {
         QObject *preview = view->findChild<QObject *>("previewLoader");
         QObject *strip = view->findChild<QObject *>("letterList");
         QObject *list = view->findChild<QObject *>("recentList");
+        if (list) primeListIndex(list, 0);
         check(preview != nullptr && strip != nullptr && list != nullptr,
               "preview / strip / list objects exist");
         if (preview) {
@@ -326,6 +337,7 @@ int main(int argc, char **argv) {
               "header splits count and sort direction (N GAMES · Z-A)");
         QObject *list = view->findChild<QObject *>("recentList");
         QObject *strip = view->findChild<QObject *>("letterList");
+        if (list) primeListIndex(list, 0);
         if (list) {
             QVariantList model = QQmlProperty::read(list, "model").toList();
             check(!model.isEmpty() && model.first().toMap().value("name").toString()
@@ -333,7 +345,7 @@ int main(int argc, char **argv) {
                   "Z-A list starts at the descending end of the alphabet");
         }
         if (list && strip) {
-            QQmlProperty::write(list, "currentIndex", 4); // "007 Goldeneye" -> '#'
+            primeListIndex(list, 4); // "007 Goldeneye" -> '#'
             bool invoked = QMetaObject::invokeMethod(view, "syncLetterToGame");
             check(invoked && QQmlProperty::read(strip, "currentIndex").toInt() == 4,
                   "Z-A row selection syncs the strip to the matching bucket");
