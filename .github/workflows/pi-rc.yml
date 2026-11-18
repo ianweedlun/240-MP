@@ -149,7 +149,7 @@ jobs:
       # .240mp-rc-deployed-md5 checkable; the build-only lane's artifact is not.
       - name: Upload RC tarball (sha-addressed artifact)
         if: env.MODE != 'skip'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz
@@ -360,7 +360,7 @@ jobs:
 
       - name: Upload burst tarball (sha-addressed, md5-checkable)
         if: steps.burst_decide.outputs.skip != '1'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz
@@ -502,7 +502,7 @@ jobs:
           echo "ARTIFACT_SHA=$(git rev-parse --short=12 HEAD)" >> $GITHUB_ENV
 
       - name: Upload tarball (build-only artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-buildonly-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz
