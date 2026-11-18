@@ -41,8 +41,14 @@ QString AmbientModeBackend::mediaRoot() const
 void AmbientModeBackend::setMediaRoot(const QString &path)
 {
     // An empty (reset) setting means back to the dataRoot/ambient default.
-    m_mediaRoot = path.isEmpty() ? m_dataRoot + "/ambient" : path;
-    QDir().mkpath(m_mediaRoot);
+    // cleanPath keeps a trailing separator from becoming a distinct "library".
+    const bool isDefault = path.isEmpty();
+    m_mediaRoot = QDir::cleanPath(isDefault ? m_dataRoot + "/ambient" : path);
+    // Only the built-in default is created on demand. A user-picked path is
+    // browse-to-existing; mkdir'ing a typo'd or unmounted one would silently
+    // hide that the configured library is unavailable.
+    if (isDefault)
+        QDir().mkpath(m_mediaRoot);
     qDebug("[AmbientMode] media root: %s", qPrintable(m_mediaRoot));
 }
 
@@ -125,6 +131,17 @@ void AmbientModeBackend::stopAudio()
 
 void AmbientModeBackend::onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value)
 {
-    if (moduleId == QLatin1String("com.240mp.ambient_mode") && key == QLatin1String("media_directory"))
-        setMediaRoot(value.toString());
+    if (moduleId != QLatin1String("com.240mp.ambient_mode") || key != QLatin1String("media_directory"))
+        return;
+
+    const QString path = value.toString();
+    const QString resolved = QDir::cleanPath(path.isEmpty() ? m_dataRoot + "/ambient" : path);
+    if (resolved == QDir::cleanPath(m_mediaRoot))
+        return; // cosmetic change (e.g. trailing slash) — keep playing
+
+    // Companion audio was launched from the OLD library. A library swap leaves
+    // those mpv processes orphaned forever otherwise: Player.qml only stops them
+    // on playbackEnded, which never fires while the old clips keep looping.
+    stopAudio();
+    setMediaRoot(path);
 }
