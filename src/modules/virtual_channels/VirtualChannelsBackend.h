@@ -259,6 +259,11 @@ public:
     // removals (seed_preset_channel again) without the recipe deciding what
     // airs by itself.
     Q_INVOKABLE void seed_preset_channel(int channelNumber);
+    // Leaving the add-preset view mid-seed destroys the only object that was
+    // going to delete a channel with no picks. Tell the backend to own that
+    // cleanup instead; a re-seed from the channel's own settings never calls
+    // this, so an existing channel is not removed when its recipe goes empty.
+    Q_INVOKABLE void cancel_preset_seed(int channelNumber);
     Q_INVOKABLE bool seed_active() const { return m_seedActive; }
 
     Q_INVOKABLE QVariantList channel_interstitials(int channelNumber);
@@ -564,6 +569,11 @@ private:
                                         // once the picks land (the seed pass
                                         // reads the recipe with them set aside)
     void     finishSeeding();
+    // Every failing seed answer goes through here: when the add-preset view
+    // has already gone away, remove the channel it created instead of leaving
+    // an empty position on the dial.
+    void     reportSeedFailure(int channelNumber, const QString &message);
+    bool     m_seedDiscardOnEmpty = false;
     struct PendingItem { QString absPath; QString rel; vchan::SlotKind kind;
                          int apptIndex = -1;
                          int pack = -1;

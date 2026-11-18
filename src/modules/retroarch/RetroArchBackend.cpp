@@ -99,11 +99,10 @@ void RetroArchBackend::loadSettings() {
 }
 
 // ── Live setting changes ─────────────────────────────────────────────────────
-// AppCore::registerBackend connects appCore.moduleSettingChanged to this slot
-// (same pattern as LocalFiles/Weather). Without it, m_playlistSort keeps
-// whatever the boot-time loadSettings() read, and every "live" refresh —
-// including fresh views created after Settings changes — silently re-sorts
-// with the stale value.
+// AppCore::save_setting invokes this slot directly, synchronously, before it
+// emits moduleSettingChanged. Views refresh on that signal and read these
+// members immediately, so a late update here leaves their headers stale.
+// Without it, the sort members keep whatever boot-time loadSettings() read.
 void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &key,
                                         const QVariant &value)
 {

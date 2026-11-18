@@ -12,6 +12,7 @@
 #include <QQueue>
 #include <QNetworkAccessManager>
 #include "../../util/YtSponsorEdl.h"
+#include "../../util/YtPendingReplay.h"
 
 // Backend for the YouTube module (V1 "feed" approach — no auth).
 //
@@ -289,9 +290,8 @@ private:
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
     QHash<QString, qint64> m_resolveStartMs; // key -> launch ms, for the journal elapsed figure
-    QString              m_pendingListKind; // account list re-entered after a refresh swap
-    QString       m_pendingPlaylistVideos;  // playlist-videos id re-entered after refresh
-    QString       m_accountVideosEmitId;    // id echoed back in playlistVideosLoaded
+    ytui::PendingReplay m_pendingReplay; // requests deferred behind an OAuth swap
+    QString             m_accountVideosEmitId;    // id echoed back in playlistVideosLoaded
     bool                hasFreshUrlPair(const QString &key) const;
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form
@@ -304,7 +304,6 @@ private:
     QString m_accessToken, m_refreshToken;
     qint64 m_accessExpiresEpoch = 0;   // epoch seconds; 0 = unknown
     bool   m_refreshInFlight = false;  // one token swap at a time (replay flags ride it)
-    bool   m_pendingFeChannels = false; // FEchannels deferred behind an in-flight refresh
     bool   mAuthLoaded = false;        // lazy one-time youtube_auth.json read
     bool   m_pairActive = false;       // a device-flow poll loop is running
     QString m_pairDeviceCode;

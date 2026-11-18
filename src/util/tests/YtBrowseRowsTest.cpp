@@ -153,6 +153,9 @@ private slots:
     void channelSyncTvTilesOnlyChannels();
     void channelSyncWebRendererAndParamsId();
     void thumbnailUrlTilesWithoutContentId();
+    void rowsFollowDocumentOrderAcrossDepths();
+    void playlistRowsFollowDocumentOrderAcrossDepths();
+    void channelSyncRowsFollowDocumentOrderAcrossDepths();
 };
 
 void YtBrowseRowsTest::extractRowsInDocumentOrder()
@@ -649,6 +652,104 @@ void YtBrowseRowsTest::channelSyncWebRendererAndParamsId()
     QCOMPARE(rows[0].toMap().value(QStringLiteral("channelId")), QStringLiteral("UCqTVfT5xTF_dYdZfVYVHLux"));
     QCOMPARE(rows[1].toMap().value(QStringLiteral("title")), QStringLiteral("Fallback Channel"));
     QVERIFY(rows[1].toMap().value(QStringLiteral("channelId")).toString().startsWith(QStringLiteral("UCmQx7xwYH0oXvQ")));
+}
+
+void YtBrowseRowsTest::rowsFollowDocumentOrderAcrossDepths()
+{
+    // Deep shelf row comes first in the contents array; a shallower row comes
+    // second. Display order follows the array, not the nesting depth.
+    QJsonArray deepRows;
+    deepRows.append(wrapRenderer(makeRenderer(QStringLiteral("aaaaaaaaaaa"),
+                                              QStringLiteral("A"), QStringLiteral("Chan A"), false)));
+    QJsonObject shelfInner;
+    shelfInner.insert(QStringLiteral("contents"), deepRows);
+    QJsonObject shelf;
+    shelf.insert(QStringLiteral("shelfRenderer"), shelfInner);
+
+    QJsonObject shallow;
+    QJsonArray shallowRows;
+    shallowRows.append(wrapRenderer(makeRenderer(QStringLiteral("bbbbbbbbbbb"),
+                                                 QStringLiteral("B"), QStringLiteral("Chan B"), false)));
+    shallow.insert(QStringLiteral("contents"), shallowRows);
+
+    QJsonArray top;
+    top.append(shelf);
+    top.append(shallow);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), top);
+
+    const QVariantList rows = ytui::extractBrowseRows(root, 10);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("videoId")).toString(), QStringLiteral("aaaaaaaaaaa"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("videoId")).toString(), QStringLiteral("bbbbbbbbbbb"));
+}
+
+void YtBrowseRowsTest::playlistRowsFollowDocumentOrderAcrossDepths()
+{
+    auto plRow = [](const QString &id) {
+        QJsonObject r;
+        r.insert(QStringLiteral("playlistId"), id);
+        r.insert(QStringLiteral("title"), simpleText(id));
+        QJsonObject w;
+        w.insert(QStringLiteral("playlistRenderer"), r);
+        return w;
+    };
+    QJsonArray deep;
+    deep.append(plRow(QStringLiteral("PLdeep111111111")));
+    QJsonObject shelfInner;
+    shelfInner.insert(QStringLiteral("contents"), deep);
+    QJsonObject shelf;
+    shelf.insert(QStringLiteral("shelfRenderer"), shelfInner);
+
+    QJsonObject shallow;
+    QJsonArray shallowRows;
+    shallowRows.append(plRow(QStringLiteral("PLshallow2222")));
+    shallow.insert(QStringLiteral("contents"), shallowRows);
+
+    QJsonArray top;
+    top.append(shelf);
+    top.append(shallow);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), top);
+
+    const QVariantList rows = ytui::extractPlaylistRows(root, 10);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("playlistId")).toString(), QStringLiteral("PLdeep111111111"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("playlistId")).toString(), QStringLiteral("PLshallow2222"));
+}
+
+void YtBrowseRowsTest::channelSyncRowsFollowDocumentOrderAcrossDepths()
+{
+    auto chan = [](const QString &id) {
+        QJsonObject r;
+        r.insert(QStringLiteral("channelId"), id);
+        r.insert(QStringLiteral("title"), simpleText(id));
+        QJsonObject w;
+        w.insert(QStringLiteral("channelRenderer"), r);
+        return w;
+    };
+    QJsonArray deep;
+    deep.append(chan(QStringLiteral("UCdeep111111111111111111")));
+    QJsonObject shelfInner;
+    shelfInner.insert(QStringLiteral("contents"), deep);
+    QJsonObject shelf;
+    shelf.insert(QStringLiteral("shelfRenderer"), shelfInner);
+
+    QJsonArray shallow;
+    shallow.append(chan(QStringLiteral("UCshallow2222222222222")));
+
+    QJsonArray top;
+    top.append(shelf);
+    top.append(shallow);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), top);
+
+    const QVariantList rows = ytui::extractChannelSyncRows(root);
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("channelId")).toString(),
+             QStringLiteral("UCdeep111111111111111111"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("channelId")).toString(),
+             QStringLiteral("UCshallow2222222222222"));
 }
 
 QTEST_MAIN(YtBrowseRowsTest)

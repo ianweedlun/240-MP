@@ -336,6 +336,23 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-codes COMMAND weather-tests)
 
+    # WeatherBackend against a loopback fake of all four weather APIs. Env-var
+    # endpoint overrides (the same seam UpdateManager uses for its feed) make
+    # races and stale-cache cases reproducible without touching the network.
+    add_executable(weather-backend-tests
+        src/modules/weather/tests/WeatherBackendTest.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(weather-backend-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-backend-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    target_include_directories(weather-backend-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-backend-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-backend COMMAND weather-backend-tests)
+
     # AppCore -> weather module proxy (issue #53): app-level views load outside
     # the weather module's QQml scope where the module-scope "weatherBackend"
     # context property is null. The location reads are proxied through appCore,
@@ -355,6 +372,31 @@ if(BUILD_TESTS)
         target_compile_options(appcore-weather-proxy-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME appcore-weather-proxy COMMAND appcore-weather-proxy-tests)
+
+    # Issue #85: AppCore::save_setting must push a setting into backends before
+    # it emits moduleSettingChanged, because view handlers refresh on that
+    # signal and read the backend immediately. Uses real AppCore + real
+    # RetroArchBackend; no QML, no network (QGuiApplication for offscreen Qt).
+    add_executable(appcore-setting-order-tests
+        src/AppCore.cpp
+        src/modules/retroarch/RetroArchBackend.cpp
+        src/modules/retroarch/RecentGamesStore.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/tests/AppCoreSettingOrderTest.cpp)
+    set_target_properties(appcore-setting-order-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-setting-order-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(appcore-setting-order-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(appcore-setting-order-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-setting-order-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
 
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
@@ -490,6 +532,41 @@ if(BUILD_TESTS)
     set(MP240_RECENT_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
+
+    # Current conditions row parity: Metric and US must both show PRESSURE.
+    add_executable(weather-current-smoke src/tests/weather-current-smoke-test.cpp)
+    set_target_properties(weather-current-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-current-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_include_directories(weather-current-smoke PRIVATE src)
+    set(MP240_WEATHER_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(weather-current-smoke PRIVATE ${MP240_WEATHER_ROOT_DEF})
+    add_test(NAME weather-current-smoke COMMAND weather-current-smoke)
+    set_tests_properties(weather-current-smoke PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+endif()
+
+# Plex Player retry smoke: drives the failed-direct-play -> transcode fallback
+# offscreen with stubbed backends and checks mpv gets transcode-shaped tracks.
+# Local Files Player smoke: loads the real Player.qml offscreen with stub
+# backends and checks the exact flags handed to mpv. Guards the legacy "OFF"
+# toggle string and playlist resume with a saved item index but zero time.
+if(BUILD_TESTS)
+    add_executable(plex-player-smoke src/tests/plex-player-smoke-test.cpp)
+    set_target_properties(plex-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(plex-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_include_directories(plex-player-smoke PRIVATE src)
+    set(MP240_PLEX_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
+    add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
+
+    add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
+    set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-player-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
@@ -569,6 +646,18 @@ if(BUILD_TESTS)
         target_compile_options(yt-auth-gate-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME yt-auth-gate COMMAND yt-auth-gate-tests)
+
+    # OAuth refresh replay state (youtube torture 2026-11-18): a marker is
+    # set only while a request is deferred; live requests clear their own.
+    # Pure state machine, no processes/network.
+    add_executable(yt-pending-replay-tests
+        src/util/tests/YtPendingReplayTest.cpp)
+    set_target_properties(yt-pending-replay-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-pending-replay-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-pending-replay-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-pending-replay COMMAND yt-pending-replay-tests)
 
     # InnerTube browse-row parser (issue #28 plan D): pure fixture walk —
     # renderer extraction, text-shape handling, caps, continuation cursors.

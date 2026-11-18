@@ -65,6 +65,14 @@ FocusScope {
         virtualChannelsBackend.load_catalog(subjectRoot.catalogKind)
     }
 
+    // Back (or any other nav away) while the recipe is running destroys this
+    // view and its Connections. The answer then comes back to nobody, so hand
+    // the channel to the backend instead of leaving an empty one on the dial.
+    Component.onDestruction: {
+        if (subjectRoot.seeding && subjectRoot.seedChannel >= 0)
+            virtualChannelsBackend.cancel_preset_seed(subjectRoot.seedChannel)
+    }
+
     // The backend delivers the catalog asynchronously (collections ride a
     // media-server browse); only accept the one for this recipe.
     Connections {
@@ -88,9 +96,13 @@ FocusScope {
             if (ch !== subjectRoot.seedChannel) return
             subjectRoot.seeding = false
             if (ok) {
+                var seeded = subjectRoot.seedChannel
+                // The view is about to be swapped out. Clear the id first so
+                // its destruction cannot cancel a channel that did get picks.
+                subjectRoot.seedChannel = -1
                 subjectRoot.navigateTo("ChannelSources.qml", {
                     moduleId:      subjectRoot.moduleId,
-                    channelNumber: subjectRoot.seedChannel,
+                    channelNumber: seeded,
                     channelName:   subjectRoot.seedName,
                     seedSummary:   message,
                     returnTo:      "Manage.qml"

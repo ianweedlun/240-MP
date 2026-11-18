@@ -33,7 +33,7 @@ public:
     QString retroarchPath() const { return m_retroarchPath; }
 
     // Current playlist sort mode (SYSTEM / ALPHA / COMPANY).
-    QString playlistSort() const;
+    Q_INVOKABLE QString playlistSort() const;
     // Current games-view sort direction (A-Z / Z-A).
     Q_INVOKABLE QString gameSort() const;
 
@@ -101,9 +101,9 @@ signals:
     void retroarchPathChanged();
 
 public slots:
-    // Auto-wired by AppCore::registerBackend to appCore.moduleSettingChanged.
-    // Without this, config changes (playlist sort) only reach us at startup,
-    // and every refresh keeps sorting with the value from boot.
+    // Called directly by AppCore::save_setting before moduleSettingChanged is
+    // emitted. The old connection-based delivery ran after the views refreshed
+    // and left their sort headers showing the previous value.
     void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value);
 
 private:

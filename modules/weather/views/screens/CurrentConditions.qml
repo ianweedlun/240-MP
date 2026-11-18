@@ -41,12 +41,21 @@ Item {
     // first fix attempt threw "Cannot assign to non-existent property" in the
     // journal and blanked the view), so rows are CONTAINED BY BUDGET: a row
     // that would wrap reserves two slots, following rows shift down, and the
-    // row set never draws through the status bar. The glyph-advance estimate
-    // is deliberately pessimistic (1.0em) — over-reserving leaves a gap,
-    // under-reserving is what we must avoid.
+    // Measure with the same font the rows use. A fixed "1em per character"
+    // estimate was wildly pessimistic for the pixel font: "AIR QUALITY: 57
+    // MODERATE" was reserved as two lines even though it renders on one. That
+    // stole a slot from PRESSURE in US units only, because the US AQ label is
+    // two characters longer than the metric one — the unit-dependent blank
+    // row Ian saw on the Pi. TextMetrics measures the real advance width, so
+    // each row reserves exactly the space it occupies in either unit mode.
+    TextMetrics {
+        id: rowMetrics
+        font.family: root.globalFont
+        font.pixelSize: screen.lineSize
+    }
     function reservedLines(i) {
-        var cap = Math.max(8, Math.floor(rowArea.width / screen.lineSize))
-        return rowTexts()[i].length > cap ? 2 : 1
+        rowMetrics.text = rowTexts()[i]
+        return rowMetrics.implicitWidth > rowArea.width ? 2 : 1
     }
     function reservedOffset(idx) {
         var y = 0
