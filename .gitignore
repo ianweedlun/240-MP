@@ -29,4 +29,10 @@ id_*
 *.pem
 *.key
 *.p12
+.env
+.env.*
+!.env.example
+*.token
+auth-token
+credentials.json
 .worktrees/
