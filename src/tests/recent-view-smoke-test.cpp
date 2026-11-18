@@ -417,7 +417,7 @@ int main(int argc, char **argv) {
                   "Games header splits count and sort direction (N GAMES · A-Z)");
         }
         if (header && strip) {
-            QQmlProperty::write(strip, "currentIndex", 0);
+            primeListIndex(strip, 0);
             QMetaObject::invokeMethod(strip, "forceActiveFocus");
             sendKey(strip, Qt::Key_Up);
             check(QQmlProperty::read(view, "sortHeaderFocused").toBool(),
