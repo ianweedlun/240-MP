@@ -26,13 +26,22 @@ on:
   # exact bug this card exists to kill.
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'Ref (sha/branch) to build. Build + upload only — no Pi contact.'
+      mode:
+        description: 'build-only (default) = artifact only; rc = deploy a burst/** ref; restore = return to the saved beta rev'
         required: true
+        type: choice
+        default: build-only
+        options: [build-only, rc, restore]
+      ref:
+        description: 'Ref for build-only / rc (rc requires burst/**). Ignored for restore.'
+        required: false
 
 jobs:
   pi-rc:
     name: PR Pi verification (RC / restore)
+    concurrency:
+      group: pi-rc-deploy
+      cancel-in-progress: false
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.base.ref == 'beta' &&
@@ -236,7 +245,217 @@ jobs:
           resp=$(jq -n --arg b "Closed without merge — this PR never put a build on the Pi; nothing to restore." '{body:$b}' | curl -s -w "\nHTTP=%{http_code}" -X POST -H "Authorization: Bearer ${AGENT_TOK:-$GH_TOKEN}" -H "Content-Type: application/json" -d @- "https://api.github.com/repos/ianweedlun/240-MP/issues/${{ github.event.pull_request.number }}/comments"); echo "COMMENT-RESP: $(echo "$resp" | tail -c 300)"; code=$(echo "$resp" | tail -n 1 | cut -d= -f2); [ "$code" = 201 ] || { echo "COMMENT-POST-FAILED http=$code"; exit 1; }
 
   # ──────────────────────────────────────────────────────────────────────────────
-  # Build-only lane — workflow_dispatch, ZERO Pi contact (card t_82f5ebb9)
+  # Burst RC lane — workflow_dispatch rc/restore, ONE RC at a time (owner-aware)
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Overnight torture cards cannot open a second dev→beta PR while another RC
+  # PR owns the Pi. This lane deploys a burst/** ref as an RC instead, writes a
+  # `burst:` owner marker (so PR close/restore never mistakes it for its own
+  # RC), and restore mode returns the Pi to the saved official beta rev.
+  # `concurrency: pi-rc-deploy` is shared with the PR lane above — no two
+  # RC/restore deploys can ever overlap. No public GitHub comments: evidence
+  # goes to the job summary and the card via the local operator.
+  burst-rc:
+    name: Burst RC deploy (rc / restore)
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.mode == 'rc' || inputs.mode == 'restore')
+    concurrency:
+      group: pi-rc-deploy
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    env:
+      MODE: ${{ inputs.mode }}
+      REF: ${{ inputs.ref }}
+      GH_TOKEN: ${{ github.token }}
+      AGENT_TOK: ${{ secrets.AGENT_GH_TOKEN }}
+
+    steps:
+      - name: Stage identity key (key-only Pi auth)
+        run: |
+          umask 077
+          cat > /tmp/pi_id <<'PIKEY'
+          ${{ secrets.PI_SSH_IDENTITY }}
+          PIKEY
+          ssh-keygen -q -lf /tmp/pi_id
+
+      - name: Decide mode / checkout ref / owner
+        run: |
+          set -euo pipefail
+          MODE="${{ env.MODE }}"
+          REF="${{ env.REF }}"
+          HOST="${{ secrets.PI_SSH_HOSTNAME }}"
+          USER="${{ secrets.PI_SSH_USERNAME }}"
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
+
+          case "$MODE" in
+            rc)
+              case "$REF" in
+                burst/*) ;;
+                *) echo "::error::rc mode requires a burst/** ref, got '$REF'" >&2; exit 1 ;;
+              esac
+              SAFE=$(printf '%s' "$REF" | tr '/ ' '__' | tr -cd '[:alnum:]_.-')
+              echo "CHECKOUT_REF=$REF" >> "$GITHUB_ENV"
+              echo "APP_VERSION=burst-$SAFE-pi-rc" >> "$GITHUB_ENV"
+              ;;
+            restore)
+              OWNER=$($SSH "cat \$HOME/.240mp-rc-deployed-pr 2>/dev/null" || true)
+              case "$OWNER" in
+                burst:*) ;;
+                *) echo "::error::restore refused — Pi RC marker is '$OWNER', not a burst owner" >&2; exit 1 ;;
+              esac
+              RESTORE_REV=$($SSH "cat \$HOME/.240mp-rc-restore-rev 2>/dev/null" || true)
+              if [ -z "$RESTORE_REV" ]; then
+                echo "::error::restore refused — no saved restore rev on Pi" >&2
+                exit 1
+              fi
+              echo "CHECKOUT_REF=$RESTORE_REV" >> "$GITHUB_ENV"
+              echo "RESTORE_REV=$RESTORE_REV" >> "$GITHUB_ENV"
+              echo "APP_VERSION=$RESTORE_REV" >> "$GITHUB_ENV"
+              CURRENT_BETA=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
+              if [ "$CURRENT_BETA" != "$RESTORE_REV" ]; then
+                echo "Burst restore is a NO-OP: beta advanced from $RESTORE_REV to $CURRENT_BETA while the RC was active." >> "$GITHUB_STEP_SUMMARY"
+                echo "SKIP_RESTORE=1" >> "$GITHUB_ENV"
+              fi
+              ;;
+          esac
+
+      - name: Clear burst markers when beta already advanced
+        if: env.SKIP_RESTORE == '1'
+        run: |
+          HOST="${{ secrets.PI_SSH_HOSTNAME }}"
+          USER="${{ secrets.PI_SSH_USERNAME }}"
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
+          $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev"
+
+      - name: Checkout decided ref
+        if: env.SKIP_RESTORE != '1'
+        uses: actions/checkout@v4.2.2
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Build arm64 (burst RC / restore recipe)
+        if: env.SKIP_RESTORE != '1'
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
+            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
+          cmake --build build --parallel
+          cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
+          mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
+          sha12=$(git rev-parse --short=12 HEAD)
+          TARBALL="240-MP-burst-${{ env.MODE }}-linux-arm64-$sha12"
+          tar -czf "${TARBALL}.tar.gz" -C install .
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          echo "ARTIFACT_SHA=$sha12" >> "$GITHUB_ENV"
+
+      - name: Upload burst tarball (sha-addressed, md5-checkable)
+        if: env.SKIP_RESTORE != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
+          path: ${{ env.TARBALL }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Deploy burst RC / restore to Pi + verify
+        if: env.SKIP_RESTORE != '1'
+        run: |
+          set -uo pipefail
+          MODE="${{ env.MODE }}"
+          REF="${{ env.CHECKOUT_REF }}"
+          TARBALL="${{ env.TARBALL }}"
+          HOST="${{ secrets.PI_SSH_HOSTNAME }}"
+          USER="${{ secrets.PI_SSH_USERNAME }}"
+          SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
+          LOCAL_MD5=$(tar -xzf "$TARBALL".tar.gz -O ./usr/local/bin/240mp | md5sum | cut -d' ' -f1)
+          SHA12=$(git rev-parse --short=12 HEAD)
+
+          if ! $SSH true 2>/tmp/pi_unreachable; then
+            echo "::error::Pi unreachable — build verified locally (md5 $LOCAL_MD5) but NOT deployed" >&2
+            exit 1
+          fi
+
+          CURRENT_OWNER=$($SSH "cat \$HOME/.240mp-rc-deployed-pr 2>/dev/null" || true)
+          if [ "$MODE" = 'rc' ]; then
+            case "$CURRENT_OWNER" in
+              burst:*) echo "::error::another burst RC is active ($CURRENT_OWNER); restore it first" >&2; exit 1 ;;
+            esac
+            OFFICIAL=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
+            if [ -z "$OFFICIAL" ]; then
+              echo "::error::no official beta rev on Pi; cannot save a restore target" >&2
+              exit 1
+            fi
+            OWNER="burst:$REF@$SHA12"
+          else
+            OWNER="$CURRENT_OWNER"
+          fi
+
+          PI_PATH="/tmp/240mp-burst-$SHA12.tar.gz"
+          scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
+            "$TARBALL".tar.gz "$USER@$HOST:$PI_PATH" || { echo "::error::scp failed" >&2; exit 1; }
+          rc=0
+          $SSH "sudo /usr/local/bin/240mp-ci-deploy $PI_PATH" || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 126 ]; then
+            echo "::error::auth/sudo refused (rc=$rc)" >&2
+            exit 1
+          fi
+          echo "wrapper rc=$rc (connection death expected on reboot)"
+
+          VERIFIED=0
+          for i in $(seq 1 15); do
+            sleep 20
+            PI_MD5R=$($SSH "md5sum /opt/240mp/bin/240mp | cut -d' ' -f1" 2>/dev/null || true)
+            APP_PID=$($SSH "pgrep -f '240mp/bin/240[m]p' | head -1" 2>/dev/null || true)
+            echo "check $i: md5=$PI_MD5R pid=$APP_PID"
+            if [ -n "$APP_PID" ] && [ "$PI_MD5R" = "$LOCAL_MD5" ]; then
+              VERIFIED=1
+              break
+            fi
+          done
+          if [ "$VERIFIED" -ne 1 ]; then
+            echo "::error::verify failed — service active + md5 $LOCAL_MD5 not confirmed after 15 tries" >&2
+            exit 1
+          fi
+
+          BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log 2>/dev/null" || true)
+          if [ "$MODE" = 'rc' ]; then
+            for i in $(seq 1 10); do
+              $SSH "echo $SHA12 > \$HOME/.240mp-rc-deployed-rev && echo '$OWNER' > \$HOME/.240mp-rc-deployed-pr && echo $LOCAL_MD5 > \$HOME/.240mp-rc-deployed-md5 && echo $OFFICIAL > \$HOME/.240mp-rc-restore-rev" && break
+              echo "marker write attempt $i failed; retrying"
+              sleep 20
+            done
+          else
+            for i in $(seq 1 10); do
+              $SSH "echo $RESTORE_REV > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" && break
+              echo "marker clear attempt $i failed; retrying"
+              sleep 20
+            done
+          fi
+
+          {
+            echo "### Burst RC — $MODE"
+            echo "- owner: \`$OWNER\`"
+            echo "- ref: \`$REF\` (\`$SHA12\`)"
+            echo "- Pi binary md5: \`$LOCAL_MD5\` (matches tarball), service active"
+            echo "- boot state log: \`$(echo "$BOOT" | tr '\n' ' ')\`"
+            if [ "$MODE" = 'rc' ]; then
+              echo "- restore target: \`$OFFICIAL\` — dispatch mode=restore to put the Pi back on beta"
+            else
+              echo "- restored official beta rev \`$RESTORE_REV\`; RC markers cleared"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "DEPLOYED+VERIFIED ($MODE): owner=$OWNER md5=$LOCAL_MD5"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # Build-only lane — workflow_dispatch mode=build-only, ZERO Pi contact (card t_82f5ebb9)
   # ──────────────────────────────────────────────────────────────────────────────
   # Proves and services the artifact path without a deploy: same build recipe as
   # the deploy lane, tarball archived as `pi-rc-buildonly-<sha12>`, no ssh, no
@@ -245,9 +464,18 @@ jobs:
   # build that got installed.
   rc-buildonly:
     name: RC tarball rebuild (no deploy)
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.mode == 'build-only' || inputs.mode == '')
     runs-on: ubuntu-24.04-arm
     steps:
+      - name: Validate build-only ref
+        run: |
+          if [ -z "${{ inputs.ref }}" ]; then
+            echo "::error::build-only mode requires ref" >&2
+            exit 1
+          fi
+
       - name: Checkout requested ref
         uses: actions/checkout@v4.2.2
         with:

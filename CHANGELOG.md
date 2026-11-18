@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — CI: burst-branch RC lane for overnight validation
+- `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.
+- The PR lane and burst lane share a `pi-rc-deploy` concurrency group, so only one RC deploy can run at a time — the Pi never sees two RCs. A burst RC cannot overwrite another burst RC, and a PR close/restore will not mistake a burst marker for its own (`pr-N`).
+- No public GitHub comments from the burst lane: evidence goes to the workflow job summary; the card carries the local handoff. `build-only` remains zero-Pi-contact and now validates its `ref` input.
+
 ### Fixed — CI: closing a pi-test PR unmerged now restores the Pi even when its RC marker matches
 - The `pi-rc.yml` "Decide mode" step wrote `PR_NUM=pr-N` to `$GITHUB_ENV` and then compared the Pi's marker against `$PR_NUM` **in the same step**, where that name was still an unset shell variable (empty). A matching `pr-N` marker therefore always read as a mismatch, so closed-unmerged PRs #89 and #90 silently chose `MODE=skip` and left the RC build on the Pi despite a valid saved beta rev (issue #91).
 - The decision is now a repo script (`scripts/pi-rc-decide.sh`) that computes `pr-N` from its argument, with the marker and saved rev passed in by the caller over SSH. The workflow runs that tested script and writes its output to `$GITHUB_ENV`; the marker read is also logged for diagnosis.
