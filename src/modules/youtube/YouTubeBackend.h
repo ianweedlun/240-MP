@@ -12,6 +12,7 @@
 #include <QQueue>
 #include <QNetworkAccessManager>
 #include "../../util/YtSponsorEdl.h"
+#include "../../util/YtSponsorTtl.h"
 #include "../../util/YtPendingReplay.h"
 
 // Backend for the YouTube module (V1 "feed" approach — no auth).
@@ -98,10 +99,16 @@ public:
     Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
                                       const QString &resolution);
 
-    // SponsorBlock: ask for the k-anonymous segment window for a video (cached
-    // hits re-emit sponsorReady synchronously). Also fired for every warmed row
-    // so list pages arrive with segments pre-cached before the first pick.
+    // SponsorBlock: ask for the k-anonymous segment window for a video. Cached
+    // hits re-emit sponsorReady synchronously; a transient failure is
+    // negative-cached for ytsb::kFailureTtlMs so a dead sponsor.ajay.app costs
+    // one request per video per window. Also fired for every prefetched row so
+    // list pages arrive with segments pre-cached before the first pick.
     Q_INVOKABLE void requestSponsorSegments(const QString &videoId);
+    // Launch-instant truth for the Player's yt-sponsor state log: was the
+    // segment window already on file when the EDL was frozen?
+    Q_INVOKABLE bool hasSponsorSegments(const QString &videoId);
+    Q_INVOKABLE bool sponsorFetchInFlight(const QString &videoId) const;
     // Wrap the fresh cached URL pair in an edl:// virtual timeline honoring the
     // per-category actions ({category: "off"|"mark"|"skip"}). Returns {videoEdl,
     // audioEdl} (empty string = use plain URL); empty map = no fresh pair yet.
@@ -188,9 +195,11 @@ signals:
 
 private:
     // SponsorBlock state: normalized segments per videoId (an empty entry is a
-    // confirmed "no segments" and suppresses re-fetch; transient failures stay
-    // out of the map so the next play retries), in-flight set, lazy file cache.
+    // confirmed "no segments" and suppresses re-fetch; transient failures live
+    // in m_sponsorFailedAt with a short TTL so the next play retries after it,
+    // in-flight set, lazy file cache.
     QHash<QString, QVector<yt::Segment>> m_sponsorCache;
+    QHash<QString, qint64> m_sponsorFailedAt;   // videoId -> transient-failure stamp (ms)
     QSet<QString> m_sponsorFetching;
     QHash<QString, qint64> m_sponsorStartMs;
     bool m_sponsorCacheLoaded = false;
@@ -336,6 +345,10 @@ private:
     static constexpr int    kYtdlResolveTimeoutMs = 30000;
     static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
     static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
+    // Segment prefetch is cheaper than a URL resolve and covers the whole list
+    // page, not just the warmed front; the cap only bounds pathological lists —
+    // the view's focused-row prefetch covers anything past it while scrolling.
+    static constexpr int    kWarmSponsorPrefetchMax = 50;
 
     // Wave-capped RSS refresh queue: the signed-in feed union touches every
     // subscribed channel (~311 RSS GETs); issuing them all at once blows up

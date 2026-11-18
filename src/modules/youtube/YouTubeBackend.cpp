@@ -888,18 +888,30 @@ void YouTubeBackend::saveSponsorCache()
 // k-anonymous window fetch (Red doctrine): only the first 4 hex chars of the
 // SHA-256 of the videoId leave the device; the response is filtered client-side
 // to the exact videoId. 4xx (prefix unknown = no segments) caches an empty
-// entry; network failures do not, so the next play retries.
+// entry permanently; a transient failure is negative-cached for a short TTL so
+// a dead sponsor.ajay.app costs one request per video per window, not one per
+// play. Playback never waits on any of this — the Player freezes its EDL at the
+// launch instant and late segments apply on the next play.
 void YouTubeBackend::requestSponsorSegments(const QString &videoId)
 {
     if (videoId.isEmpty())
         return;
     ensureSponsorCacheLoaded();
-    if (m_sponsorCache.contains(videoId)) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    ytsb::pruneFailures(m_sponsorFailedAt, now);
+    const bool failureBlocks = ytsb::failureActive(m_sponsorFailedAt.value(videoId), now);
+    switch (ytsb::decideFetch(m_sponsorCache.contains(videoId),
+                              m_sponsorFetching.contains(videoId),
+                              failureBlocks)) {
+    case ytsb::FetchDecision::ServeCache:
         emit sponsorReady(videoId);
         return;
-    }
-    if (m_sponsorFetching.contains(videoId))
+    case ytsb::FetchDecision::AlreadyFetching:
+    case ytsb::FetchDecision::Suppressed:
         return;
+    case ytsb::FetchDecision::Fetch:
+        break;
+    }
     m_sponsorFetching.insert(videoId);
 
     const QByteArray digest =
@@ -923,6 +935,9 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
         if (err != QNetworkReply::NoError && !clientErr) {
             qWarning("[Youtube] sponsor transient err=%d vid=%s", int(err), qPrintable(videoId));
             m_sponsorFetching.remove(videoId);
+            // Negative-cache the failure: retries inside the TTL are suppressed
+            // so a dead domain cannot turn every cold play into a fetch.
+            m_sponsorFailedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
             reply->deleteLater();
             return;
         }
@@ -932,15 +947,29 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
             doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
                           : QVector<yt::Segment>{};
         m_sponsorCache.insert(videoId, segs);
+        m_sponsorFailedAt.remove(videoId); // a real answer clears any stale stamp
         saveSponsorCache();
         m_sponsorFetching.remove(videoId);
         const qint64 start = m_sponsorStartMs.take(videoId);
         qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
-               qPrintable(videoId), segs.size(),
+               qPrintable(videoId), static_cast<int>(segs.size()),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
         emit sponsorReady(videoId);
         reply->deleteLater();
     });
+}
+
+bool YouTubeBackend::hasSponsorSegments(const QString &videoId)
+{
+    if (videoId.isEmpty())
+        return false;
+    ensureSponsorCacheLoaded();
+    return m_sponsorCache.contains(videoId);
+}
+
+bool YouTubeBackend::sponsorFetchInFlight(const QString &videoId) const
+{
+    return m_sponsorFetching.contains(videoId);
 }
 
 // Per-category Off/Mark/Skip: "skip" ranges are cut out of the virtual timeline
@@ -1265,10 +1294,20 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
     }
     if (queued > 0)
         qWarning("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
-    // Pre-fetch segment windows for the whole list page so the first pick
-    // already has them when the Player launches (~300 ms single GET each).
-    for (const QString &id : videoIds)
+    // Pre-fetch segment windows for the WHOLE list page, not just the warmed
+    // front: the first pick then usually finds its window already on file and
+    // the launch carries the EDL with no added wait. Bounded so a pathological
+    // list cannot fan out without limit — the view's focused-row prefetch
+    // covers anything past the cap as the user scrolls.
+    int sponsorQueued = 0;
+    for (const QString &id : videoIds) {
+        if (sponsorQueued >= kWarmSponsorPrefetchMax)
+            break;
+        if (id.isEmpty() || m_sponsorCache.contains(id) || m_sponsorFetching.contains(id))
+            continue;
+        ++sponsorQueued;
         requestSponsorSegments(id);
+    }
     if (m_warmChainKey.isEmpty())
         pumpWarmQueue();
 }

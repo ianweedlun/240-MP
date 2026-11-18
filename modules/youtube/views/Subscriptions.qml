@@ -99,8 +99,11 @@ FocusScope {
     }
 
     function warmUpItems() {
+        // Whole list, not just the warmed front: the backend prefetches segment
+        // windows for every id (bounded) while the URL warm-up stays capped at
+        // the first 12. Picking any row then finds its EDL already on file.
         var ids = []
-        for (var i = 0; i < items.length && ids.length < 12; ++i) {
+        for (var i = 0; i < items.length; ++i) {
             var it = items[i]
             if (it && it.videoId)
                 ids.push(it.videoId)
@@ -310,6 +313,15 @@ FocusScope {
         height: root.sh * 0.525
         clip: true
         focus: true
+
+        // Focused-row segment prefetch: the highlighted row is the one about to
+        // be played, so ask for its window even when the bulk prefetch cap left
+        // it out (long playlists, fast scrolling).
+        onCurrentIndexChanged: {
+            var it = itemsRoot.items[itemList.currentIndex]
+            if (it && it.videoId)
+                youtubeBackend.requestSponsorSegments(it.videoId)
+        }
 
         delegate: Item {
             width: itemList.width

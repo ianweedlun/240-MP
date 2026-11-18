@@ -37,6 +37,9 @@ FocusScope {
     function doPlay(startMs) {
         overlayVisible = false
         lastStartMs = startMs
+        // The EDL is frozen from here on: this launch never waits on, or reacts
+        // to, a segment fetch. Late windows are cached for the next play.
+        launchDone = true
         // directPlayUrl/directAudioUrl and ytdlArgs are set together by
         // preparePlayback; when a fresh signed pair is on hand mpv takes it
         // with --ytdl=no and skips ytdl_hook's re-resolve entirely. The audio
@@ -66,6 +69,15 @@ FocusScope {
                 args.push("--audio-file=" + (edl.audioEdl !== undefined && edl.audioEdl !== "" ? edl.audioEdl : directAudioUrl))
             if (edl.ranges !== undefined && edl.ranges !== "")
                 oscRanges = edl.ranges
+            // Launch-instant segment truth for the Pi state log: hit = window
+            // already on file (EDL applied), late = a fetch was still running so
+            // the cuts can only land on the next play, miss = nothing known.
+            if (youtubeBackend.hasSponsorSegments(playerRoot.videoId))
+                appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " hit")
+            else if (youtubeBackend.sponsorFetchInFlight(playerRoot.videoId))
+                appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " late")
+            else
+                appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " miss")
             // OSC shows this media title instead of the (very long) edl:// URL.
             var t = (item && item.title) ? item.title : "YouTube"
             if (t.length > 36)
@@ -90,10 +102,12 @@ FocusScope {
     // backend's background resolve is the only route and playAt() will wait
     // for playbackUrlReady rather than pay ytdl_hook's re-resolve.
     function preparePlayback() {
+        launchDone = false
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
-        // Segment windows: cached hit re-emits sponsorReady synchronously; a
-        // cold window is one ~300 ms GET, usually beating the yt-dlp resolve.
-        waitingSponsor = true
+        // Segment windows: kick the fetch now so a cold resolve that lands a
+        // moment later still finds them. This NEVER gates the launch — the EDL
+        // is frozen from whatever is cached at doPlay, and a miss just means a
+        // plain URL for this play (segments apply on the next one).
         youtubeBackend.requestSponsorSegments(videoId)
         const direct = youtubeBackend.cachedPlaybackUrl(videoId, resolution)
         const directAudio = youtubeBackend.cachedPlaybackAudioUrl(videoId, resolution)
@@ -120,26 +134,6 @@ FocusScope {
         return false
     }
 
-    Timer {
-        id: sponsorWaitTimer
-        // Bounded sponsor hold: a dead SponsorBlock domain means the backend
-        // silently gives up (transient err) and no sponsorReady ever fires.
-        // Playback must never depend on that request — expire the hold and
-        // launch without segments (late segments still apply via property filter).
-        interval: 6000
-        repeat: false
-        onTriggered: {
-            if (!playerRoot.waitingSponsor)
-                return
-            playerRoot.waitingSponsor = false
-            appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " wait-expired")
-            if (playerRoot.launchAfterSponsor) {
-                playerRoot.launchAfterSponsor = false
-                play(pendingPlayStartMs)
-            }
-        }
-    }
-
     // Starting mpv runs synchronously and, on the Pi, immediately switches VT
     // (suspending Qt's render thread) before the LOADING frame can paint. Defer
     // the launch one tick so the loading indicator is rendered first.
@@ -164,8 +158,9 @@ FocusScope {
     // past it we take the ytdl path as the always-works fallback.
     property bool   waitingForResolve: false
     property int    pendingPlayStartMs: 0
-    property bool   waitingSponsor: false
-    property bool   launchAfterSponsor: false
+    // Set once doPlay has frozen this launch's EDL. A sponsorReady after that
+    // is a late arrival: cached for the next play, never for the current one.
+    property bool   launchDone: false
 
     Timer {
         id: resolveWaitTimer
@@ -177,7 +172,6 @@ FocusScope {
             playerRoot.waitingForResolve = false
             resolveWaitTimer.stop()
             appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=15s reason=timeout")
-            playerRoot.waitingSponsor = false
             var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
             playerRoot.play(playerRoot.pendingPlayStartMs)
@@ -201,14 +195,9 @@ FocusScope {
                 playerRoot.directPlayUrl = direct
                 playerRoot.directAudioUrl = directAudio
                 playerRoot.ytdlArgs = ["--ytdl=no"]
-                if (playerRoot.waitingSponsor) {
-                    // hold until sponsorReady arrives so the launch can carry
-                    // the EDL (transient fetch failure is covered by the wait
-                    // timer, which clears waitingSponsor before falling back).
-                    playerRoot.launchAfterSponsor = true
-                    sponsorWaitTimer.restart()
-                    return
-                }
+                // Launch depends ONLY on the stream URL pair. Segments are a
+                // prefetch side-channel: whatever is cached at doPlay is what
+                // this play gets, and a dead sponsor.ajay.app adds zero wait.
                 playerRoot.play(playerRoot.pendingPlayStartMs)
             }
             // If the pair somehow isn't there, let the wait timer's ytdl
@@ -221,12 +210,11 @@ FocusScope {
         function onSponsorReady(readySponsorId) {
             if (readySponsorId !== playerRoot.videoId)
                 return
-            playerRoot.waitingSponsor = false
-            appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " ready")
-            if (playerRoot.launchAfterSponsor) {
-                playerRoot.launchAfterSponsor = false
-                playerRoot.play(playerRoot.pendingPlayStartMs)
-            }
+            // No launch gating anymore. A window landing after doPlay is a late
+            // arrival: it is cached and applies on the NEXT play, so log it to
+            // keep the Pi state log honest about which path a cold play took.
+            if (playerRoot.launchDone)
+                appCore.note_state("yt-sponsor", "vid=" + playerRoot.videoId + " late-arrived")
         }
     }
 

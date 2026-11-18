@@ -560,6 +560,18 @@ if(BUILD_TESTS)
     target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
     add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
 
+    # YouTube Player launch smoke: drives the real Player.qml offscreen with
+    # stub backends and asserts the launch depends only on the stream URL pair
+    # — cached segments ride as an EDL, a still-fetching or dead sponsor domain
+    # adds zero wait (the old cold path held first frame for up to 6 s).
+    add_executable(youtube-player-smoke src/tests/youtube-player-smoke-test.cpp)
+    set_target_properties(youtube-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-player-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-player-smoke COMMAND youtube-player-smoke)
+
     add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
     set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
     target_link_libraries(local-files-player-smoke PRIVATE
@@ -680,6 +692,19 @@ if(BUILD_TESTS)
         target_compile_options(yt-sponsor-edl-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME yt-sponsor-edl COMMAND yt-sponsor-edl-tests)
+
+    # SponsorBlock fetch gate (latency follow-up): transient failures are
+    # negative-cached for a short TTL so a dead sponsor.ajay.app costs one
+    # request per video per window, a confirmed-empty window is a permanent
+    # hit, and the suppression map is pruned. Pure clock math.
+    add_executable(yt-sponsor-ttl-tests
+        src/util/tests/YtSponsorTtlTest.cpp)
+    set_target_properties(yt-sponsor-ttl-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-sponsor-ttl-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-ttl-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-ttl COMMAND yt-sponsor-ttl-tests)
 
     # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
     # exactly once per completed hand-off and only AFTER the CRTC state is
