@@ -321,6 +321,23 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-codes COMMAND weather-tests)
 
+    # WeatherBackend against a loopback fake of all four weather APIs. Env-var
+    # endpoint overrides (the same seam UpdateManager uses for its feed) make
+    # races and stale-cache cases reproducible without touching the network.
+    add_executable(weather-backend-tests
+        src/modules/weather/tests/WeatherBackendTest.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(weather-backend-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-backend-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    target_include_directories(weather-backend-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-backend-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-backend COMMAND weather-backend-tests)
+
     # AppCore -> weather module proxy (issue #53): app-level views load outside
     # the weather module's QQml scope where the module-scope "weatherBackend"
     # context property is null. The location reads are proxied through appCore,
