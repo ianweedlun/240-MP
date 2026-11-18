@@ -44,6 +44,13 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED) # gamepad input (InputManager)
 
+# In-process YouTube Innertube resolver (vendor). GPL-3.0; see
+# third_party/innertube-qt/ for provenance and the two CMake patches below.
+# Built with INNERTUBE_NO_WEBENGINE=ON — the auth store's WebEngine includes
+# are guarded, and the app never needs to render a web page itself.
+set(INNERTUBE_NO_WEBENGINE ON CACHE BOOL "Disable WebEngine for innertube-qt" FORCE)
+add_subdirectory(third_party/innertube-qt)
+
 # libdrm is used on Linux/RPi to save and restore the KMS CRTC state
 # around mpv playback so Qt EGLFS can resume cleanly after mpv exits.
 if(NOT APPLE)
@@ -163,6 +170,7 @@ target_link_libraries(240mp PRIVATE
     Qt6::Svg
     OpenSSL::Crypto
     SDL2::SDL2
+    innertube-qt
     $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>
 )
 
