@@ -59,11 +59,13 @@ jobs:
 
       - name: Run tests
         run: |
-          # QtQuick.Effects (AppBar's MultiEffect) needs Qt >= 6.5; the noble
-          # arm64 runner ships 6.4 and has no package for it. The QML layout
-          # smoke runs on the x86 lane's Qt 6.7 SDK instead. This lane still
-          # builds the smoke binary and runs the other 15 tests.
-          ctest --test-dir build --output-on-failure -j4 -E recent-view-smoke
+          # QtQuick.Effects (AppBar's MultiEffect) needs Qt >= 6.5 and
+          # QtQml.WorkerScript (Player.qml) needs >= 6.5 too; the noble arm64
+          # runner ships Qt 6.4 with no package for either. Those QML layout
+          # smokes run on the x86 lane's Qt 6.7 SDK instead. This lane still
+          # builds every smoke binary and runs all non-QML-layout tests.
+          ctest --test-dir build --output-on-failure -j4 \
+            -E 'recent-view-smoke|plex-player-smoke|local-files-player-smoke'
 
       - name: Install to staging prefix
         run: |
