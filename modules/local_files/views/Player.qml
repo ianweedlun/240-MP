@@ -132,7 +132,11 @@ FocusScope {
 
     Component.onCompleted: {
         if (filePath === "") return
-        loopOn        = !!appCore.get_setting(moduleRoot.moduleId, "loop_playback")
+        var loopRaw   = appCore.get_setting(moduleRoot.moduleId, "loop_playback")
+        // Old configs stored toggles as the strings "ON"/"OFF"; !!() in JS would
+        // turn "OFF" into true and loop every file forever. Match the Settings
+        // view's interpretation of both encodings.
+        loopOn        = (loopRaw === true || loopRaw === "ON")
         // Some fancy logic to honor the old boolean settings until they get updated to the new format
         var shufRaw   = appCore.get_setting(moduleRoot.moduleId, "shuffle_playback")
         shuffleSetting = (typeof shufRaw === "boolean") ? (shufRaw ? "yes" : "no") : (shufRaw || "ask")
@@ -186,15 +190,22 @@ FocusScope {
             savedPl   = (saved.plPos !== undefined && saved.plPos !== null) ? saved.plPos : -1
         }
 
+        // A playlist can have a saved item index with no elapsed time: quitting
+        // in the first second of item N leaves (pos=0, plPos=N) because
+        // onPlaylistPosChanged zeroes the timecode and ms<=0 is never reported.
+        // The item index alone is enough state to resume, so treat it as saved.
+        var hasSaved = savedPos > 0 || savedPl >= 0
+
         if (resumeSetting === "yes" && !askShuffle) {
-            play(savedPos > 0 ? savedPos : 0, savedPos > 0 ? savedPl : -1, false)
+            play(savedPos, savedPl, false)
             return
         }
 
         var opts = []
-        if (savedPos > 0) {
+        if (hasSaved) {
             opts.push({ label: savedPl >= 0
-                            ? "Resume video " + (savedPl + 1) + " at " + formatTime(savedPos)
+                            ? "Resume video " + (savedPl + 1) +
+                              (savedPos > 0 ? " at " + formatTime(savedPos) : "")
                             : "Resume from " + formatTime(savedPos),
                         startMs: savedPos, plPos: savedPl, shuffle: false })
             if (resumeSetting === "ask")

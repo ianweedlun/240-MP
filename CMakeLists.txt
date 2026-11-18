@@ -492,6 +492,19 @@ if(BUILD_TESTS)
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
 endif()
 
+# Local Files Player smoke: loads the real Player.qml offscreen with stub
+# backends and checks the exact flags handed to mpv. Guards the legacy "OFF"
+# toggle string and playlist resume with a saved item index but zero time.
+if(BUILD_TESTS)
+    add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
+    set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-player-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
+endif()
+
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
