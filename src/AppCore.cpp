@@ -314,10 +314,29 @@ void AppCore::save_setting(const QString &moduleId, const QString &key, const QV
            qPrintable(moduleId.isEmpty() ? "app" : moduleId),
            qPrintable(key), qPrintable(value.toString()));
 
-    if (moduleId.isEmpty())
+    if (moduleId.isEmpty()) {
         emit appSettingChanged(key, value.toString());
-    else
-        emit moduleSettingChanged(moduleId, key, value);
+        return;
+    }
+
+    // Views handle moduleSettingChanged by immediately re-reading their backend
+    // (gameSort(), playlistSort(), ...). Push the new value into every backend
+    // FIRST, synchronously, so those reads see it. Delivering via a separate
+    // connection made the views refresh against stale state on the first press.
+    // Iterate all registered backends, not just the owner: VirtualChannels, for
+    // example, also consumes Local Files' media_directory changes. Each slot
+    // filters moduleId/key itself, so this preserves the old broadcast without
+    // the ordering race.
+    const QByteArray slotSig = QMetaObject::normalizedSignature(
+        "onSettingChanged(QString,QString,QVariant)");
+    for (QObject *backend : m_backends) {
+        if (!backend || backend->metaObject()->indexOfSlot(slotSig.constData()) < 0)
+            continue;
+        QMetaObject::invokeMethod(backend, "onSettingChanged", Qt::DirectConnection,
+                                  Q_ARG(QString, moduleId), Q_ARG(QString, key),
+                                  Q_ARG(QVariant, value));
+    }
+    emit moduleSettingChanged(moduleId, key, value);
 }
 
 QVariant AppCore::get_module_info(const QString &moduleId) {
@@ -407,14 +426,9 @@ void AppCore::registerModule(const QString &moduleId, const QString &contextProp
         QMetaObject::connect(backend, sig, this, slot);
     }
 
-    // moduleSettingChanged(moduleId, key, value) -> backend.onSettingChanged(...)
-    int slot = bmo->indexOfSlot(
-        QMetaObject::normalizedSignature("onSettingChanged(QString,QString,QVariant)"));
-    if (slot >= 0) {
-        int s = amo->indexOfSignal(
-            QMetaObject::normalizedSignature("moduleSettingChanged(QString,QString,QVariant)"));
-        QMetaObject::connect(this, s, backend, slot);
-    }
+    // Backends are updated synchronously by AppCore::save_setting before
+    // moduleSettingChanged is emitted — see the note there. Keeping the old
+    // connection here as well would double-handle every live setting change.
 }
 
 QString AppCore::moduleIdForBackend(QObject *backend) const {

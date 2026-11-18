@@ -341,6 +341,31 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-weather-proxy COMMAND appcore-weather-proxy-tests)
 
+    # Issue #85: AppCore::save_setting must push a setting into backends before
+    # it emits moduleSettingChanged, because view handlers refresh on that
+    # signal and read the backend immediately. Uses real AppCore + real
+    # RetroArchBackend; no QML, no network (QGuiApplication for offscreen Qt).
+    add_executable(appcore-setting-order-tests
+        src/AppCore.cpp
+        src/modules/retroarch/RetroArchBackend.cpp
+        src/modules/retroarch/RecentGamesStore.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/tests/AppCoreSettingOrderTest.cpp)
+    set_target_properties(appcore-setting-order-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-setting-order-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(appcore-setting-order-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(appcore-setting-order-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-setting-order-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
+
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
     # No real audio hardware needed — the factory picks a no-op on WSL/CI.
