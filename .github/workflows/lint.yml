@@ -33,6 +33,22 @@ jobs:
           fi
           echo "OK: no floating action refs"
 
+      # shellcheck is pinned for reproducible findings. Its releases publish no
+      # checksum file, so unlike actionlint this fetch is trusted by source +
+      # version only. Severity floor is `warning`: the ~25 SC2086 info hits are
+      # deliberate unquoted word-splitting in the deploy scripts, not bugs worth
+      # failing a build over. Warnings are real (nested-loop shadowing, ls|grep).
+      - name: Fetch pinned shellcheck
+        run: |
+          set -euo pipefail
+          VERSION=0.10.0
+          curl -sSL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${VERSION}/shellcheck-v${VERSION}.linux.x86_64.tar.xz"
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          printf '#!/bin/sh\nexec /tmp/shellcheck-v%s/shellcheck -S warning "$@"\n' "$VERSION" > /tmp/sc-shim
+          chmod +x /tmp/sc-shim
+          /tmp/shellcheck-v"${VERSION}"/shellcheck --version | head -3
+
       - name: Run actionlint (pinned + checksum-verified)
         run: |
           set -euo pipefail
@@ -44,4 +60,4 @@ jobs:
           echo "${EXPECT}  /tmp/actionlint.tar.gz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
           /tmp/actionlint -version
-          /tmp/actionlint
+          /tmp/actionlint -shellcheck=/tmp/sc-shim

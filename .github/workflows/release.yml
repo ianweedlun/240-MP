@@ -71,7 +71,12 @@ jobs:
         run: |
           FW="${GITHUB_WORKSPACE}/install/240mp.app/Contents/Frameworks"
           test -f "$FW/libSDL2-2.0.0.dylib" || { echo "SDL2 not bundled"; exit 1; }
-          ! ls "$FW" | grep -qi sdl3 || { echo "SDL3 leaked into bundle"; exit 1; }
+          # case-insensitive, no ls | grep
+          for f in "$FW"/*; do
+            case "${f##*/}" in
+              *[Ss][Dd][Ll]3*) echo "SDL3 leaked into bundle"; exit 1 ;;
+            esac
+          done
 
       - name: Import signing certificate
         env:
