@@ -800,7 +800,6 @@ jobs:
         run: |
           FACTS=/tmp/pi_audio_facts.txt
           EXP=$(cat /tmp/expected_sha.txt 2>/dev/null || echo n/a)
-          RUN=$(cat /tmp/ci_run_id.txt 2>/dev/null || echo none)
           echo "################ RAW PROBE OUTPUT ################"
           cat "$FACTS" 2>/dev/null || echo "(no probe output)"
           echo "##################################################"

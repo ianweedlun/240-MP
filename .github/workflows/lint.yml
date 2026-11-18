@@ -1,0 +1,63 @@
+name: Lint
+
+# Workflow files are paths-ignored by ci.yml and ci-macos.yml (`**.yml`), so a
+# workflow-only change used to ship with no CI at all: no build, no syntax check,
+# nothing but eyeballs. This lane exists purely to validate .github/ — actionlint
+# for YAML/expressions, plus a guard against reintroducing floating action refs
+# (`@v4`), which drift silently between lanes and turn a supply-chain event into
+# a partial outage. Triggered by path only, so it also covers branches that no
+# other workflow builds (chore/**, fix/**, probe/**).
+on:
+  push:
+    paths: ['.github/**']
+  pull_request:
+    paths: ['.github/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4.2.2
+
+      - name: Every action ref is pinned to an exact tag
+        run: |
+          set -euo pipefail
+          if grep -rnE 'uses: *[^ ]+/[^ ]+@v[0-9]+( *#.*)?$' .github/workflows; then
+            echo "::error::floating action ref — pin it to an exact tag (e.g. @v4.6.2)"
+            exit 1
+          fi
+          echo "OK: no floating action refs"
+
+      # shellcheck is pinned for reproducible findings. Its releases publish no
+      # checksum file, so unlike actionlint this fetch is trusted by source +
+      # version only. Severity floor is `warning`: the ~25 SC2086 info hits are
+      # deliberate unquoted word-splitting in the deploy scripts, not bugs worth
+      # failing a build over. Warnings are real (nested-loop shadowing, ls|grep).
+      - name: Fetch pinned shellcheck
+        run: |
+          set -euo pipefail
+          VERSION=0.10.0
+          curl -sSL -o /tmp/shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/v${VERSION}/shellcheck-v${VERSION}.linux.x86_64.tar.xz"
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          printf '#!/bin/sh\nexec /tmp/shellcheck-v%s/shellcheck -S warning "$@"\n' "$VERSION" > /tmp/sc-shim
+          chmod +x /tmp/sc-shim
+          /tmp/shellcheck-v"${VERSION}"/shellcheck --version | head -3
+
+      - name: Run actionlint (pinned + checksum-verified)
+        run: |
+          set -euo pipefail
+          VERSION=1.7.12
+          BASE="https://github.com/rhysd/actionlint/releases/download/v${VERSION}"
+          curl -sSL "${BASE}/actionlint_${VERSION}_checksums.txt" -o /tmp/actionlint.sha256
+          EXPECT=$(awk -v f="actionlint_${VERSION}_linux_amd64.tar.gz" '$2 == f {print $1}' /tmp/actionlint.sha256)
+          curl -sSL "${BASE}/actionlint_${VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tar.gz
+          echo "${EXPECT}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          /tmp/actionlint -version
+          /tmp/actionlint -shellcheck=/tmp/sc-shim
