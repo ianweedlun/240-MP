@@ -26,6 +26,8 @@ jobs:
       # runner ships Qt 6.4 with no package for either. Those QML layout
       # smokes run on the x86 lane's Qt 6.7 SDK instead. This lane still
       # builds every smoke binary and runs all non-QML-layout tests.
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:
@@ -76,6 +78,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:

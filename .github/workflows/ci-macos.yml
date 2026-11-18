@@ -78,6 +78,8 @@ jobs:
 
       # Native arch on purpose: the runner is x86_64, so no CMAKE_OSX_ARCHITECTURES
       # override (the old hardcoded arm64 was only correct on an Apple-Silicon host).
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:
@@ -134,6 +136,8 @@ jobs:
 
       # Native arch on purpose: the runner is Apple-Silicon, so no
       # CMAKE_OSX_ARCHITECTURES override.
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:
