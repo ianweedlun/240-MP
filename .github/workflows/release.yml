@@ -19,45 +19,22 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4.5.0
+      # Homebrew's sdl2 is now the sdl2-compat/SDL3 shim, so SDL2 is built from
+      # source at the pinned version (see the composite action).
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
         with:
-          version: '6.7.*'
-          host: mac
-          target: desktop
-          arch: clang_64
-          modules: qtmultimedia
-          cache: true
-
-      - name: Build SDL2 from source (pinned — Homebrew's sdl2 is now the sdl2-compat/SDL3 shim)
-        run: |
-          SDL2_VERSION=2.32.10
-          SRC="${RUNNER_TEMP}/SDL2-src"
-          BUILD="${RUNNER_TEMP}/SDL2-build"
-          git clone --depth 1 --branch "release-${SDL2_VERSION}" \
-            https://github.com/libsdl-org/SDL "$SRC"
-          cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install" \
-            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF
-          cmake --build "$BUILD" --parallel
-          cmake --install "$BUILD"
-          echo "SDL2_PREFIX=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_ENV"
-
-      - name: Configure
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR};${SDL2_PREFIX}" \
-            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/install" \
-            -DAPP_VERSION="${{ github.ref_name }}"
-
-      - name: Build
-        run: cmake --build build --parallel
+          qt-host: mac
+          qt-version: '6.7.*'
+          qt-arch: clang_64
+          qt-modules: qtmultimedia
+          apt-packages: ""
+          build-sdl2-source: 'true'
+          sdl2-osx-arch: arm64
+          run-tests: 'false'
+          ccache: 'false'
+          install-prefix: ${{ github.workspace }}/install
+          app-version: ${{ github.ref_name }}
 
       - name: Install
         run: cmake --install build
@@ -154,45 +131,16 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install build dependencies
-        run: |
-          # The runner image ships Microsoft apt repos (azure-cli, prod) that
-          # intermittently serve broken signatures and fail `apt-get update`.
-          # This build doesn't need them, so drop them first.
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            libqt6svg6 \
-            qt6-svg-dev \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-window \
-            qt6-multimedia-dev \
-            qml6-module-qtmultimedia \
-            libdrm-dev \
-            libssl-dev \
-            libsdl2-dev \
-            libpcsclite-dev
-
-      - name: Configure
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/install/usr/local" \
-            -DAPP_VERSION="${{ github.ref_name }}"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Install
-        run: cmake --install build
+      # mpv is a runtime dep (not a build dep), so the configure/build step here
+      # needs no MPV_BIN; the AppImage lane below builds mpv from source first.
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
+        with:
+          apt-packages: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window qt6-multimedia-dev qml6-module-qtmultimedia libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev"
+          install-prefix: ${{ github.workspace }}/install/usr/local
+          app-version: ${{ github.ref_name }}
+          run-tests: 'false'
+          ccache: 'false'
 
       - name: Create tarball
         run: |
