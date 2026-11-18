@@ -477,6 +477,19 @@ if(BUILD_TESTS)
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
 endif()
 
+# Plex Player retry smoke: drives the failed-direct-play -> transcode fallback
+# offscreen with stubbed backends and checks mpv gets transcode-shaped tracks.
+if(BUILD_TESTS)
+    add_executable(plex-player-smoke src/tests/plex-player-smoke-test.cpp)
+    set_target_properties(plex-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(plex-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_include_directories(plex-player-smoke PRIVATE src)
+    set(MP240_PLEX_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
+    add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
+endif()
+
 # ── CPack ──────────────────────────────────────────────────────────────────────
 set(CPACK_PACKAGE_NAME "240-MP")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")

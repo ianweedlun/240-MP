@@ -261,10 +261,18 @@ FocusScope {
             if (pendingRetryTranscode) {
                 pendingRetryTranscode = false
                 isTranscoding = true
-                // Fallback transcode was requested at offset 0 (full timeline), so seek
-                // mpv to the resume point — keeps everything before it seekable.
-                var sub = buildSubArgs()
-                mpvController.loadAndPlay(url, viewOffset / 1000.0, audioIdx + 1, sub.track, sub.urls, [], false, -1, 0.0, plexToken)
+                // doStartPlayback reads the view's streamUrl/plexToken properties,
+                // not this handler's arguments — publish the resolved rendition
+                // first so the retry actually plays it (with its auth token).
+                playerRoot.streamUrl = url
+                playerRoot.plexToken = plexToken
+                // A Plex transcode is a single-track HLS rendition with the
+                // chosen subtitle burned in. Reuse the normal transcode launch
+                // path: audioIdx/subUrls/buildSubArgs() describe the file that
+                // just FAILED, not the rendition we are about to play. Passing
+                // them here asks mpv for a nonexistent audio track (silence) and
+                // stacks external subtitles over the burned-in ones.
+                doStartPlayback(viewOffset)
                 return
             }
         }
