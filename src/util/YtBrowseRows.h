@@ -113,10 +113,13 @@ inline QString tileLengthOf(const QJsonObject &header)
 inline QVariantList extractBrowseRows(const QJsonObject &root, int maxRows)
 {
     QVariantList rows;
-    QQueue<QJsonValue> queue;
-    queue.enqueue(QJsonValue(root));
-    while (!queue.isEmpty()) {
-        const QJsonValue v = queue.dequeue();
+    // Pre-order DFS: the API's own order is the display order, so a row in an
+    // earlier sibling subtree wins over any row in a later (shallower) one.
+    // A BFS queue reversed rows whenever shelves nested at different depths.
+    QList<QJsonValue> stack;
+    stack.append(QJsonValue(root));
+    while (!stack.isEmpty()) {
+        const QJsonValue v = stack.takeLast();
         if (v.isObject()) {
             const QJsonObject o = v.toObject();
             if (o.contains(QStringLiteral("videoRenderer"))) {
@@ -191,12 +194,12 @@ inline QVariantList extractBrowseRows(const QJsonObject &root, int maxRows)
                 }
             }
             const QList<QString> keys = o.keys();
-            for (const QString &key : keys)
-                queue.enqueue(o.value(key));
+            for (int i = keys.size() - 1; i >= 0; --i)
+                stack.append(o.value(keys.at(i)));
         } else if (v.isArray()) {
             const QJsonArray arr = v.toArray();
-            for (const QJsonValue &item : arr)
-                queue.enqueue(item);
+            for (int i = arr.size() - 1; i >= 0; --i)
+                stack.append(arr.at(i));
         }
     }
     return rows;
@@ -210,10 +213,12 @@ inline QVariantList extractBrowseRows(const QJsonObject &root, int maxRows)
 inline QVariantList extractChannelSyncRows(const QJsonObject &root)
 {
     QVariantList rows;
-    QQueue<QJsonValue> queue;
-    queue.enqueue(QJsonValue(root));
-    while (!queue.isEmpty()) {
-        const QJsonValue v = queue.dequeue();
+    // Same document-order contract as the browse rows: the sync roster is
+    // consumed in the order the API returned it, not by nesting depth.
+    QList<QJsonValue> stack;
+    stack.append(QJsonValue(root));
+    while (!stack.isEmpty()) {
+        const QJsonValue v = stack.takeLast();
         if (v.isObject()) {
             const QJsonObject o = v.toObject();
             if (o.contains(QStringLiteral("channelRenderer"))) {
@@ -271,12 +276,12 @@ inline QVariantList extractChannelSyncRows(const QJsonObject &root)
                 }
             }
             const QList<QString> keys = o.keys();
-            for (const QString &key : keys)
-                queue.enqueue(o.value(key));
+            for (int i = keys.size() - 1; i >= 0; --i)
+                stack.append(o.value(keys.at(i)));
         } else if (v.isArray()) {
             const QJsonArray arr = v.toArray();
-            for (const QJsonValue &item : arr)
-                queue.enqueue(item);
+            for (int i = arr.size() - 1; i >= 0; --i)
+                stack.append(arr.at(i));
         }
     }
     return rows;
@@ -452,10 +457,12 @@ inline QVariantList keepAccountPlaylists(const QVariantList &rows)
 inline QVariantList extractPlaylistRows(const QJsonObject &root, int maxRows)
 {
     QVariantList rows;
-    QQueue<QJsonValue> queue;
-    queue.enqueue(QJsonValue(root));
-    while (!queue.isEmpty()) {
-        const QJsonValue v = queue.dequeue();
+    // Document order (YouTube's tab order) is the contract; pre-order DFS
+    // keeps it across shelves nested at different depths.
+    QList<QJsonValue> stack;
+    stack.append(QJsonValue(root));
+    while (!stack.isEmpty()) {
+        const QJsonValue v = stack.takeLast();
         if (v.isObject()) {
             const QJsonObject o = v.toObject();
             if (o.contains(QStringLiteral("playlistRenderer"))) {
@@ -497,12 +504,12 @@ inline QVariantList extractPlaylistRows(const QJsonObject &root, int maxRows)
                 }
             }
             const QList<QString> keys = o.keys();
-            for (const QString &key : keys)
-                queue.enqueue(o.value(key));
+            for (int i = keys.size() - 1; i >= 0; --i)
+                stack.append(o.value(keys.at(i)));
         } else if (v.isArray()) {
             const QJsonArray arr = v.toArray();
-            for (const QJsonValue &item : arr)
-                queue.enqueue(item);
+            for (int i = arr.size() - 1; i >= 0; --i)
+                stack.append(arr.at(i));
         }
     }
     return rows;
