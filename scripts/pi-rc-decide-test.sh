@@ -25,7 +25,7 @@ check() {
 # 1. The recurrence: closed unmerged, marker matches this PR, rev present.
 #    MUST restore — this is exactly what silently skipped on #89 and #90.
 check 'closed + matching pr-N marker + rev => restore' \
-    'PR=89;PR_NUM=pr-89;MODE=restore;REF=3202128abc;' \
+    'PR=89;PR_NUM=pr-89;MODE=restore;REF=3202128abc;APP_VERSION=3202128abc;' \
     closed 89 pr-89 3202128abc
 
 # 2. A later PR owns the Pi: mismatch must stay skip (never clobber its RC).
@@ -46,13 +46,13 @@ check 'closed + no marker => skip' \
 
 # 5. Non-closed events still take the rc branch and keep the PR-head ref.
 check 'opened => rc' \
-    'PR=89;PR_NUM=pr-89;MODE=rc;' \
+    'PR=89;PR_NUM=pr-89;MODE=rc;APP_VERSION=89-pi-rc;' \
     opened 89 '' ''
 
 # 6. The precise old failure mode: a STALE PR_NUM in the environment must be
 #    ignored. This pins that the value comes from the argument, not the runner.
 got="$(PR_NUM=pr-WRONG bash "$HELPER" closed 89 pr-89 3202128abc | paste -sd';' -);"
-if [ "$got" = 'PR=89;PR_NUM=pr-89;MODE=restore;REF=3202128abc;' ]; then
+if [ "$got" = 'PR=89;PR_NUM=pr-89;MODE=restore;REF=3202128abc;APP_VERSION=3202128abc;' ]; then
     printf 'PASS stale env PR_NUM is ignored\n'
     pass=$((pass + 1))
 else

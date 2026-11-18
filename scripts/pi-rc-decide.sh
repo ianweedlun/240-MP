@@ -30,6 +30,7 @@ printf 'PR_NUM=%s\n' "$PR_NUM"
 
 if [ "$ACTION" != 'closed' ]; then
     printf 'MODE=rc\n'
+    printf 'APP_VERSION=%s-pi-rc\n' "$PR"
     exit 0
 fi
 
@@ -47,3 +48,8 @@ fi
 
 printf 'MODE=restore\n'
 printf 'REF=%s\n' "$REV"
+# Restore rebuilds the saved OFFICIAL rev. Stamp it with that rev, exactly as
+# ci.yml's official beta deploy stamps with github.sha, so the restored binary
+# is byte-identical to the beta build (md5 included) instead of carrying a
+# "-pi-rc" version string.
+printf 'APP_VERSION=%s\n' "$REV"
