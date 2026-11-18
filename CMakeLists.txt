@@ -290,6 +290,21 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # Ambient Mode backend: filesystem scans, settings fallback and companion
+    # audio process lifecycle. QtCore only; a fake `mpv` on PATH stands in for
+    # the real player so the suite never touches audio hardware.
+    add_executable(ambient-mode-tests
+        src/modules/ambient_mode/tests/AmbientModeBackendTest.cpp
+        src/modules/ambient_mode/AmbientModeBackend.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(ambient-mode-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(ambient-mode-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(ambient-mode-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ambient-mode-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME ambient-mode COMMAND ambient-mode-tests)
+
     # pi-rc decide-mode regression (issue #91): pure shell logic, no Qt/display.
     # Pins that a closed-unmerged PR with a matching pr-N marker selects MODE=restore
     # instead of silently skipping. Runs in both CI lanes via the existing ctest steps.
