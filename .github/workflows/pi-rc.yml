@@ -281,10 +281,11 @@ jobs:
           ssh-keygen -q -lf /tmp/pi_id
 
       - name: Decide mode / checkout ref / owner
+        id: burst_decide
         run: |
           set -euo pipefail
-          MODE="${{ env.MODE }}"
-          REF="${{ env.REF }}"
+          MODE="$MODE"
+          REF="$REF"
           HOST="${{ secrets.PI_SSH_HOSTNAME }}"
           USER="${{ secrets.PI_SSH_USERNAME }}"
           SSH="ssh -p 2222 -i /tmp/pi_id -o ConnectTimeout=15 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes $USER@$HOST"
@@ -317,12 +318,13 @@ jobs:
               if [ "$CURRENT_BETA" != "$RESTORE_REV" ]; then
                 echo "Burst restore is a NO-OP: beta advanced from $RESTORE_REV to $CURRENT_BETA while the RC was active." >> "$GITHUB_STEP_SUMMARY"
                 echo "SKIP_RESTORE=1" >> "$GITHUB_ENV"
+                echo "skip=1" >> "$GITHUB_OUTPUT"
               fi
               ;;
           esac
 
       - name: Clear burst markers when beta already advanced
-        if: env.SKIP_RESTORE == '1'
+        if: steps.burst_decide.outputs.skip == '1'
         run: |
           HOST="${{ secrets.PI_SSH_HOSTNAME }}"
           USER="${{ secrets.PI_SSH_USERNAME }}"
@@ -330,13 +332,13 @@ jobs:
           $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev"
 
       - name: Checkout decided ref
-        if: env.SKIP_RESTORE != '1'
+        if: steps.burst_decide.outputs.skip != '1'
         uses: actions/checkout@v4.2.2
         with:
           ref: ${{ env.CHECKOUT_REF }}
 
       - name: Build arm64 (burst RC / restore recipe)
-        if: env.SKIP_RESTORE != '1'
+        if: steps.burst_decide.outputs.skip != '1'
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
@@ -357,7 +359,7 @@ jobs:
           echo "ARTIFACT_SHA=$sha12" >> "$GITHUB_ENV"
 
       - name: Upload burst tarball (sha-addressed, md5-checkable)
-        if: env.SKIP_RESTORE != '1'
+        if: steps.burst_decide.outputs.skip != '1'
         uses: actions/upload-artifact@v4
         with:
           name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
@@ -366,7 +368,7 @@ jobs:
           if-no-files-found: error
 
       - name: Deploy burst RC / restore to Pi + verify
-        if: env.SKIP_RESTORE != '1'
+        if: steps.burst_decide.outputs.skip != '1'
         run: |
           set -uo pipefail
           MODE="${{ env.MODE }}"
