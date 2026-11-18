@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Segment windows are prefetched for the **whole list page** (not just the 12 URL-warmed rows) and for the focused row on every highlight change, so the common cold play already has its EDL on file. The bulk prefetch is bounded (50) and the focus prefetch covers anything past it while scrolling.
 - Transient (non-4xx) segment failures are negative-cached for 10 minutes — one request per video per window instead of one per play — with the suppression map pruned so it stays bounded. A 4xx remains a permanent confirmed-empty hit.
 - `yt-sponsor hit|miss|late` state-log lines (and `late-arrived` when a window lands after a launch) make the path readable on the Pi from `/tmp/240mp_state.log`.
-- Gates: new `yt-sponsor-ttl` unit suite (7/7) and `youtube-player-smoke` (20 assertions over the real `Player.qml`, offscreen). The smoke test fails against the pre-fix QML on the dead-sponsor case (launch held) and passes after the change.
+- Gates: new `yt-sponsor-ttl` unit suite (7/7) and `youtube-player-smoke` (23 assertions over the real `Player.qml`, offscreen). Verified both ways: against the pre-fix QML the smoke fails 3 assertions (including the 6 s cold-path hold and the dead-sponsor launch); against this change it passes 23/23.
 
 ### Added — CI: burst-branch RC lane for overnight validation
 - `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.

@@ -19,6 +19,7 @@
 #include <QVariantMap>
 #include <QColor>
 #include <QElapsedTimer>
+#include <QTimer>
 #include <QUrl>
 #include <QTest>
 #include <cstdio>
@@ -83,14 +84,22 @@ class StubYoutube : public QObject {
 public:
     bool warmPair = false;
     bool segmentsCached = false;
+    // When true the sponsor reply is deferred ~6 s (dead sponsor.ajay.app).
+    // When false it is emitted inline on a cache hit — the synchronous
+    // cache-hit path the decoupling targets.
+    bool sponsorDelayed = true;
     int sponsorRequests = 0;
     QStringList requestedIds;
 
     Q_INVOKABLE void requestSponsorSegments(const QString &id) {
         ++sponsorRequests;
         requestedIds << id;
-        if (segmentsCached)
-            emit sponsorReady(id);
+        if (!segmentsCached)
+            return;                      // black hole: never answers
+        if (sponsorDelayed)
+            QTimer::singleShot(6000, this, [this, id]() { emit sponsorReady(id); });
+        else
+            emit sponsorReady(id);       // cache hit: synchronous, inline
     }
     Q_INVOKABLE QString cachedPlaybackUrl(const QString &, const QString &) const {
         return warmPair ? QStringLiteral("http://yt/video.mp4") : QString();
@@ -240,31 +249,64 @@ int main(int argc, char **argv) {
     }
 
     // --- Case 2: cold pair, resolve lands, segments cached -------------------
-    {
-        StubYoutube yt;
-        StubMpv mpv;
-        yt.warmPair = false;
-        yt.segmentsCached = true;
-        bool loadError = false;
-        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
-                                   QStringLiteral("VID2"), repoRoot, &loadError);
-        check(!loadError && view != nullptr, "case2: Player.qml loads offscreen");
-        if (!view) return 1;
-        QTest::qWait(150);
-        check(mpv.plays.isEmpty(), "case2: cold open waits for the resolve");
-        yt.warmPair = true;
-        QElapsedTimer t;
-        t.start();
-        emit yt.playbackUrlReady(QStringLiteral("VID2"));
-        QTest::qWait(250);
-        check(mpv.plays.size() == 1, "case2: resolve landing launches once");
-        if (!mpv.plays.isEmpty())
-            check(mpv.plays[0].url.startsWith(QStringLiteral("edl://")),
-                  "case2: resolve-time cached segments ride the launch");
-        check(t.elapsed() < 1000,
-              "case2: no sponsor wait on the cold path (was a 6s hold)");
-        delete view;
-    }
+        // This is the regression gate for the 6 s hold. The pre-fix QML arms
+        // `waitingSponsor` before it knows whether the URL is cached, so a cold
+        // resolve that lands while a sponsor GET is in flight pays the full
+        // sponsorWaitTimer interval. `sponsorDelayed=true` reproduces that; the
+        // assertion below is the one that fails on the pre-fix QML and passes on
+        // the decoupled one. `sponsorDelayed=false` is the synchronous cache-hit
+        // path the fix targets: launch carries the EDL with no added wait.
+        {
+            StubYoutube yt;
+            StubMpv mpv;
+            yt.warmPair = false;
+            yt.segmentsCached = true;
+            yt.sponsorDelayed = true;       // pre-fix behaviour: 6 s hold
+            bool loadError = false;
+            QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                       QString("VID2"), repoRoot, &loadError);
+            check(!loadError && view != nullptr, "case2: Player.qml loads offscreen");
+            if (!view) return 1;
+            QTest::qWait(150);
+            check(mpv.plays.isEmpty(), "case2: cold open waits for the resolve");
+            yt.warmPair = true;
+            QElapsedTimer t;
+            t.start();
+            emit yt.playbackUrlReady("VID2");
+            // Drive the event loop long enough that a 6 s hold would have fired.
+            // On the pre-fix QML this is where the assertion fails: `play()` is
+            // gated on `waitingSponsor`, so mpv.plays stays empty until the timer.
+            int waited = 0;
+            while (mpv.plays.isEmpty() && waited < 4000) {
+                QTest::qWait(100);
+                waited += 100;
+            }
+            check(mpv.plays.size() == 1, "case2: resolve landing launches once");
+            if (!mpv.plays.isEmpty())
+                check(mpv.plays[0].url.startsWith("edl://"),
+                      "case2: resolve-time cached segments ride the launch");
+            check(t.elapsed() < 1000,
+                  "case2: no sponsor wait on the cold path (was a 6s hold)");
+            delete view;
+
+            // Same setup, synchronous cache hit: the decoupled path.
+            mpv.plays.clear();
+            yt.sponsorDelayed = false;
+            QObject *v2 = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                     QString("VID2b"), repoRoot, &loadError);
+            check(!loadError && v2 != nullptr, "case2b: Player.qml loads offscreen");
+            if (!v2) return 1;
+            QTest::qWait(150);
+            yt.warmPair = true;
+            QElapsedTimer t2;
+            t2.start();
+            emit yt.playbackUrlReady(QStringLiteral("VID2b"));
+            QTest::qWait(250);
+            check(mpv.plays.size() == 1, "case2b: synchronous cache hit launches");
+            check(t2.elapsed() < 1000,
+                  "case2b: synchronous cache-hit path adds no wait");
+            delete v2;
+        }
 
     // --- Case 3: cold pair, resolve lands, sponsor never answers -------------
     {
