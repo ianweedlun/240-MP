@@ -65,7 +65,7 @@ jobs:
           # smokes run on the x86 lane's Qt 6.7 SDK instead. This lane still
           # builds every smoke binary and runs all non-QML-layout tests.
           ctest --test-dir build --output-on-failure -j4 \
-            -E 'recent-view-smoke|plex-player-smoke|local-files-player-smoke'
+            -E 'recent-view-smoke|plex-player-smoke|local-files-player-smoke|weather-current-smoke'
 
       - name: Install to staging prefix
         run: |
