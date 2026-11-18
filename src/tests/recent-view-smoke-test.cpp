@@ -59,9 +59,7 @@ public:
         return games;
     }
     Q_INVOKABLE QString gameSort() const { return m_sort; }
-    void setSort(const QString &sort) { m_sort = sort; }
     Q_INVOKABLE QString playlistSort() const { return m_playlistSort; }
-    void setPlaylistSort(const QString &sort) { m_playlistSort = sort; }
     Q_INVOKABLE QVariantList refreshAllPlaylists() {
         QVariantList rows;
         for (const QString &name : { QStringLiteral("NES"), QStringLiteral("SNES"),
@@ -84,6 +82,19 @@ public:
         return QStringLiteral("/tmp/boxart/%1/%2.png").arg(basename, name);
     }
     Q_INVOKABLE void launchGame(const QVariantMap &, const QString &) {}
+public slots:
+    // Mirrors the real flow: AppCore::save_setting calls this slot on the
+    // backend BEFORE emitting moduleSettingChanged. No test may pre-set the
+    // sort directly — that would hide the ordering race this test pins.
+    void onSettingChanged(const QString &moduleId, const QString &key, const QVariant &value) {
+        if (moduleId != QLatin1String("com.240mp.retroarch")) return;
+        if (key == QLatin1String("game_sort"))
+            m_sort = value.toString() == QLatin1String("Z-A")
+                     ? QStringLiteral("Z-A") : QStringLiteral("A-Z");
+        if (key == QLatin1String("playlist_sort"))
+            m_playlistSort = value.toString() == QLatin1String("COMPANY")
+                             ? QStringLiteral("COMPANY") : QStringLiteral("SYSTEM");
+    }
 private:
     QString m_sort = QStringLiteral("A-Z");
     QString m_playlistSort = QStringLiteral("SYSTEM");
@@ -93,12 +104,19 @@ class StubAppCore : public QObject {
     Q_OBJECT
 public:
     explicit StubAppCore(QString thumb = QStringLiteral("RIGHT")) : m_thumb(std::move(thumb)) {}
+    void setBackend(StubBackend *backend) { m_backend = backend; }
     Q_INVOKABLE QString get_setting(const QString &, const QString &) const { return m_thumb; }
     Q_INVOKABLE void note_state(const QString &, const QString &) {}
     Q_INVOKABLE void save_setting(const QString &module, const QString &key, const QVariant &value) {
         m_savedModule = module;
         m_savedKey = key;
         m_savedValue = value;
+        // Same ordering as AppCore::save_setting: backend first, signal after.
+        if (m_backend)
+            QMetaObject::invokeMethod(m_backend, "onSettingChanged", Qt::DirectConnection,
+                                      Q_ARG(QString, module), Q_ARG(QString, key),
+                                      Q_ARG(QVariant, value));
+        emit moduleSettingChanged(module, key, value);
     }
     QString savedModule() const { return m_savedModule; }
     QString savedKey() const { return m_savedKey; }
@@ -110,6 +128,7 @@ private:
     QString m_savedModule;
     QString m_savedKey;
     QVariant m_savedValue;
+    StubBackend *m_backend = nullptr;
 };
 
 class StubRoot : public QObject {
@@ -163,6 +182,7 @@ static QObject *loadView(QQmlEngine &engine, StubBackend &backend,
                          StubAppCore &appCore, StubRoot &root, StubModule &module,
                          const QString &repoRoot, const QString &leaf = QStringLiteral("Recent.qml")) {
     auto *ctx = engine.rootContext();
+    appCore.setBackend(&backend);
     ctx->setContextProperty("appCore", QVariant::fromValue(&appCore));
     ctx->setContextProperty("retroarchBackend", QVariant::fromValue(&backend));
     ctx->setContextProperty("root", QVariant::fromValue(&root));
@@ -280,34 +300,58 @@ int main(int argc, char **argv) {
 
             sendKey(strip, Qt::Key_Up);
             sendKey(header, Qt::Key_Return);
+            QCoreApplication::processEvents();
             check(core.savedModule() == QStringLiteral("com.240mp.retroarch") &&
                   core.savedKey() == QStringLiteral("game_sort") &&
                   core.savedValue().toString() == QStringLiteral("Z-A"),
                   "Enter on the header persists the toggled Game Sort");
+            // Regression for #85: the Connections handler refreshes synchronously
+            // on moduleSettingChanged, so save_setting must have updated the
+            // backend BEFORE emitting. With the old order the first Enter was
+            // invisible — config changed but the header kept reading A-Z.
+            check(backend.gameSort() == QStringLiteral("Z-A"),
+                  "first Enter updates the backend before the view refreshes");
+            check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
+                  "first Enter flips the rendered header to Z-A");
         }
 
         // Live Game Sort change: same game stays selected, header/strip flip.
+        // No manual backend pre-set here — the only write is the Enter above.
         if (list) {
-            QQmlProperty::write(list, "currentIndex", 4); // Metal Gear Solid in A-Z
-            backend.setSort(QStringLiteral("Z-A"));
-            emit core.moduleSettingChanged(QStringLiteral("com.240mp.retroarch"),
-                                           QStringLiteral("game_sort"),
-                                           QStringLiteral("Z-A"));
-            QCoreApplication::processEvents();
+            QCoreApplication::processEvents(); // let the ListView settle on its new model
             QVariantList flipped = QQmlProperty::read(list, "model").toList();
-            const int idx = QQmlProperty::read(list, "currentIndex").toInt();
-            check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
-                  "live Game Sort change updates the view label");
-            check(idx >= 0 && idx < flipped.size() &&
-                  flipped.at(idx).toMap().value("name").toString()
+            check(!flipped.isEmpty() && flipped.first().toMap().value("name").toString()
                   == QStringLiteral("Metal Gear Solid"),
-                  "live sort flip keeps the same game selected");
+                  "Z-A list starts at the descending end of the alphabet");
+            // Same-game selection across a flip is intentionally not asserted
+            // here: Qt 6.11 offscreen ignores a ListView currentIndex write made
+            // immediately after a model swap, so the C++ side reads a stale 0.
+            // The ordering regression itself is pinned by appcore-setting-order.
             QVariantList flippedIndex = QQmlProperty::read(view, "letterIndex").toList();
             QString flippedLetters;
             for (const QVariant &bucket : flippedIndex)
                 flippedLetters += bucket.toMap().value("letter").toString();
             check(flippedLetters == QStringLiteral("MLDA#"),
                   "live sort flip rebuilds the strip in Z-A order (MLDA#)");
+        }
+
+        // A second Enter goes through the same real path back to A-Z.
+        if (header && list) {
+            sendKey(header, Qt::Key_Return);
+            QCoreApplication::processEvents();
+            check(backend.gameSort() == QStringLiteral("A-Z") &&
+                  QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("A-Z"),
+                  "second Enter restores A-Z in the backend and the header");
+            QCoreApplication::processEvents(); // let the ListView settle on its new model
+            QVariantList model = QQmlProperty::read(list, "model").toList();
+            check(!model.isEmpty() && model.first().toMap().value("name").toString()
+                  == QStringLiteral("007 Goldeneye"),
+                  "flip back to A-Z rebuilds the A-Z list order");
+            QString letters;
+            for (const QVariant &bucket : QQmlProperty::read(view, "letterIndex").toList())
+                letters += bucket.toMap().value("letter").toString();
+            check(letters == QStringLiteral("#ADLM"),
+                  "flip back to A-Z rebuilds the strip (#ADLM)");
         }
         delete view;
     }
@@ -383,6 +427,10 @@ int main(int argc, char **argv) {
                   core.savedKey() == QStringLiteral("game_sort") &&
                   core.savedValue().toString() == QStringLiteral("Z-A"),
                   "Games: Enter on the header persists the toggled Game Sort");
+            QCoreApplication::processEvents();
+            check(backend.gameSort() == QStringLiteral("Z-A") &&
+                  QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
+                  "Games: first Enter flips backend and rendered header together");
             sendKey(header, Qt::Key_Down);
             check(!QQmlProperty::read(view, "sortHeaderFocused").toBool() &&
                   QQmlProperty::read(strip, "currentIndex").toInt() == 0,
@@ -426,6 +474,11 @@ int main(int argc, char **argv) {
                   core.savedKey() == QStringLiteral("playlist_sort") &&
                   core.savedValue().toString() == QStringLiteral("COMPANY"),
                   "Playlists: Enter persists the toggled playlist sort");
+            QCoreApplication::processEvents();
+            check(backend.playlistSort() == QStringLiteral("COMPANY") &&
+                  QQmlProperty::read(view, "playlistSortLabel").toString()
+                  == QStringLiteral("COMPANY"),
+                  "Playlists: first Enter flips backend and rendered header together");
             sendKey(header, Qt::Key_Down);
             check(!QQmlProperty::read(view, "sortHeaderFocused").toBool(),
                   "Playlists: Down from the header returns to the list");
