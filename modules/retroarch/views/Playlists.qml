@@ -13,6 +13,15 @@ FocusScope {
     // See Games.qml: the LOADING guard needs a real truth flag —
     // `Component.onCompletedCalled` was never a Qt property.
     property bool listLoaded: false
+    property string playlistSortLabel: "SYSTEM"
+    property bool sortHeaderFocused: false
+
+    // Same persisted setting the Settings menu writes. Playlists have no letter
+    // strip, so the header is reached with Up from the first row.
+    function togglePlaylistSort() {
+        var next = retroarchBackend.playlistSort() === "COMPANY" ? "SYSTEM" : "COMPANY"
+        appCore.save_setting(moduleRoot.moduleId, "playlist_sort", next)
+    }
 
     signal navigateTo(string path, var params, var listState)
     signal goBack()
@@ -37,6 +46,74 @@ FocusScope {
         anchors.left: parent.left
         anchors.topMargin: root.sh * 0.125 //60
         anchors.leftMargin: root.sw * 0.125 //80
+    }
+
+    // Sort header: only the direction word is the control, matching Games and
+    // Recent. Up from the first playlist row focuses it; Enter toggles the
+    // persisted playlist_sort setting.
+    Row {
+        id: playlistSortHeader
+        objectName: "playlistSortHeader" // lab smoke-test handle
+        visible: playlistsRoot.listLoaded && playlistList.count > 0
+        anchors.top: parent.top
+        anchors.topMargin: root.sh * 0.195
+        anchors.right: parent.right
+        anchors.rightMargin: root.sw * 0.125
+        spacing: 0
+
+        Text {
+            id: playlistCountLabel
+            objectName: "playlistSortCount" // lab smoke-test handle
+            text: playlistList.count + " PLAYLISTS  ·  "
+            color: root.secondaryColor
+            font.family: root.globalFont
+            font.capitalization: Font.AllUppercase
+            font.pixelSize: root.sh * 0.027
+        }
+
+        Item {
+            id: playlistSortButton
+            width: playlistSortDirection.implicitWidth + root.sw * 0.02
+            height: playlistSortDirection.implicitHeight + root.sh * 0.012
+
+            Rectangle {
+                id: sortHeaderHighlight
+                objectName: "sortHeaderHighlight" // lab smoke-test handle
+                anchors.fill: parent
+                visible: playlistsRoot.sortHeaderFocused
+                color: root.accentColor
+            }
+
+            Text {
+                id: playlistSortDirection
+                objectName: "playlistSortDirection" // lab smoke-test handle
+                anchors.centerIn: parent
+                text: playlistsRoot.playlistSortLabel
+                color: playlistsRoot.sortHeaderFocused ? root.surfaceColor : root.secondaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                font.pixelSize: root.sh * 0.027
+
+                Keys.enabled: true
+                Keys.onReturnPressed: function(event) {
+                    playlistsRoot.togglePlaylistSort()
+                    event.accepted = true
+                }
+                Keys.onUpPressed: function(event) { event.accepted = true } // top of the tab order
+                Keys.onDownPressed: function(event) {
+                    playlistsRoot.sortHeaderFocused = false
+                    playlistList.forceActiveFocus() // returns to the row you were on
+                    event.accepted = true
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                        playlistsRoot.sortHeaderFocused = false
+                        playlistList.forceActiveFocus()
+                        event.accepted = true
+                    }
+                }
+            }
+        }
     }
 
     // Loading indicator
@@ -98,6 +175,7 @@ FocusScope {
 
     RowTrackingListView {
         id: playlistList
+        objectName: "playlistList" // lab smoke-test handle
 
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.25 //120
@@ -191,10 +269,18 @@ FocusScope {
             }
         }
 
-        Keys.onUpPressed: {
+        Keys.onUpPressed: function(event) {
             if (count === 0) return
-            if (currentIndex > 0) currentIndex--
-            else currentIndex = count - 1
+            if (currentIndex > 0) {
+                currentIndex--
+            } else {
+                // Past the top row: focus the playlist sort header instead of
+                // wrapping to the bottom.
+                playlistsRoot.sortHeaderFocused = true
+                playlistSortDirection.forceActiveFocus()
+                event.accepted = true
+                return
+            }
             playlistList.positionViewAtIndex(playlistList.currentIndex, ListView.Contain)
         }
         Keys.onDownPressed: {
@@ -233,6 +319,7 @@ FocusScope {
             : retroarchBackend.refreshPlaylists(systemId)
         var rows = buildRows(pls)
         playlistList.model = rows
+        playlistsRoot.playlistSortLabel = retroarchBackend.playlistSort()
         playlistsRoot.listLoaded = true
         if (rows.length === 0) return
 

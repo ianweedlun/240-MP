@@ -60,6 +60,22 @@ public:
     }
     Q_INVOKABLE QString gameSort() const { return m_sort; }
     void setSort(const QString &sort) { m_sort = sort; }
+    Q_INVOKABLE QString playlistSort() const { return m_playlistSort; }
+    void setPlaylistSort(const QString &sort) { m_playlistSort = sort; }
+    Q_INVOKABLE QVariantList refreshAllPlaylists() {
+        QVariantList rows;
+        for (const QString &name : { QStringLiteral("NES"), QStringLiteral("SNES"),
+                                     QStringLiteral("Genesis") }) {
+            QVariantMap pl;
+            pl["name"] = name;
+            pl["shortName"] = name;
+            pl["count"] = 10;
+            pl["path"] = "/playlists/" + name + ".lpl";
+            rows.append(pl);
+        }
+        return rows;
+    }
+    Q_INVOKABLE QVariantList refreshPlaylists(const QString &) { return refreshAllPlaylists(); }
     // Games.qml asks for a playlist; the smoke test uses the same five rows.
     Q_INVOKABLE QVariantList refreshGames(const QString &) { return recentGames(); }
     Q_INVOKABLE void recordGamePosition(const QString &, int) {}
@@ -69,7 +85,8 @@ public:
     }
     Q_INVOKABLE void launchGame(const QVariantMap &, const QString &) {}
 private:
-    QString m_sort;
+    QString m_sort = QStringLiteral("A-Z");
+    QString m_playlistSort = QStringLiteral("SYSTEM");
 };
 
 class StubAppCore : public QObject {
@@ -192,10 +209,12 @@ int main(int argc, char **argv) {
               "A-Z letter strip is alphabetical with articles stripped (#ADLM)");
         check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("A-Z"),
               "view carries the A-Z sort label");
-        QObject *header = view->findChild<QObject *>("recentCountHeader");
-        check(header && QQmlProperty::read(header, "text").toString()
-              == QStringLiteral("5 GAMES  ·  A-Z"),
-              "count header matches the games list (N GAMES · A-Z)");
+        QObject *header = view->findChild<QObject *>("recentSortDirection");
+        QObject *count = view->findChild<QObject *>("recentSortCount");
+        check(count && QQmlProperty::read(count, "text").toString()
+              == QStringLiteral("5 GAMES  ·  ") &&
+              header && QQmlProperty::read(header, "text").toString() == QStringLiteral("A-Z"),
+              "header splits count and sort direction (N GAMES · A-Z)");
         check(QQmlProperty::read(view, "showPreview").toBool(), "preview enabled by default");
 
         QObject *preview = view->findChild<QObject *>("previewLoader");
@@ -236,6 +255,11 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             check(QQmlProperty::read(view, "sortHeaderFocused").toBool(),
                   "Up past the first letter focuses the sort header");
+            QObject *highlight = view->findChild<QObject *>("sortHeaderHighlight");
+            check(highlight && QQmlProperty::read(highlight, "visible").toBool() &&
+                  QQmlProperty::read(highlight, "width").toDouble()
+                  < QQmlProperty::read(count, "width").toDouble(),
+                  "accent highlights only the direction word, not N GAMES");
             check(QQmlProperty::read(strip, "currentIndex").toInt() == 0,
                   "letter selection is preserved when the header takes focus");
             sendKey(header, Qt::Key_Down);
@@ -294,10 +318,12 @@ int main(int argc, char **argv) {
               "Z-A letter strip reverses with '#' trailing (MLDA#)");
         check(QQmlProperty::read(view, "gameSortLabel").toString() == QStringLiteral("Z-A"),
               "view carries the Z-A sort label");
-        QObject *header = view->findChild<QObject *>("recentCountHeader");
-        check(header && QQmlProperty::read(header, "text").toString()
-              == QStringLiteral("5 GAMES  ·  Z-A"),
-              "count header matches the games list (N GAMES · Z-A)");
+        QObject *header = view->findChild<QObject *>("recentSortDirection");
+        QObject *count = view->findChild<QObject *>("recentSortCount");
+        check(count && QQmlProperty::read(count, "text").toString()
+              == QStringLiteral("5 GAMES  ·  ") &&
+              header && QQmlProperty::read(header, "text").toString() == QStringLiteral("Z-A"),
+              "header splits count and sort direction (N GAMES · Z-A)");
         QObject *list = view->findChild<QObject *>("recentList");
         QObject *strip = view->findChild<QObject *>("letterList");
         if (list) {
@@ -326,11 +352,13 @@ int main(int argc, char **argv) {
 
         QObject *header = view->findChild<QObject *>("sortHeader");
         QObject *strip = view->findChild<QObject *>("letterList");
-        check(header && strip, "Games view has a sort header and letter strip");
-        if (header) {
-            check(QQmlProperty::read(header, "text").toString()
-                  == QStringLiteral("5 GAMES  ·  A-Z"),
-                  "Games header reads N GAMES · A-Z");
+        QObject *count = view->findChild<QObject *>("gamesSortCount");
+        check(header && strip && count, "Games view has a sort header and letter strip");
+        if (header && count) {
+            check(QQmlProperty::read(count, "text").toString()
+                  == QStringLiteral("5 GAMES  ·  ") &&
+                  QQmlProperty::read(header, "text").toString() == QStringLiteral("A-Z"),
+                  "Games header splits count and sort direction (N GAMES · A-Z)");
         }
         if (header && strip) {
             QQmlProperty::write(strip, "currentIndex", 0);
@@ -347,6 +375,48 @@ int main(int argc, char **argv) {
             check(!QQmlProperty::read(view, "sortHeaderFocused").toBool() &&
                   QQmlProperty::read(strip, "currentIndex").toInt() == 0,
                   "Games: Down from the header returns to the same letter");
+        }
+        delete view;
+    }
+
+    // ---- Playlists.qml: same focusable sort control, SYSTEM / COMPANY ----
+    {
+        QQmlEngine engine;
+        engine.addImportPath(repoRoot + "/views");
+        StubBackend backend; StubAppCore core; StubRoot root; StubModule module;
+        QObject *view = loadView(engine, backend, core, root, module, repoRoot,
+                                 QStringLiteral("Playlists.qml"));
+        if (!view) return 1;
+
+        QObject *header = view->findChild<QObject *>("playlistSortDirection");
+        QObject *count = view->findChild<QObject *>("playlistSortCount");
+        QObject *list = view->findChild<QObject *>("playlistList");
+        check(header && count && list, "Playlists view has a sort header and list");
+        if (header && count) {
+            check(QQmlProperty::read(count, "text").toString()
+                  == QStringLiteral("4 PLAYLISTS  ·  ") &&
+                  QQmlProperty::read(header, "text").toString() == QStringLiteral("SYSTEM"),
+                  "Playlists header splits count and sort direction");
+        }
+        if (header && list) {
+            QQmlProperty::write(list, "currentIndex", 0);
+            QMetaObject::invokeMethod(list, "forceActiveFocus");
+            sendKey(list, Qt::Key_Up);
+            check(QQmlProperty::read(view, "sortHeaderFocused").toBool(),
+                  "Playlists: Up past the first row focuses the sort header");
+            QObject *highlight = view->findChild<QObject *>("sortHeaderHighlight");
+            check(highlight && QQmlProperty::read(highlight, "visible").toBool() &&
+                  count && QQmlProperty::read(highlight, "width").toDouble()
+                  < QQmlProperty::read(count, "width").toDouble(),
+                  "Playlists: accent highlights only the direction word");
+            sendKey(header, Qt::Key_Return);
+            check(core.savedModule() == QStringLiteral("com.240mp.retroarch") &&
+                  core.savedKey() == QStringLiteral("playlist_sort") &&
+                  core.savedValue().toString() == QStringLiteral("COMPANY"),
+                  "Playlists: Enter persists the toggled playlist sort");
+            sendKey(header, Qt::Key_Down);
+            check(!QQmlProperty::read(view, "sortHeaderFocused").toBool(),
+                  "Playlists: Down from the header returns to the list");
         }
         delete view;
     }

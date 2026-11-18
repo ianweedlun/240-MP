@@ -136,51 +136,70 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
     }
 
-    // Sort header: focusable from the top of the letter strip. Enter toggles
-    // Game Sort; the highlight makes the focused state visible on the CRT.
-    Rectangle {
-        id: sortHeaderHighlight
-        objectName: "sortHeaderHighlight" // lab smoke-test handle
-        visible: recentRoot.sortHeaderFocused
-        anchors.top: parent.top
-        anchors.topMargin: root.sh * 0.185
-        anchors.right: parent.right
-        anchors.rightMargin: root.sw * 0.115
-        width: recentCountHeader.implicitWidth + root.sw * 0.02
-        height: recentCountHeader.implicitHeight + root.sh * 0.012
-        color: root.accentColor
-    }
-
-    Text {
-        id: recentCountHeader
-        objectName: "recentCountHeader" // lab smoke-test handle
+    // Sort header: only the direction word is the control. The count prefix
+    // stays plain text; Up from the letter strip focuses the direction, whose
+    // Enter toggles Game Sort and whose accent block shows the focused state.
+    Row {
+        id: recentSortHeader
+        objectName: "recentSortHeader" // lab smoke-test handle
         visible: recentRoot.listLoaded && recentList.count > 0
         anchors.top: parent.top
         anchors.topMargin: root.sh * 0.195
         anchors.right: parent.right
         anchors.rightMargin: root.sw * 0.125
-        text: recentList.count + " GAMES  ·  " + recentRoot.gameSortLabel
-        color: recentRoot.sortHeaderFocused ? root.surfaceColor : root.secondaryColor
-        font.family: root.globalFont
-        font.capitalization: Font.AllUppercase
-        font.pixelSize: root.sh * 0.027
+        spacing: 0
 
-        Keys.enabled: true
-        Keys.onReturnPressed: function(event) {
-            recentRoot.toggleGameSort()
-            event.accepted = true
+        Text {
+            id: recentCountLabel
+            objectName: "recentSortCount" // lab smoke-test handle
+            text: recentList.count + " GAMES  ·  "
+            color: root.secondaryColor
+            font.family: root.globalFont
+            font.capitalization: Font.AllUppercase
+            font.pixelSize: root.sh * 0.027
         }
-        Keys.onUpPressed: function(event) { event.accepted = true } // top of the tab order
-        Keys.onDownPressed: function(event) {
-            recentRoot.sortHeaderFocused = false
-            letterList.forceActiveFocus() // keeps its current letter highlighted
-            event.accepted = true
-        }
-        Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
-                recentRoot.sortHeaderFocused = false
-                letterList.forceActiveFocus()
-                event.accepted = true
+
+        Item {
+            id: recentSortButton
+            width: recentCountHeader.implicitWidth + root.sw * 0.02
+            height: recentCountHeader.implicitHeight + root.sh * 0.012
+
+            Rectangle {
+                id: sortHeaderHighlight
+                objectName: "sortHeaderHighlight" // lab smoke-test handle
+                anchors.fill: parent
+                visible: recentRoot.sortHeaderFocused
+                color: root.accentColor
+            }
+
+            Text {
+                id: recentCountHeader
+                objectName: "recentSortDirection" // lab smoke-test handle
+                anchors.centerIn: parent
+                text: recentRoot.gameSortLabel
+                color: recentRoot.sortHeaderFocused ? root.surfaceColor : root.secondaryColor
+                font.family: root.globalFont
+                font.capitalization: Font.AllUppercase
+                font.pixelSize: root.sh * 0.027
+
+                Keys.enabled: true
+                Keys.onReturnPressed: function(event) {
+                    recentRoot.toggleGameSort()
+                    event.accepted = true
+                }
+                Keys.onUpPressed: function(event) { event.accepted = true } // top of the tab order
+                Keys.onDownPressed: function(event) {
+                    recentRoot.sortHeaderFocused = false
+                    letterList.forceActiveFocus() // keeps its current letter highlighted
+                    event.accepted = true
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                        recentRoot.sortHeaderFocused = false
+                        letterList.forceActiveFocus()
+                        event.accepted = true
+                    }
+                }
             }
         }
     }
