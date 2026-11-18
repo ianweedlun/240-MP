@@ -610,6 +610,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-auth-gate COMMAND yt-auth-gate-tests)
 
+    # OAuth refresh replay state (youtube torture 2026-11-18): a marker is
+    # set only while a request is deferred; live requests clear their own.
+    # Pure state machine, no processes/network.
+    add_executable(yt-pending-replay-tests
+        src/util/tests/YtPendingReplayTest.cpp)
+    set_target_properties(yt-pending-replay-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-pending-replay-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-pending-replay-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-pending-replay COMMAND yt-pending-replay-tests)
+
     # InnerTube browse-row parser (issue #28 plan D): pure fixture walk —
     # renderer extraction, text-shape handling, caps, continuation cursors.
     add_executable(yt-browse-parse-tests
