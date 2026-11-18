@@ -118,8 +118,12 @@ jobs:
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+          # APP_VERSION is set by the tested decide helper: "<PR>-pi-rc" for an
+          # RC deploy, or the saved official rev for a restore. The latter is
+          # what ci.yml stamps on the beta build (github.sha), so the restored
+          # binary is byte-identical to official beta, md5 included.
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ github.event.pull_request.number }}-pi-rc"
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
           cmake --build build --parallel
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
@@ -167,14 +171,12 @@ jobs:
             fi
             OFFICIAL=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
             [ -n "$OFFICIAL" ] && $SSH "echo $OFFICIAL > \$HOME/.240mp-rc-restore-rev" || true
-          else
-            CUR=$($SSH "cat \$HOME/.240mp-last-deployed-rev 2>/dev/null" || true)
-            if [ "$CUR" = "$REF" ]; then
-              $SSH "rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" || true
-              echo "Pi was never actually displaced (official marker still $REF) — RC state cleared, no reboot." | post_comment
-              exit 0
-            fi
           fi
+          # Restore mode ALWAYS redeploys. The decide step already confirmed
+          # this PR owns the Pi's RC marker, and RC deploys deliberately never
+          # touch .240mp-last-deployed-rev — so the old "official marker still
+          # equals REF" fast path fired for every real RC build and cleared the
+          # markers while leaving the RC binary installed (issue #91).
 
           PI_PATH="/tmp/240mp-rc-$REF.tar.gz"
           scp -P 2222 -i /tmp/pi_id -o StrictHostKeyChecking=no -o PasswordAuthentication=no \
