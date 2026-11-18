@@ -24,6 +24,11 @@ public:
     int createdKind = -1; QString createdId, createdName; int createdRet = 7;
     QString createdWants;
     int seededChannel = -1;
+    // Set by a test that wants the seed answer after the view has gone away.
+    bool deferSeed = false;
+    int pendingSeed = -1;
+    int cancelledChannel = -1;
+    Q_INVOKABLE void cancel_preset_seed(int ch) { cancelledChannel = ch; }
     Q_INVOKABLE QVariantList list_channels() { return {}; }
     Q_INVOKABLE void load_catalog(const QString &kind) {
         QVariantList rows;
@@ -63,7 +68,12 @@ public:
     // on the call, which is the same signal path the view listens on.
     Q_INVOKABLE void seed_preset_channel(int ch) {
         seededChannel = ch;
+        if (deferSeed) { pendingSeed = ch; return; }
         emit presetSeeded(ch, true, QStringLiteral("5 shows"));
+    }
+    Q_INVOKABLE void finishSeedDeferred(bool ok) {
+        emit presetSeeded(pendingSeed, ok,
+                          ok ? QStringLiteral("5 shows") : QStringLiteral("Nothing"));
     }
 signals:
     void catalogReady(const QString &kind, const QVariantList &options);
@@ -264,6 +274,42 @@ int main(int argc, char **argv) {
                 delete obj;
             }
         }
+    }
+
+    // ---- Test 5: leaving while a new preset is seeding cancels that channel.
+    // The seed answer arrives after the view (and its Connections) is gone, so
+    // the view cannot be the only place that removes an empty channel.
+    {
+        backend.deferSeed = true;
+        backend.cancelledChannel = -1;
+        ctx->setContextProperty("navParams", [] {
+            QVariantMap m; m["recipe"] = QString("genre");
+            m["wants"] = QString("tv");
+            return m;
+        }());
+        QQmlComponent comp(&engine, subjectUrl);
+        QObject *obj = comp.create();
+        check(obj != nullptr, "PresetSubject instantiates for the cancel test");
+        if (obj) {
+            app.processEvents();
+            QObject *optObj = nullptr;
+            for (QObject *c : obj->findChildren<QObject *>())
+                if (QString(c->metaObject()->className()).contains("OptionList")) {
+                    optObj = c; break;
+                }
+            check(optObj != nullptr, "cancel test OptionList found");
+            QMetaObject::invokeMethod(optObj, "activate", Q_ARG(int, 0));
+            app.processEvents();
+            check(backend.seededChannel == backend.createdRet,
+                  "the cancel test actually started a seed");
+            delete obj;   // Back / nav-away destroys the view mid-seed
+            app.processEvents();
+            backend.finishSeedDeferred(false);
+            app.processEvents();
+            check(backend.cancelledChannel == backend.createdRet,
+                  "leaving mid-seed cancels the channel that never got content");
+        }
+        backend.deferSeed = false;
     }
 
     std::printf("\n%s (errors=%d)\n", errors ? "SMOKE FAILED" : "SMOKE PASSED", errors);

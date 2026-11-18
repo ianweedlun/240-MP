@@ -2128,6 +2128,42 @@ void testGenreRecipeWantsByChannelKind() {
     }
 }
 
+void testCancelledPresetSeedLeavesNoOrphanChannel() {
+    section("Backend: leaving a preset seed cancels the empty channel it created");
+
+    FakePlexServer plex;
+    Fixture fx;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const int ch = b.create_preset_channel(0, QStringLiteral("Nobody"),
+                                           QStringLiteral("Nobody"), QStringLiteral("tv"));
+    check(ch >= 0, "preset channel created for the cancel test");
+
+    bool seeded = false, ok = true;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == ch) { seeded = true; ok = s; }
+                     });
+    b.seed_preset_channel(ch);
+    b.cancel_preset_seed(ch);   // the add flow's view is gone mid-seed
+    for (int i = 0; i < 40 && !seeded; ++i) spin(10);
+    check(seeded && !ok, "a seed that found nothing reports failure");
+    check(fx.read(ch).isEmpty(), "cancelled seed removes the empty channel from the dial");
+
+    // A re-seed from the channel's own settings is not a creation. An empty
+    // answer must leave that channel (and the viewer's choices) alone.
+    const int keep = b.create_preset_channel(0, QStringLiteral("Keep"),
+                                             QStringLiteral("Keep"), QStringLiteral("tv"));
+    bool reseeded = false, reseedOk = true;
+    QObject::connect(&b, &VirtualChannelsBackend::presetSeeded, &b,
+                     [&](int num, bool s, const QString &) {
+                         if (num == keep) { reseeded = true; reseedOk = s; }
+                     });
+    b.seed_preset_channel(keep);
+    for (int i = 0; i < 40 && !reseeded; ++i) spin(10);
+    check(reseeded && !reseedOk, "re-seed with no content still reports failure");
+    check(!fx.read(keep).isEmpty(), "re-seed never deletes a channel that already existed");
+}
+
 void testPlexTvGenreSeedFiltersShows() {
     section("Backend: Plex TV genre recipe seeds only shows carrying that genre");
 
@@ -2425,6 +2461,7 @@ int runVirtualChannelsBackendTests() {
     testSeededRecipeReadsBack();
     testGenreRecipeWantsByChannelKind();
     testPlexTvGenreSeedFiltersShows();
+    testCancelledPresetSeedLeavesNoOrphanChannel();
     testPresetChannelDefaultsToInterleaved();
     testAllRecipesFilterByLibraryDb();
     testSubtitleCycleRefusesWithNoTracks();

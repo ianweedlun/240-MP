@@ -2588,7 +2588,7 @@ void VirtualChannelsBackend::generationEnded(int channelNumber, bool ok,
         m_genChannel = -1;
         if (m_genTimer) m_genTimer->stop();
         m_genQueue.clear();
-        emit presetSeeded(channelNumber, false, message);
+        reportSeedFailure(channelNumber, message);
         return;
     }
     emit generationFinished(channelNumber, ok, message);
@@ -4892,6 +4892,31 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
     return number;
 }
 
+// Every failed seed answer, whether it came from an early refusal, a server
+// timeout, or a recipe that found nothing, takes this road. The add-preset
+// view normally deletes the channel on failure; when the viewer left during
+// the seed that view is already destroyed, so the backend does it here.
+void VirtualChannelsBackend::reportSeedFailure(int channelNumber,
+                                               const QString &message) {
+    const bool discard = m_seedDiscardOnEmpty;
+    m_seedDiscardOnEmpty = false;
+    emit presetSeeded(channelNumber, false, message);
+    if (discard) delete_channel(channelNumber);
+}
+
+void VirtualChannelsBackend::cancel_preset_seed(int channelNumber) {
+    if (m_seedActive && m_genChannel == channelNumber) {
+        m_seedDiscardOnEmpty = true;
+        return;
+    }
+    // The answer may already have landed on its way here. Only remove a
+    // channel that is still the empty shell the add flow created.
+    const QJsonObject o = QJsonObject::fromVariantMap(channelObject(channelNumber));
+    const bool hasPicks = !o.value(QLatin1String("programmes")).toArray().isEmpty();
+    const bool hasSchedule = QFileInfo::exists(scheduleFilePath(channelNumber));
+    if (!hasPicks && !hasSchedule) delete_channel(channelNumber);
+}
+
 // The seed pass: the recipe's content becomes the channel's picks, so the
 // builder opens with everything already ticked and the viewer's work is
 // removing what they don't want. It rides the generation machinery — same
@@ -4903,18 +4928,17 @@ int VirtualChannelsBackend::create_preset_channel(int kind, const QString &id,
 void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
     const QVariantMap raw = channelObject(channelNumber);
     if (raw.isEmpty()) {
-        emit presetSeeded(channelNumber, false, QStringLiteral("No such channel"));
+        reportSeedFailure(channelNumber, QStringLiteral("No such channel"));
         return;
     }
     const QJsonObject o = QJsonObject::fromVariantMap(raw);
     const QJsonObject preset = o.value(QLatin1String("preset")).toObject();
     if (preset.isEmpty()) {
-        emit presetSeeded(channelNumber, false,
-                          QStringLiteral("This channel has no recipe"));
+        reportSeedFailure(channelNumber, QStringLiteral("This channel has no recipe"));
         return;
     }
     if (m_genActive) {
-        emit presetSeeded(channelNumber, false, QStringLiteral("Another channel is building"));
+        reportSeedFailure(channelNumber, QStringLiteral("Another channel is building"));
         return;
     }
 
@@ -4957,12 +4981,12 @@ void VirtualChannelsBackend::seed_preset_channel(int channelNumber) {
     }
     if (!found) {
         m_seedActive = false;
-        emit presetSeeded(channelNumber, false, QStringLiteral("Could not start the seed"));
+        reportSeedFailure(channelNumber, QStringLiteral("Could not start the seed"));
         return;
     }
     if (!writeChannels(channels)) {
         m_seedActive = false;
-        emit presetSeeded(channelNumber, false, QStringLiteral("Could not start the seed"));
+        reportSeedFailure(channelNumber, QStringLiteral("Could not start the seed"));
         return;
     }
 
@@ -5086,18 +5110,23 @@ void VirtualChannelsBackend::finishSeeding() {
         qInfo("[VirtualChannels] channel %d seeded from its recipe: %d pick(s) on the dial",
               channelNumber, total);
         if (!writeChannels(channels)) {
-            emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
+            reportSeedFailure(channelNumber, QStringLiteral("Could not save the picks"));
             return;
         }
-        emit presetSeeded(channelNumber, total > 0,
-                          total > 0 ? QStringLiteral("%1 %2")
-                                        .arg(total)
-                                        .arg(movies ? (total == 1 ? "film" : "films")
-                                                    : (total == 1 ? "show" : "shows"))
-                                    : QStringLiteral("Nothing on your library for this recipe"));
+        if (total > 0) {
+            m_seedDiscardOnEmpty = false;
+            emit presetSeeded(channelNumber, true,
+                              QStringLiteral("%1 %2")
+                                  .arg(total)
+                                  .arg(movies ? (total == 1 ? "film" : "films")
+                                              : (total == 1 ? "show" : "shows")));
+        } else {
+            reportSeedFailure(channelNumber,
+                              QStringLiteral("Nothing on your library for this recipe"));
+        }
         break;
     }
-    if (!found) emit presetSeeded(channelNumber, false, QStringLiteral("Could not save the picks"));
+    if (!found) reportSeedFailure(channelNumber, QStringLiteral("Could not save the picks"));
 }
 
 QVariantList VirtualChannelsBackend::media_folders(int maxDepth) {
