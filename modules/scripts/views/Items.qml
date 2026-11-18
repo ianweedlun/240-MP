@@ -47,6 +47,11 @@ FocusScope {
 
     // Rewrites the sidecar and rescans, so the row and the main menu both update.
     function toggleFavorite() {
+        // The RUN/CANCEL overlay is modal: it owns the remote's keys while it is
+        // up. Without this guard, Right reaches this handler from behind the
+        // prompt and silently rewrites the pending script's sidecar (favorite),
+        // including removing a main-menu favorite the user never touched.
+        if (confirmVisible) return
         var entry = currentScript
         if (!entry) return
         var keep = scriptList.currentIndex

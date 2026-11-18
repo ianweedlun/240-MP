@@ -367,9 +367,13 @@ bool ScriptsBackend::setFavorite(const QString &basename, bool favorite) {
             text.remove(0, 1);
         in.close();
         // Preserve the file's own trailing-newline behaviour by splitting only.
+        // parseSidecar() is last-key-wins, so a hand-edited sidecar with two
+        // "favorite" lines is parsed from the LAST one. Rewrite every matching
+        // line: touching only the first leaves the parsed value unchanged and
+        // the Right-key favorite toggle silently does nothing.
         for (QString line : text.split(u'\n')) {
             const QString trimmed = line.trimmed();
-            if (!replaced && !trimmed.startsWith(QLatin1Char('#'))) {
+            if (!trimmed.startsWith(QLatin1Char('#'))) {
                 const int eq = trimmed.indexOf(QLatin1Char('='));
                 if (eq > 0 && trimmed.left(eq).trimmed().toLower() == QLatin1String("favorite")) {
                     line = QStringLiteral("favorite = ") + (favorite ? "yes" : "no");
