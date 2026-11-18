@@ -88,6 +88,7 @@ add_executable(240mp
     src/modules/emby/EmbyBackend.cpp
     src/modules/ambient_mode/AmbientModeBackend.cpp
     src/modules/youtube/YouTubeBackend.cpp
+    src/modules/youtube/YtInnertubeResolver.cpp
     src/modules/nfc_reader/NfcReaderBackend.cpp
     src/modules/nfc_reader/PcscDriver.cpp
     src/modules/nfc_reader/Pn532SerialDriver.cpp
@@ -197,6 +198,8 @@ target_include_directories(240mp PRIVATE
 
 # ── macOS bundle metadata ──────────────────────────────────────────────────────
 set_target_properties(240mp PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_NAME "240-MP"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
@@ -713,6 +716,19 @@ if(BUILD_TESTS)
         target_compile_options(yt-sponsor-ttl-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME yt-sponsor-ttl COMMAND yt-sponsor-ttl-tests)
+
+    # Innertube stream selection (overnight torture t_7ffb1fd1): pure fixture
+    # tests for the cap-enforcement, H.264 preference, itag-140 audio pick,
+    # muxed fallback, and expiry derivation. No network, no Qt event loop,
+    # no vendored library.
+    add_executable(yt-stream-select-tests
+        src/util/tests/YtStreamSelectTest.cpp)
+    set_target_properties(yt-stream-select-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-stream-select-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-stream-select-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-stream-select COMMAND yt-stream-select-tests)
 
     # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
     # exactly once per completed hand-off and only AFTER the CRTC state is

@@ -15,6 +15,8 @@
 #include "../../util/YtSponsorTtl.h"
 #include "../../util/YtPendingReplay.h"
 
+class YtInnertubeResolver;
+
 // Backend for the YouTube module (V1 "feed" approach — no auth).
 //
 // The user lists channel IDs (one per line) in <dataRoot>/youtube_subscriptions.txt.
@@ -193,6 +195,12 @@ signals:
     // the Player gates its EDL-bearing launch on this + playbackUrlReady.
     void sponsorReady(const QString &videoId);
 
+    // Resolve telemetry for the Pi state log: which resolver served the pair
+    // (innertube / ytdlp / cache) and how long it took. Wired to
+    // AppCore::note_state in main.cpp; note_state is compiled out of release
+    // builds, so this costs a signal emission and nothing else.
+    void resolveTelemetry(const QString &videoId, const QString &source, qint64 ms);
+
 private:
     // SponsorBlock state: normalized segments per videoId (an empty entry is a
     // confirmed "no segments" and suppresses re-fetch; transient failures live
@@ -304,8 +312,17 @@ private:
     bool                hasFreshUrlPair(const QString &key) const;
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form
+    // One in-process Innertube resolver (overnight torture t_7ffb1fd1). Cheap
+    // enough to warm a whole list; the yt-dlp spawn stays as the fallback.
+    YtInnertubeResolver *m_itResolver = nullptr;
+    // Keys with a spent in-process attempt. A key gets exactly one Innertube
+    // try; after that the yt-dlp fallback owns it, so a failed resolve never
+    // loops and never runs two resolvers at once.
+    QSet<QString> m_itTried;
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
-                                         const QString &fmt, const QString &key);
+                                          const QString &key);
+    void                launchYtdlpResolve(const QString &videoId, const QString &resolution,
+                                            const QString &key);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
@@ -342,9 +359,11 @@ private:
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
     static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
     static constexpr int    kUrlCacheMaxEntries = 80;
-    static constexpr int    kYtdlResolveTimeoutMs = 30000;
-    static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
-    static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
+    static constexpr int    kYtdlResolveTimeoutMs = 30000; // outer bound on the fallback spawn
+    // The in-process resolver is ~20x cheaper than a yt-dlp spawn, so one warm
+    // pass can cover a whole list page instead of the front dozen rows.
+    static constexpr int    kWarmListMax  = 50;  // entries warmed per list view
+    static constexpr int    kWarmQueueMax = 64;  // backlog cap across rapid browsing
     // Segment prefetch is cheaper than a URL resolve and covers the whole list
     // page, not just the warmed front; the cap only bounds pathological lists —
     // the view's focused-row prefetch covers anything past it while scrolling.

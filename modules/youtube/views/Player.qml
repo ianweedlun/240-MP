@@ -162,16 +162,19 @@ FocusScope {
     // is a late arrival: cached for the next play, never for the current one.
     property bool   launchDone: false
 
+    // The in-process Innertube resolve answers in well under a second, so 4 s
+    // covers its timeout with margin; past it we take the ytdl path (mpv's
+    // ytdl hook) as the always-works fallback.
     Timer {
         id: resolveWaitTimer
-        interval: 15000   // yt-dlp warm resolve is ~4-6s on the Pi; 15s is generous
+        interval: 4000
         repeat: false
         onTriggered: {
             if (!playerRoot.waitingForResolve)
                 return
             playerRoot.waitingForResolve = false
             resolveWaitTimer.stop()
-            appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=15s reason=timeout")
+            appCore.note_state("yt-fallback", "vid=" + playerRoot.videoId + " waited=4s reason=timeout")
             var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
             playerRoot.ytdlArgs = ["--ytdl=yes", "--ytdl-format=" + youtubeBackend.ytdlFormatForResolution(resolution)]
             playerRoot.play(playerRoot.pendingPlayStartMs)
