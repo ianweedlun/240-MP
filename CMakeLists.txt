@@ -406,6 +406,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeMixerTest.cpp)
     set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
@@ -422,6 +423,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeManagerTest.cpp)
     set_target_properties(volume-manager-tests PROPERTIES AUTOMOC ON)
@@ -452,6 +454,24 @@ if(BUILD_TESTS)
         target_compile_options(mixer-fake-child PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
+
+    # PipeWire async backend contract (T1 P-5A): drives the real backend against
+    # the checked-in compiled mixer-stub on PATH (no audio hardware). Timing,
+    # coalescing, clamp no-ops and every failure-mode rollback, sanitizer-clean.
+    add_executable(pipewire-volume-mixer-tests
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/tests/PipeWireVolumeMixerTest.cpp)
+    set_target_properties(pipewire-volume-mixer-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(pipewire-volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(pipewire-volume-mixer-tests PRIVATE src)
+    add_dependencies(pipewire-volume-mixer-tests mixer-stub)
+    target_compile_definitions(pipewire-volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(pipewire-volume-mixer-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME pipewire-volume-mixer COMMAND pipewire-volume-mixer-tests)
 
     # P-5A delayed-mixer UI-stall regression (torture T1): a slow system mixer
     # must not stall the UI thread >16 ms. Drives the REAL InputManager file
@@ -496,6 +516,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/util/MpvBasicOptions.cpp
         src/util/YtDlpLocator.cpp
