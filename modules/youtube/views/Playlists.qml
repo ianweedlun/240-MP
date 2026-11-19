@@ -123,7 +123,7 @@ FocusScope {
     }
 
     // Playlist list
-    ListView {
+    RowTrackingListView {
         id: itemList
         model: items
         anchors.top: parent.top

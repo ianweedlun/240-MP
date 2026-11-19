@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Debug telemetry: restored key taps and YouTube row selections
+- Ordinary keyboard/remote navigation now writes `key … delivered` lines even though it reaches QML directly rather than through the synthesized-input path. Key releases re-arm the dedup gate for remapped keys, auto-repeat stays quiet, and repeated debug-channel taps each leave evidence.
+- YouTube's primary item, video, playlist, channel, and SponsorBlock lists now use the shared row-tracking list primitive. String rows report their actual label, so a driven walk can prove both the key decision and the highlighted row.
+
 ### Added — CI: burst-branch RC lane for overnight validation
 - `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.
 - The PR lane and burst lane share a `pi-rc-deploy` concurrency group, so only one RC deploy can run at a time — the Pi never sees two RCs. A burst RC cannot overwrite another burst RC, and a PR close/restore will not mistake a burst marker for its own (`pr-N`).
