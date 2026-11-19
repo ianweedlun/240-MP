@@ -20,6 +20,14 @@ FocusScope {
     property string directAudioUrl: ""   // its bestaudio pair, when the format split one
     property bool   overlayVisible:   false
     property bool   playbackStarted:  false
+    // R-2: true from the instant doPlay() spawns mpv (loadAndPlay) until the next
+    // preparePlayback()/playAt() resets it. Distinct from playbackStarted (first
+    // position event): the ESC/BS Back guard keys off THIS so a Back in the
+    // post-launch / pre-playbackStarted window routes through sendKey("ESC")
+    // (guaranteed-delivery → forceStop pre-connect) instead of goBack() orphaning
+    // the just-spawned mpv. Pre-launch windows (cold resolve, 50 ms startTimer,
+    // resume overlay) keep launchDone == false → direct goBack(), no child to orphan.
+    property bool   launchDone:       false
     property int    savedPositionMs:  0
     property int    choiceIndex:      0
     property string errorMessage:     ""
@@ -77,6 +85,10 @@ FocusScope {
         // OSC segment marks get their data out-of-band: raw source ranges the
         // script converts to the cut virtual timeline itself (empty clears).
         mpvController.setOscRanges(oscRanges)
+        // R-2: mark launch intent the instant mpv is spawned. From here a Back
+        // must route through sendKey (guaranteed-delivery), never goBack() which
+        // would orphan the child before its first position event.
+        launchDone = true
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
@@ -90,6 +102,7 @@ FocusScope {
     // backend's background resolve is the only route and playAt() will wait
     // for playbackUrlReady rather than pay ytdl_hook's re-resolve.
     function preparePlayback() {
+        launchDone = false   // R-2: a fresh resolve/launch sequence clears prior intent
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
         // Segment windows: cached hit re-emits sponsorReady synchronously; a
         // cold window is one ~300 ms GET, usually beating the yt-dlp resolve.
@@ -231,6 +244,7 @@ FocusScope {
     }
 
     function playAt(startMs) {
+        launchDone = false   // R-2: every launch sequence starts pre-intent; doPlay sets it on spawn
         if (directPlayUrl !== "") {
             play(startMs)
             return
@@ -292,13 +306,17 @@ FocusScope {
             }
         } else {
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) {
-                if (!playerRoot.playbackStarted)
+                // R-2: key off launchDone (mpv spawned), not playbackStarted (first
+                // position). Post-launch/pre-playbackStarted Back must reach sendKey
+                // so the quit intent is guaranteed-delivery (forceStop pre-connect)
+                // instead of goBack() orphaning the child. Pre-launch → direct goBack.
+                if (!playerRoot.launchDone)
                     goBack()
                 else
                     mpvController.sendKey("ESC")
                 event.accepted = true
             } else if (event.key === Qt.Key_Backspace) {
-                if (!playerRoot.playbackStarted)
+                if (!playerRoot.launchDone)
                     goBack()
                 else
                     mpvController.sendKey("BS")
