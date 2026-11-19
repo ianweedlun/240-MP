@@ -773,6 +773,46 @@ if(BUILD_TESTS)
         ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
         ${CMAKE_SOURCE_DIR}/src/util)
 
+    # ROB-07 one-terminal-result contract (YtInnertubeResolver.h): exactly one
+    # finished() per accepted resolve(), and an attempt abandoned by the timeout
+    # must never emit again nor chain a Player request. Two-sided regression:
+    # delayed-abandoned (visitorData replies AFTER the 4 s timeout), near-deadline
+    # (replies just BEFORE it), fast-healthy control (over-suppression guard).
+    # Drives the REAL resolver + vendored library against a loopback CONNECT+TLS
+    # fixture proxy — no live network, no mpv, no display. Delays are fixture-side
+    # sleeps, configurable via --visitor-delay-ms/--observe-ms on the case script
+    # or YT_CONTRACT_VISITOR_DELAY_MS/YT_CONTRACT_OBSERVE_MS. Needs python3 and
+    # the openssl CLI (ephemeral self-signed fixture cert, generated per run).
+    # On the unfixed snapshot delayed-abandoned FAILS (phantom ok=1 after the
+    # timeout); the other two cases pass. See src/modules/youtube/tests/README.md.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target yt-resolver-contract-probe
+    #   ctest --test-dir build-test -R yt-resolver-contract --output-on-failure
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(yt-resolver-contract-probe
+        src/modules/youtube/tests/YtResolverContractProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-resolver-contract-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-resolver-contract-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-resolver-contract-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+    if(NOT MSVC)
+        target_compile_options(yt-resolver-contract-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(contract_case delayed-abandoned near-deadline fast-healthy)
+        add_test(NAME yt-resolver-contract-${contract_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_contract_case.py
+                --case ${contract_case}
+                --probe $<TARGET_FILE:yt-resolver-contract-probe>
+                --fixture ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/fixture_proxy.py)
+        set_tests_properties(yt-resolver-contract-${contract_case} PROPERTIES
+            TIMEOUT 120
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
     # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
     # exactly once per completed hand-off and only AFTER the CRTC state is
     # captured, displayReturned() once per return, and a refused hand-off stays
