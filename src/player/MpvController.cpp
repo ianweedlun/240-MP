@@ -431,6 +431,35 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         if (!out.isEmpty())
             qWarning("[mpv] %s", out.trimmed().constData());
     });
+    // FailedToStart is the one process error Qt does NOT follow with finished():
+    // locate() succeeded but the spawn itself failed (exec-format error, missing
+    // libs, ENOENT race, non-executable file). Without this handler the Player
+    // view waits for a playbackEnded that never comes (issue #110). Mirror the
+    // missing-bin / handoff-refusal bail-outs above: tear down, then a deferred
+    // synthetic end with reason "failed" — the views already branch on it.
+    // Other error kinds (Crashed, ...) still deliver finished() and stay on the
+    // normal onProcessFinished path.
+    connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError err) {
+        if (err != QProcess::FailedToStart) return;
+        qWarning("[MpvController] mpv failed to start: %s — synthetic playbackEnded(failed)",
+                 qPrintable(m_process->errorString()));
+        m_connectTimer->stop();
+        m_watchdogTimer->stop();
+        m_ipc->abort();
+        QFile::remove(m_socketPath);
+        if (m_headlessMode) {
+            // acquire() may have handed us the display before start() failed.
+            // mpv never ran, so there is no pending KMS commit to defer for —
+            // releaseNow is a no-op when we don't hold the screen.
+            if (m_handoff) m_handoff->releaseNow(QLatin1String(kHandoffOwner));
+            m_headlessMode = false;
+        }
+        m_process->deleteLater();
+        m_process = nullptr;
+        QTimer::singleShot(0, this, [this]() {
+            emit playbackEnded(0, 0, QStringLiteral("failed"));
+        });
+    });
 
     m_headlessMode = DisplayHandoff::isHeadless();
     if (m_headlessMode) {
@@ -587,6 +616,25 @@ void MpvController::seekTo(int positionMs) {
 }
 
 void MpvController::sendKey(const QString &key) {
+    // R-2: quit-intent keys are guaranteed-delivery. The QML players' Back
+    // handlers are sendKey-only (no stop()/goBack() fallback), and every other
+    // sendCommand caller is a connected-only feature whose pre-connect drop is
+    // correct. ESC/BS/STOP are the exception: before the IPC socket reaches
+    // ConnectedState the old path dropped the keypress at the sendCommand gate,
+    // orphaning the just-spawned mpv until natural EOF — forever under
+    // --loop-playlist=inf. Route the quit intent straight to forceStop() there
+    // (terminate + QPointer-guarded SIGKILL escalation), which reaps the child
+    // and emits playbackEnded("stopped") so the view goes back. Once connected,
+    // the keypress is forwarded byte-identically so the lua forced-binding
+    // semantics survive (OSC menu-esc/menu-bs close the menu; screensaver
+    // ss-dismiss wakes the saver; only then does a later press quit).
+    if (key == QLatin1String("ESC") || key == QLatin1String("BS")
+        || key == QLatin1String("STOP")) {
+        if (m_ipc->state() != QLocalSocket::ConnectedState) {
+            forceStop();
+            return;
+        }
+    }
     sendCommand({"keypress", key});
 }
 

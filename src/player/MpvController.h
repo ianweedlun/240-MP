@@ -48,6 +48,11 @@ public:
     // which a process that has stopped servicing that socket never reads.
     Q_INVOKABLE void forceStop();
     Q_INVOKABLE void seekTo(int positionMs);
+    // Forward a key to mpv. Quit-intent keys (ESC/BS/STOP) are guaranteed-delivery:
+    // post-connect they are sent as a byte-identical "keypress" (preserving the lua
+    // menu-esc/screensaver dismiss semantics); pre-connect they call forceStop()
+    // instead of being dropped, so an early Back can never orphan the spawned mpv
+    // (R-2). All other keys are best-effort and dropped before the IPC connects.
     Q_INVOKABLE void sendKey(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system
@@ -91,7 +96,8 @@ signals:
     //   "stopped" — user quit/stopped before the end (also the safe default for a
     //               crash/kill with no end-file event).
     //   "failed"  — mpv exited with an error (code 2 — file could not be played;
-    //               Up to the module as to when/how to use; for example Plex retries when transcoding).
+    //               or the process failed to start at all). Up to the module as to
+    //               when/how to use; for example Plex retries when transcoding.
     // A single signal (rather than one per reason) is deliberate: a Player view
     // connects one handler and branches on `reason`, so it can never silently drop
     // a case the way an unhandled per-reason signal would.
