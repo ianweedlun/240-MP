@@ -21,6 +21,14 @@
 //       mute toggle and one more press against a failing mixer (nonzero exit
 //       / garbage output / missing executable, chosen by the orchestrator).
 //       Must complete bounded, crash-free, with sane cached state.
+//   edge-alsa / edge-pipewire  — semantics-under-delay run: a 25-press Volume
+//       Down repeat burst drives the level to the 0 clamp (ALSA from hardware
+//       50, PipeWire from cached 100), 3 more presses prove the clamp is a
+//       no-op (no signal, no mixer child), then a file-channel "volmute"
+//       injection mutes and a direct toggleMute() unmutes. A 5 ms UI
+//       heartbeat gates the whole phase (<16 ms); the orchestrator asserts
+//       the exact OSD signal count (one per effective press + the two mute
+//       events) and persisted == final.
 //
 // Like the ROB-07 contract probe, this binary always exits 0 when it ran;
 // the pass/fail assertions live in the orchestrator. One machine-readable
@@ -125,9 +133,10 @@ QJsonObject readJson(const QString &path)
 
 struct RunInput
 {
-    QString scenario;      // volume-alsa | volume-pipewire | volume-noop | fault-*
+    QString scenario;      // volume-alsa | volume-pipewire | volume-noop | fault-* | edge-*
     QString backend;       // alsa | pipewire | none
     bool faultMode = false;
+    bool edgeMode = false;
     bool forceNoop = false;
     QString repoRoot;
     QString dataRoot;
@@ -372,6 +381,182 @@ int runScenario(const RunInput &in)
     return 0;
 }
 
+// Edge scenario (t_7621e31a verification card): repeat burst → clamp at 0 →
+// mute through the REAL file channel → direct unmute, all under the stub
+// delay, with the 5 ms heartbeat gating every caller-visible phase. Setup is
+// the same real path as the timing runs (AppCore + InputManager eventFilter +
+// VolumeManager + hardware mixer); only the press program differs.
+int runEdgeScenario(const RunInput &in)
+{
+    constexpr int kBurstPresses = 25;   // ALSA 50→0 in 10, PipeWire 100→0 in 20
+    constexpr int kClampPresses = 3;    // no-op presses at the 0 clamp
+
+    QDir().mkpath(in.dataRoot);
+    writeFile(in.dataRoot + QStringLiteral("/config.json"),
+              R"({"app":{"color_scheme":"Video 1"},"modules":{}})");
+    QFile::remove(in.dataRoot + QStringLiteral("/volume.json"));
+    QFile::remove(kKeyChannelPath);
+
+    QElapsedTimer constructClock;
+    constructClock.start();
+    VolumeManager volume(in.dataRoot, nullptr);
+    const qint64 constructMs = constructClock.elapsed();
+
+    // Same startup contract as the timing runs: wait for the first hardware
+    // observation so the burst computes deltas against the real level.
+    QElapsedTimer readyClock;
+    readyClock.start();
+    waitUntil([&] { return volume.mixerReady(); }, qMax(2000, in.stubDelayMs * 10));
+    const qint64 readyWaitMs = readyClock.elapsed();
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
+    const int callsAfterConstructor = mixerLogLines(in.mixerLog);
+
+    AppCore core(in.repoRoot, in.dataRoot);
+    InputManager input(in.dataRoot, &core);
+    QQuickWindow window;
+    window.resize(640, 480);
+    input.setTargetWindow(&window);
+    input.setVolumeManager(&volume);
+    window.installEventFilter(&input);
+    window.show();
+    window.requestActivate();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+    int volumeChangedSignals = 0;
+    int lastSignalLevel = -1;
+    bool lastSignalMuted = false;
+    QObject::connect(&volume, &VolumeManager::volumeChanged, &volume,
+                     [&](int level, bool muted) {
+        ++volumeChangedSignals;
+        lastSignalLevel = level;
+        lastSignalMuted = muted;
+    });
+
+    // Heartbeat across the whole edge phase: baseline window first (rig
+    // noise floor), then every gap while presses/injection/persistence run.
+    QElapsedTimer clock;
+    clock.start();
+    qint64 lastBeat = 0;
+    qint64 baselineMaxGap = 0, edgeMaxGap = 0;
+    bool active = false;
+    QTimer heartbeat;
+    heartbeat.setInterval(5);
+    QObject::connect(&heartbeat, &QTimer::timeout, [&] {
+        const qint64 now = clock.elapsed();
+        const qint64 gap = now - lastBeat;
+        if (lastBeat > 0) {
+            if (active) edgeMaxGap = std::max(edgeMaxGap, gap);
+            else baselineMaxGap = std::max(baselineMaxGap, gap);
+        }
+        lastBeat = now;
+    });
+    heartbeat.start();
+    waitUntil([] { return false; }, 300);
+    active = true;
+
+    // ── Repeat burst: held-key shape. Optimistic updates make every press
+    // instant; latest-wins coalescing collapses the mixer children.
+    std::vector<qint64> directTimes;
+    for (int i = 0; i < kBurstPresses; ++i) {
+        QElapsedTimer one;
+        one.start();
+        audio::applyVolumeKey(volume, audio::VolumeKey::Down);
+        directTimes.push_back(one.elapsed());
+    }
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
+    const int callsAfterBurst = mixerLogLines(in.mixerLog);
+    const int postBurstLevel = volume.level();
+    const int postBurstSignalLevel = lastSignalLevel;
+
+    // ── Clamp proof: presses at 0 must be no-ops — no signal, no child.
+    const int signalsBeforeClamp = volumeChangedSignals;
+    for (int i = 0; i < kClampPresses; ++i) {
+        QElapsedTimer one;
+        one.start();
+        audio::applyVolumeKey(volume, audio::VolumeKey::Down);
+        directTimes.push_back(one.elapsed());
+    }
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
+    const int callsAfterClamp = mixerLogLines(in.mixerLog);
+    const int clampLevel = volume.level();
+    const int clampSignals = volumeChangedSignals - signalsBeforeClamp;
+
+    // ── Mute through the real file channel (200 ms poll alignment), then a
+    // direct toggle back. The injection must add exactly one coherent signal.
+    const int signalsBeforeMute = volumeChangedSignals;
+    writeFile(kKeyChannelPath, "volmute\n");
+    const bool muteInjectedDelivered = waitUntil([&] {
+        return volumeChangedSignals > signalsBeforeMute && lastSignalMuted;
+    }, 2000) && volume.muted();
+    QElapsedTimer muteClock;
+    muteClock.start();
+    const bool muteToggleResult = volume.toggleMute();
+    const qint64 muteToggleMs = muteClock.elapsed();
+
+    // Let the debounced persist (250 ms) flush off-thread while the heartbeat
+    // keeps gating — persistence must not stall the UI either.
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
+    waitUntil([] { return false; }, 700);
+    heartbeat.stop();
+
+    const int finalLevel = volume.level();
+    const bool finalMuted = volume.muted();
+    const int callsTotal = mixerLogLines(in.mixerLog);
+    const QJsonObject persisted = readJson(in.dataRoot + QStringLiteral("/volume.json"));
+    const qint64 directTotal = std::accumulate(directTimes.begin(), directTimes.end(), qint64(0));
+    const qint64 maxDirect = *std::max_element(directTimes.begin(), directTimes.end());
+    QJsonArray directRows;
+    for (qint64 v : directTimes) directRows.append(v);
+    const bool pass = constructMs < kTargetMs && maxDirect < kTargetMs
+                      && edgeMaxGap < kTargetMs && postBurstLevel == 0
+                      && clampLevel == 0 && muteInjectedDelivered && !finalMuted;
+    QJsonObject out{
+        {QStringLiteral("scenario"), QStringLiteral("P-5A-edge")},
+        {QStringLiteral("case"), in.scenario},
+        {QStringLiteral("snapshot"), in.snapshot},
+        {QStringLiteral("backend_requested"), in.backend},
+        {QStringLiteral("backend_selected"), volume.backendName()},
+        {QStringLiteral("stub_delay_ms"), in.stubDelayMs},
+        {QStringLiteral("stub_mode"), in.stubMode},
+        {QStringLiteral("constructor_ms"), constructMs},
+        {QStringLiteral("burst_presses"), kBurstPresses},
+        {QStringLiteral("clamp_presses"), kClampPresses},
+        {QStringLiteral("direct_key_times_ms"), directRows},
+        {QStringLiteral("direct_key_mean_ms"), directTimes.empty() ? 0.0 : double(directTotal) / directTimes.size()},
+        {QStringLiteral("direct_key_max_ms"), maxDirect},
+        {QStringLiteral("baseline_peak_heartbeat_gap_ms"), baselineMaxGap},
+        {QStringLiteral("edge_peak_heartbeat_gap_ms"), edgeMaxGap},
+        {QStringLiteral("post_burst_level"), postBurstLevel},
+        {QStringLiteral("post_burst_signal_level"), postBurstSignalLevel},
+        {QStringLiteral("clamp_level"), clampLevel},
+        {QStringLiteral("clamp_signals"), clampSignals},
+        {QStringLiteral("clamp_calls_delta"), callsAfterClamp - callsAfterBurst},
+        {QStringLiteral("mute_injected_delivered"), muteInjectedDelivered},
+        {QStringLiteral("mute_toggle_ms"), muteToggleMs},
+        {QStringLiteral("mute_toggle_result"), muteToggleResult},
+        {QStringLiteral("volume_changed_signals"), volumeChangedSignals},
+        {QStringLiteral("final_level"), finalLevel},
+        {QStringLiteral("final_muted"), finalMuted},
+        {QStringLiteral("persisted_level"), persisted.contains(QStringLiteral("level"))
+            ? QJsonValue(persisted.value(QStringLiteral("level")).toInt()) : QJsonValue()},
+        {QStringLiteral("persisted_muted"), persisted.contains(QStringLiteral("muted"))
+            ? QJsonValue(persisted.value(QStringLiteral("muted")).toBool()) : QJsonValue()},
+        {QStringLiteral("mixer_calls_after_constructor"), callsAfterConstructor},
+        {QStringLiteral("mixer_calls_after_burst"), callsAfterBurst},
+        {QStringLiteral("mixer_calls_after_clamp"), callsAfterClamp},
+        {QStringLiteral("mixer_calls_total"), callsTotal},
+        {QStringLiteral("mixer_calls_burst_total"), callsAfterBurst - callsAfterConstructor},
+        {QStringLiteral("backend_ready"), volume.mixerReady()},
+        {QStringLiteral("ready_wait_ms"), readyWaitMs},
+        {QStringLiteral("target_ms"), kTargetMs},
+        {QStringLiteral("pass"), pass},
+        {QStringLiteral("anchor"), QStringLiteral("src/audio/VolumeManager.cpp (changeVolume clamp + submitLevel/submitMuted no-op guards); src/input/InputManager.cpp (volmute file channel)")},
+    };
+    QTextStream(stdout) << "RESULT " << QJsonDocument(out).toJson(QJsonDocument::Compact) << Qt::endl;
+    QFile::remove(kKeyChannelPath);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -389,8 +574,10 @@ int main(int argc, char **argv)
     else if (scenario == QLatin1String("volume-noop")) { in.backend = QStringLiteral("none"); in.forceNoop = true; }
     else if (scenario == QLatin1String("fault-alsa")) { in.backend = QStringLiteral("alsa"); in.faultMode = true; }
     else if (scenario == QLatin1String("fault-pipewire")) { in.backend = QStringLiteral("pipewire"); in.faultMode = true; }
+    else if (scenario == QLatin1String("edge-alsa")) { in.backend = QStringLiteral("alsa"); in.edgeMode = true; }
+    else if (scenario == QLatin1String("edge-pipewire")) { in.backend = QStringLiteral("pipewire"); in.edgeMode = true; }
     else {
-        QTextStream(stderr) << "usage: volume-stall-probe <volume-alsa|volume-pipewire|volume-noop|fault-alsa|fault-pipewire>\n";
+        QTextStream(stderr) << "usage: volume-stall-probe <volume-alsa|volume-pipewire|volume-noop|fault-alsa|fault-pipewire|edge-alsa|edge-pipewire>\n";
         return 64;
     }
     if (in.forceNoop && qEnvironmentVariable("TORTURE_FORCE_NOOP") != QLatin1String("1")) {
@@ -409,5 +596,5 @@ int main(int argc, char **argv)
         dataRoot = fallbackDir.path() + QStringLiteral("/data");
     }
     in.dataRoot = dataRoot;
-    return runScenario(in);
+    return in.edgeMode ? runEdgeScenario(in) : runScenario(in);
 }

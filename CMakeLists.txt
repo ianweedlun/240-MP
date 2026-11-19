@@ -545,7 +545,7 @@ if(BUILD_TESTS)
         target_compile_options(volume-stall-probe PRIVATE -Wall -Wextra)
     endif()
     foreach(stall_case alsa-delay200 alsa-delay0 pipewire-delay200 pipewire-delay0
-                       noop-control alsa-faults pipewire-faults)
+                       noop-control alsa-faults pipewire-faults alsa-edge pipewire-edge)
         # The 16 ms wall-clock gate needs a quiet host. The macOS CI runner
         # (macos-15-intel) jitters 50-58 ms on the noop control's heartbeat
         # with ZERO mixer I/O — rig noise, not product (the canary's exact
