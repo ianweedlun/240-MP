@@ -100,7 +100,7 @@ FocusScope {
     }
 
     // List
-    ListView {
+    RowTrackingListView {
         id: itemList
         model: itemsRoot.items
         visible: !isLoading && errorMessage === ""

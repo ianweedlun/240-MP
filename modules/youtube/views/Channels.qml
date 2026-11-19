@@ -125,7 +125,7 @@ FocusScope {
     }
 
     // Channel list
-    ListView {
+    RowTrackingListView {
         id: itemList
         model: items
         opacity: letterNavActive ? 0.3 : 1

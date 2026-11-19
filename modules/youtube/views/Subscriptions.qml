@@ -298,7 +298,7 @@ FocusScope {
     }
 
     // List
-    ListView {
+    RowTrackingListView {
         id: itemList
         model: itemsRoot.items
         opacity: wlOverlayVisible ? 0.3 : 1

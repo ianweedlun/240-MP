@@ -74,7 +74,7 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.125
     }
 
-    ListView {
+    RowTrackingListView {
         id: catList
         model: sponsorRoot.cats
         anchors.top: parent.top

@@ -707,14 +707,17 @@ void InputManager::beginPress(Action a) {
 void InputManager::releaseAction(Action a) {
     if (a == Action::None)
         return;
-    // Ignore a release for an action that isn't held — the mirror device's
-    // duplicate release, or a stray release with no matching press.
-    if (!m_heldActions.remove(a))
-        return;
+    // A direct deliverPress caller (Right Shift or a keyboard remap) has no
+    // entry in m_heldActions, but its release still ends a telemetry press run.
+    // Rearm before the held-state early return or every later tap stays silent.
 #ifdef APP_TELEMETRY
     if (m_telemLastAction == a)
         m_telemLastAction = Action::None; // a fresh press of same key logs again
 #endif
+    // Ignore a release for an action that isn't held — the mirror device's
+    // duplicate release, or a stray release with no matching press.
+    if (!m_heldActions.remove(a))
+        return;
     if (m_heldDirection == a) {
         m_heldDirection = Action::None;
         m_repeatDelayTimer.stop();
@@ -791,8 +794,13 @@ void InputManager::pollDebugKeyChannel()
         else if (cmd == QLatin1String("playpause") || cmd == QLatin1String("space")) a = Action::PlayPause;
         else if (cmd == QLatin1String("channelup") || cmd == QLatin1String("channel_up")) a = Action::ChannelUp;
         else if (cmd == QLatin1String("channeldown") || cmd == QLatin1String("channel_down")) a = Action::ChannelDown;
-        if (a != Action::None)
+        if (a != Action::None) {
             deliverPress(a, false);
+            // Each file line is a complete tap, but this channel has no release
+            // event. Rearm only the telemetry dedup; do not synthesize a second
+            // key release or otherwise change the injected key's behavior.
+            m_telemLastAction = Action::None;
+        }
     }
 #endif
 }
@@ -1096,6 +1104,40 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
             return true;
         }
     }
+
+#ifdef APP_TELEMETRY
+    // Default keyboard/remote navigation reaches QML directly; it never calls
+    // deliverPress(). Observe that raw channel here or the Pi control server's
+    // ordinary Up/Down/Return/Escape taps leave no key-decision evidence at all.
+    // This is logging only: the event still follows the normal return-false path.
+    if (!synthetic && m_appCore) {
+        Action rawAction = Action::None;
+        const char *rawName = nullptr;
+        switch (ke->key()) {
+        case Qt::Key_Up:         rawAction = Action::Up;        rawName = "up";        break;
+        case Qt::Key_Down:       rawAction = Action::Down;      rawName = "down";      break;
+        case Qt::Key_Left:       rawAction = Action::Left;      rawName = "left";      break;
+        case Qt::Key_Right:      rawAction = Action::Right;     rawName = "right";     break;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:      rawAction = Action::Select;    rawName = "select";    break;
+        case Qt::Key_Escape:
+        case Qt::Key_Backspace:
+        case Qt::Key_Back:       rawAction = Action::Back;      rawName = "back";      break;
+        case Qt::Key_Space:      rawAction = Action::PlayPause; rawName = "playpause"; break;
+        default:                                                                     break;
+        }
+        if (rawAction != Action::None) {
+            if (type == QEvent::KeyRelease) {
+                if (m_telemLastAction == rawAction)
+                    m_telemLastAction = Action::None;
+            } else if (rawAction != m_telemLastAction) {
+                m_telemLastAction = rawAction;
+                m_appCore->note_state(QStringLiteral("key"),
+                                      QStringLiteral("%1 delivered").arg(QLatin1String(rawName)));
+            }
+        }
+    }
+#endif
 
     // HID media keys drive mpv directly over IPC (sendKey no-ops when mpv isn't
     // running, so they're harmless while browsing). Volume keys repeat while
