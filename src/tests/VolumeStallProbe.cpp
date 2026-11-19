@@ -25,6 +25,13 @@
 // Like the ROB-07 contract probe, this binary always exits 0 when it ran;
 // the pass/fail assertions live in the orchestrator. One machine-readable
 // RESULT JSON line per run carries the measurements (see README-volume-stall.md).
+//
+// Phase boundaries are async-aware: each direct press (and each fault
+// operation) is settled via an argv-log quiet window before the next one and
+// before counts/state are read, so per-press invocation counts stay valid
+// with fire-and-forget mixer backends. Settle waits sit OUTSIDE every timed
+// window (per-key clock, heartbeat), and a synchronous backend settles
+// immediately — the recorded red-baseline shape is unchanged.
 
 #include <QGuiApplication>
 #include <QQuickWindow>
@@ -77,6 +84,41 @@ bool waitUntil(const std::function<bool()> &predicate, int timeoutMs)
         QThread::msleep(1);
     }
     return predicate();
+}
+
+// Async mixer backends submit fire-and-forget, so a phase boundary is only
+// meaningful once every child the phase spawned has started AND finished and
+// the owner thread has processed the completions. The stub argv log is
+// written at child START, so "no new lines for quietMs" with quietMs larger
+// than the stub delay means the last child finished and its result handler
+// ran (processEvents below pumps the queued completions). minLines guards
+// against declaring settle before the first spawn on a loaded host. With a
+// synchronous (pre-fix) backend the log is already quiet when this is called,
+// so only the quiet window elapses — measured bands are unaffected.
+int mixerLogLines(const QString &path);
+void waitForMixerSettle(const QString &logPath, int minLines,
+                        int quietMs = 350, int timeoutMs = 10000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (mixerLogLines(logPath) < minLines && timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+    }
+    int lastCount = mixerLogLines(logPath);
+    QElapsedTimer quiet;
+    quiet.start();
+    while (timer.elapsed() < timeoutMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+        const int now = mixerLogLines(logPath);
+        if (now != lastCount) {
+            lastCount = now;
+            quiet.restart();
+        } else if (quiet.elapsed() >= quietMs) {
+            return;
+        }
+    }
 }
 
 int mixerLogLines(const QString &path)
@@ -155,12 +197,20 @@ int runScenario(const RunInput &in)
 
     // ── Direct presses: the exact call the InputManager eventFilter makes
     // for a hardware Volume Down key (audio::applyVolumeKey, VolumeKeyMap.h).
+    // Each press is settled before the next so per-press invocation counts
+    // are meaningful with async backends (a coalesced burst would otherwise
+    // straddle the phase boundary). The settle wait is OUTSIDE the timed
+    // window: the stall gate measures applyVolumeKey alone.
+    const bool realMixer = volume.backendName() != QLatin1String("none");
     std::vector<qint64> directTimes;
     for (int i = 0; i < 3; ++i) {
+        const int callsBefore = mixerLogLines(in.mixerLog);
         QElapsedTimer one;
         one.start();
         audio::applyVolumeKey(volume, audio::VolumeKey::Down);
         directTimes.push_back(one.elapsed());
+        if (realMixer)
+            waitForMixerSettle(in.mixerLog, callsBefore + 1);
     }
     const int callsAfterDirect = mixerLogLines(in.mixerLog);
     const int postDirectLevel = lastSignalLevel;
@@ -177,12 +227,18 @@ int runScenario(const RunInput &in)
         muteClock.start();
         // Use the return value, NOT volume.muted(): a muted() read here would
         // spawn another mixer call and pollute the phase-boundary counts.
+        const int callsBeforeMute = mixerLogLines(in.mixerLog);
         const bool muteResult = volume.toggleMute();
         const qint64 muteMs = muteClock.elapsed();
+        if (realMixer)
+            waitForMixerSettle(in.mixerLog, callsBeforeMute + 1);
         QElapsedTimer one;
         one.start();
+        const int callsBeforeExtra = mixerLogLines(in.mixerLog);
         audio::applyVolumeKey(volume, audio::VolumeKey::Down);
         directTimes.push_back(one.elapsed());
+        if (realMixer)
+            waitForMixerSettle(in.mixerLog, callsBeforeExtra + 1);
         extraPresses = 2;
         QJsonObject faultExtra{
             {QStringLiteral("mute_toggle_ms"), muteMs},
@@ -263,6 +319,11 @@ int runScenario(const RunInput &in)
     });
     waitUntil([] { return false; }, 2500);
     heartbeat.stop();
+    // Belt-and-braces settle before the final reads: the 2500 ms window
+    // normally covers the injected press's async mutation + refresh read,
+    // but a loaded host must not turn a late completion into a false red.
+    if (realMixer)
+        waitForMixerSettle(in.mixerLog, mixerLogLines(in.mixerLog));
     const int callsAfterPresses = mixerLogLines(in.mixerLog);
     extraPresses = 1;
     injectedKeyDelivered = volumeChangedSignals >= 4 && lastSignalLevel != postDirectLevel;

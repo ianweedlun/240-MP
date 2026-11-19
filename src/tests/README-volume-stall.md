@@ -79,6 +79,15 @@ The `noop-control` case injects the repo's `NoopVolumeMixer` through
 **Volume Down, never Up**: PipeWire starts at cached level 100, so Volume Up
 is a clamp no-op that never reaches the mixer.
 
+**Async-aware phase boundaries**: the probe settles each direct press (and
+each fault operation) before the next and before reading counts/state — it
+pumps the event loop until the stub argv log has been quiet for 350 ms
+(longer than the 200 ms stub delay, so the last child has finished and its
+completion handler ran). This keeps `per_press_direct`/`per_press_extra`
+meaningful once the mixers submit fire-and-forget instead of blocking. The
+settle waits sit outside every timed window, and a synchronous backend
+settles immediately, so the recorded red-baseline shape is unchanged.
+
 ## Cases and expected verdicts
 
 | ctest case | snapshot 3970174 | after fix |
