@@ -443,6 +443,24 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
 
+    # T1 M-3: re-registering the same backend/module id must not multiply
+    # AppCore's signal fan-out. Real AppCore + probe backend, QSignalSpy on
+    # all three re-emitted signals; control (x1) and stress (x10) arms. The
+    # stress arm FAILS BY DESIGN until registerModule() is idempotent.
+    # No QML engine, no network (QGuiApplication for offscreen Qt).
+    add_executable(appcore-reregistration-tests
+        src/AppCore.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/AppCoreReregistrationTest.cpp)
+    set_target_properties(appcore-reregistration-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-reregistration-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-reregistration-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-reregistration-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
+
     # Raw keyboard/remote taps must be visible in the TELEMETRY state log too.
     # Uses the real InputManager event filter and AppCore log sink; no QML,
     # network, audio hardware, or physical input device is driven.
@@ -769,6 +787,17 @@ if(BUILD_TESTS)
         MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
 
+    # R10: an empty filePath must goBack() at the launch entry instead of
+    # stranding the view (no mpv child ever spawns, so Back/ESC cannot exit).
+    # Two-sided: fails on the pre-fix snapshot by design.
+    add_executable(local-files-empty-path-smoke src/tests/local-files-empty-path-smoke-test.cpp)
+    set_target_properties(local-files-empty-path-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-empty-path-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-empty-path-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-empty-path-smoke COMMAND local-files-empty-path-smoke)
+
     # YouTube primary lists: a real Down key must emit a named select line.
     # Runs on the x86/macOS QML lanes; arm64 excludes it with the other Effects
     # smokes because distro Qt 6.4 has no QtQuick.Effects module.
@@ -813,6 +842,18 @@ if(BUILD_TESTS)
         target_compile_options(mpv-basic-options-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
+
+    # T2 (issue #111): per-instance mpv temp paths — pure helper tests.
+    # No process spawning; exercise the sun_path bound and uniqueness logic.
+    add_executable(mpv-instance-paths-tests
+        src/util/tests/MpvInstancePathsTest.cpp)
+    set_target_properties(mpv-instance-paths-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-paths-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(mpv-instance-paths-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(mpv-instance-paths-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-paths COMMAND mpv-instance-paths-tests)
 
     # Built-in palette consistency tests: themes table (Main.qml) vs the Settings
     # picker list (views/Settings.qml) — drift guard for adding color schemes.
@@ -912,6 +953,121 @@ if(BUILD_TESTS)
         target_compile_options(display-handoff-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
+
+    # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
+    # with stub backends and asserts a Back in each launch phase routes to
+    # sendKey (post-launch) vs goBack (pre-launch) — the launchDone flag, not the
+    # first-position playbackStarted flag, gates the quit intent.
+    add_executable(youtube-quit-intent-smoke src/tests/youtube-quit-intent-smoke-test.cpp)
+    set_target_properties(youtube-quit-intent-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-quit-intent-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-quit-intent-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-quit-intent-smoke COMMAND youtube-quit-intent-smoke)
+
+    # R-2 (issue #109): quit-intent hybrid against the REAL MpvController + mpv.
+    # SPEC-1 pre-connect invariant x100 (ESC/BS/STOP), SPEC-2 post-connect lua
+    # preservation, SPEC-4 loop-on bounded exit. Real AppCore (config-driven
+    # mpv_video_args/screensaver_timeout); QSKIPs when mpv/ffmpeg are absent so
+    # CI lanes without a media stack stay green.
+    add_executable(mpv-quit-intent-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvQuitIntentTest.cpp)
+    set_target_properties(mpv-quit-intent-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-quit-intent-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-quit-intent-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-quit-intent-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-quit-intent-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-quit-intent-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-quit-intent COMMAND mpv-quit-intent-tests)
+    # QTEST_MAIN constructs a QGuiApplication before any main-body code runs, so
+    # the offscreen platform must come from the environment (the QML smokes can
+    # qputenv it in main; this one cannot). Headless CI lanes have no display.
+    set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # R2 follow-up (issue #110): FailedToStart after a successful locate() must
+    # emit a synthetic playbackEnded("failed") instead of leaving the Player
+    # view waiting forever. Forces the spawn failure through the REAL locator
+    # (private PATH dir holding an executable-but-invalid "mpv" -> ENOEXEC).
+    # The core cases need no mpv installed, so every CI lane runs the gate for
+    # real; only the relaunch-after-failure case QSKIPs without mpv/ffmpeg.
+    add_executable(mpv-failedtostart-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvFailedToStartTest.cpp)
+    set_target_properties(mpv-failedtostart-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-failedtostart-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-failedtostart-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-failedtostart-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-failedtostart-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-failedtostart-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-failedtostart COMMAND mpv-failedtostart-tests)
+    # Same QTEST_MAIN/offscreen constraint as mpv-quit-intent above. Isolate the
+    # IPC socket into a per-build TMPDIR so parallel tests cannot race on it.
+    # Keep the path short: mpv's Unix socket is limited by sockaddr_un.sun_path
+    # (108 bytes on Linux), which a nested worktree build dir can exceed.
+    set(_failedtostart_tmp_base "$ENV{TMPDIR}")
+    if(NOT _failedtostart_tmp_base)
+        set(_failedtostart_tmp_base "/tmp")
+    endif()
+    string(MD5 _failedtostart_tmp_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${_failedtostart_tmp_hash}" 0 8 _failedtostart_tmp_hash)
+    set(_failedtostart_tmp "${_failedtostart_tmp_base}/240mp-ft-${_failedtostart_tmp_hash}")
+    file(MAKE_DIRECTORY "${_failedtostart_tmp}")
+    set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_failedtostart_tmp}")
+
+    # T2 (issue #111): real MpvController per-instance socket contract.
+    # No mpv spawning — constructs the controller and checks socketPath()/logFilePath().
+    add_executable(mpv-instance-socket-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvInstanceSocketTest.cpp)
+    set_target_properties(mpv-instance-socket-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-socket-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-instance-socket-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-instance-socket-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-instance-socket-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-instance-socket-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-socket COMMAND mpv-instance-socket-tests)
+    set_tests_properties(mpv-instance-socket PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 endif()
 
