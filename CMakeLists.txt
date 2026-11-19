@@ -453,6 +453,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
