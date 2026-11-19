@@ -74,10 +74,11 @@ bool writeConfig(const QString &dataRoot, const QString &screensaver) {
     return true;
 }
 
-// The controller's fixed IPC socket path (MpvController.cpp ctor). SPEC-1
-// asserts it is removed once the child is reaped — no litter for the next launch.
-QString socketPath() {
-    return QDir::tempPath() + QStringLiteral("/240mp-mpv.sock");
+// The controller's per-instance IPC socket path (T2, issue #111: pid+seq
+// token under QDir::tempPath(), published via the getter). SPEC-1 asserts it
+// is removed once the child is reaped — no litter for the next launch.
+QString socketPath(const MpvController &mpv) {
+    return mpv.socketPath();
 }
 
 // True if ANY child of this test process named "mpv" still exists in /proc —
@@ -165,7 +166,7 @@ private Q_SLOTS:
                 QVERIFY2(ended, qPrintable(QStringLiteral("%1 iteration %2: pre-connect quit intent did not reap mpv").arg(key).arg(i)));
                 QCOMPARE(spy.reasons.size(), 1);
                 QCOMPARE(spy.reasons.at(0), QStringLiteral("stopped"));
-                QVERIFY2(!QFile::exists(socketPath()), "socket litter after forceStop");
+                QVERIFY2(!QFile::exists(socketPath(mpv)), "socket litter after forceStop");
                 QVERIFY2(spinUntil([&]{ return !anyMpvChild(); }, 2000), "live/zombie mpv child after forceStop");
                 ++stopped;
             }

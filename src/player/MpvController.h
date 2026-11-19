@@ -26,6 +26,14 @@ public:
     int duration()    const { return m_duration;    }
     int playlistPos() const { return m_playlistPos; }
 
+    // Per-instance IPC socket / mpv log paths (T2, issue #111). Published so
+    // tooling and the regression harness can discover this instance's socket
+    // without guessing a shared name. socketPath() is EMPTY when the path
+    // would exceed sockaddr_un.sun_path and IPC was disabled for this instance
+    // (see util/MpvInstancePaths.h); logFilePath() is always set.
+    QString socketPath()  const { return m_socketPath;  }
+    QString logFilePath() const { return m_logFilePath; }
+
     Q_INVOKABLE void loadAndPlay(const QString &url, float startSeconds,
                                   int audioTrack, int subTrack,
                                   const QStringList &subFiles = {},
