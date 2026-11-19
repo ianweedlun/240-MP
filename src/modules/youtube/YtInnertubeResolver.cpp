@@ -192,7 +192,7 @@ void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
             m_vdBytes = 0;
             if (reply->isRunning())
                 reply->abort();   // early exit: stop downloading the homepage
-            if (m_pendingStart) {
+            if (m_pendingStart && m_pendingGeneration == m_generation) {
                 m_pendingStart = false;
                 startPlayer(m_pendingGeneration);
             }
