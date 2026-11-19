@@ -26,6 +26,15 @@ struct Segment {
     QString action;   // skip | mute | full
     double start = -1.0;
     double end = -1.0;
+    // Community verdict and submission-time duration, per the SponsorBlock
+    // OpenAPI schema. The hash-prefix endpoint returns the bucket UNFILTERED
+    // (votes minimum -2), unlike the direct videoID endpoint which thresholds
+    // server-side, so the client must reject downvoted rows itself.
+    int    votes = 0;
+    bool   locked = false;
+    // Duration of the video when the segment was submitted; 0 = unknown. The
+    // documented signal for "this submission is out of date".
+    double videoDuration = 0.0;
 };
 
 // Parse a bare array of segment rows ({category, segmentType, segment:[s,e]}).
@@ -48,6 +57,14 @@ inline QVector<Segment> segmentsFromRows(const QJsonArray &rows)
         sg.end = seg.at(1).toDouble();
         if (sg.start < 0.0 || sg.end <= sg.start)
             continue; // dead by design: e.g. "full" = [0,0] (Red guard)
+        sg.votes = so.value(QStringLiteral("votes")).toInt(0);
+        sg.locked = so.value(QStringLiteral("locked")).toInt(0) == 1;
+        sg.videoDuration = so.value(QStringLiteral("videoDuration")).toDouble(0.0);
+        // Reject community-downvoted submissions. A locked segment is
+        // VIP-authoritative and survives regardless of score. Erring toward
+        // NOT cutting: a missed skip is recoverable, a wrong cut is not.
+        if (sg.votes < 0 && !sg.locked)
+            continue;
         out.append(sg);
     }
     return out;

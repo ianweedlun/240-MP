@@ -59,7 +59,9 @@ inline bool urlFresh(qint64 expireEpoch, qint64 nowEpoch, qint64 safetyMarginS)
 
 inline QString cacheKeyFor(const QString &videoId, const QString &formatSpec)
 {
-    return videoId + QLatin1Char('|') + formatSpec;
+    // v2: pre-fix entries can name a first-listed dub instead of the default
+    // audio track. Never serve those pairs to the default-track-aware picker.
+    return videoId + QStringLiteral("|audio-default-v2|") + formatSpec;
 }
 
 // Reactive warm-403 cure: erase the one entry for (videoId, formatSpec).

@@ -88,9 +88,12 @@ public:
     Q_INVOKABLE void savePosition(const QString &, int, const QString &, const QString &) { ++saveCalls; }
     Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &) {}
     Q_INVOKABLE QString ytdlFormatForResolution(const QString &) const { return QStringLiteral("best"); }
+    Q_INVOKABLE bool hasSponsorSegments(const QString &) const { return false; }
+    Q_INVOKABLE bool sponsorFetchInFlight(const QString &) const { return false; }
 signals:
     void playbackUrlReady(const QString &);
     void sponsorReady(const QString &);
+    void playbackResolveFailed(const QString &videoId, const QString &reason);
 };
 
 class StubAppCore : public QObject {

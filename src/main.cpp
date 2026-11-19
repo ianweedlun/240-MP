@@ -250,6 +250,32 @@ int main(int argc, char *argv[]) {
     appCore.registerModule("com.240mp.scripts",      "scriptsBackend",     &scriptsBackend, ctx);
     appCore.registerModule("com.240mp.virtual_channels", "virtualChannelsBackend", &virtualChannels, ctx);
 
+    // YouTube resolve telemetry: which resolver served a pair (innertube /
+    // ytdlp / cache / negative-cache) and how long it took. Lands in the Pi
+    // state log as
+    // `yt-resolve vid=… source=… ms=…`; AppCore::note_state is compiled out of
+    // release builds, so the cost is one signal emission.
+    QObject::connect(&youtubeBackend, &YouTubeBackend::resolveTelemetry, &appCore,
+                     [&appCore](const QString &videoId, const QString &source, qint64 ms) {
+                         appCore.note_state("yt-resolve",
+                                            QStringLiteral("vid=%1 source=%2 ms=%3")
+                                                .arg(videoId, source).arg(ms));
+                     });
+
+    // Idle SponsorBlock fill: the Pi is on all day, so confirm segment windows
+    // while nobody is pressing keys. Driven by idleSeconds, NOT by the
+    // screensaver's `active`/`enabled` — the owner may run with the screensaver
+    // OFF and still want the cache filled. Any input activity stops it at once,
+    // so a foreground press never queues behind a background fetch.
+    constexpr int kIdleFillAfterSec = 60;
+    QObject::connect(&idleTracker, &IdleTracker::idleSecondsChanged, &youtubeBackend,
+                     [&idleTracker, &youtubeBackend]() {
+                         if (idleTracker.idleSeconds() >= kIdleFillAfterSec)
+                             youtubeBackend.setIdleFillActive(true);
+                     });
+    QObject::connect(&idleTracker, &IdleTracker::activityDetected, &youtubeBackend,
+                     [&youtubeBackend]() { youtubeBackend.setIdleFillActive(false); });
+
     ctx->setContextProperty("idleTracker",   &idleTracker);
     ctx->setContextProperty("appCore",       &appCore);
     ctx->setContextProperty("mpvController", &mpvController);

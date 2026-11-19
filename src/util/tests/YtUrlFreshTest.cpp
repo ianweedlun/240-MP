@@ -28,6 +28,7 @@ private slots:
     void parseManifestSlashForm();
     void freshVsSafetyMargin();
     void pruneDropsExpiredThenCapsByNewestWindow();
+    void cacheKeyVersionInvalidatesPreFixPairs();
 };
 
 void YtUrlFreshTest::parseExpireParamBoundaries()
@@ -111,6 +112,22 @@ void YtUrlFreshTest::pruneDropsExpiredThenCapsByNewestWindow()
     cache2.insert(QStringLiteral("g|fmt"), makeEntry(now - 1, QStringLiteral("gg")));
     yturl::pruneUrlCache(cache2, now, 10);
     QCOMPARE(cache2.size(), 2);
+}
+
+void YtUrlFreshTest::cacheKeyVersionInvalidatesPreFixPairs()
+{
+    const QString videoId = QStringLiteral("8bDRVP9xSfc");
+    const QString format = QStringLiteral("bv+ba");
+    const QString legacyKey = videoId + QLatin1Char('|') + format;
+    QJsonObject cache;
+    cache.insert(legacyKey, makeEntry(1790000000, QStringLiteral("wrong-language-audio")));
+
+    // The pre-fix picker cached the first dub under the unversioned key. The
+    // new picker must miss that entry and resolve again instead of serving it.
+    QVERIFY(!cache.contains(yturl::cacheKeyFor(videoId, format)));
+    QVERIFY(cache.contains(legacyKey));
+    QVERIFY(yturl::cacheKeyFor(videoId, format)
+            != yturl::cacheKeyFor(videoId, QStringLiteral("bv+ba[height<=720]")));
 }
 
 QTEST_MAIN(YtUrlFreshTest)
