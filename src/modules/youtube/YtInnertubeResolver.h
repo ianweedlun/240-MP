@@ -56,8 +56,23 @@ public:
 
     // Resolve one video. Returns false (and emits nothing) when a request is
     // already in flight or the id is empty — the caller treats that as
-    // "busy" and takes another route. Exactly one `finished` is emitted per
-    // accepted call: success, timeout, or exception.
+    // "busy" and takes another route.
+    //
+    // Terminal-result contract (ROB-07 — enforced, not aspirational):
+    //  1. Exactly one terminal `finished` per accepted resolve(): ok=true,
+    //     or ok=false with a reason (timeout / exception:... /
+    //     no-playable-pair / no-expiry). emitResult() latches on m_inFlight,
+    //     so any second terminal event for the same attempt is dropped.
+    //  2. An attempt abandoned by the timeout never emits a result and never
+    //     issues a downstream request: its late visitorData completion is
+    //     dropped before startPlayer(), and any late Player reply/exception
+    //     is dropped before emitResult().
+    //  3. Every async continuation validates the generation captured when
+    //     its request was issued — resolve() stamps the attempt and carries
+    //     that stamp into the visitorData wait (m_pendingGeneration) and
+    //     into startPlayer(generation). A continuation whose captured
+    //     generation no longer equals m_generation belongs to an abandoned
+    //     attempt and is dropped silently.
     bool resolve(const QString &videoId, const QString &resolution,
                  const QString &key);
     bool inFlight() const { return m_inFlight; }
@@ -88,7 +103,20 @@ private:
     int     m_maxHeight = 480;
     bool    m_inFlight = false;
     bool    m_clientReady = false;
-    qint64  m_generation = 0;   // invalidates a reply abandoned by the timeout
+    // Generation-token pattern (ROB-07): m_generation is a monotonic attempt
+    // counter. resolve() stamps each accepted attempt (++m_generation) and
+    // every continuation carries that stamp; emitResult() bumps the counter
+    // when the attempt terminates, invalidating every reply still in flight
+    // for it. A reply is honored only while its captured stamp still equals
+    // m_generation.
+    //
+    // startPlayer(generation) must inherit the originating attempt's stamp
+    // rather than read m_generation at call time: a late visitorData
+    // completion runs AFTER the timeout's emitResult() already bumped the
+    // counter, so a call-time read would capture the post-timeout value and
+    // re-bind the abandoned attempt's Player request to the live generation
+    // — resurrecting it as a phantom second result (the ROB-07 defect).
+    qint64  m_generation = 0;
 
     // VISIONOS is bot-walled unless visitorData came from a real YouTube page.
     // The vendored client's generateVisitorData() synthesises one and YouTube
