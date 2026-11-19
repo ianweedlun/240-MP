@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — audio: non-blocking mixer process seam (T1 P-5A infrastructure)
+- New `audio::MixerProcessRunner` (`src/audio/MixerProcessRunner.*`): the shared asynchronous subprocess + state-cache seam the ALSA and PipeWire volume backends will use. All `QProcess`/timer activity lives on a dedicated worker thread; `submit()` and the cached `level`/`mute` accessors are thread-safe, never spawn on the caller thread, and return in well under a frame budget (unit-tested < 16 ms with a 200 ms child in flight; measured ≤ 1.5 ms).
+- Contract: fire-and-forget requests with latest-wins coalescing (at most one child in flight + one queued trailing request, so held volume keys cannot pile up subprocesses); a bounded per-request timeout (default 1000 ms, the historical budget) enforced off the UI thread; nonzero exit, spawn failure, timeout and unparseable output all leave the last known good cached state intact, log a diagnosable warning via `audio.mixer.runner`, and never wedge the queue. Results and state updates are marshalled back to the owner thread; shutdown kills any in-flight child and joins the worker with no leaks.
+- Focused unit suite (`mixer-process-runner`, CTest) drives a fake delayed child executable through slow success, timeout, nonzero exit, garbage output, missing binary, rapid-fire coalescing, caller-thread timing and busy-shutdown cases — clean under ASan/UBSan with `detect_leaks=1`. No audio hardware needed.
+- Backend behavior is unchanged in this step: the existing synchronous `amixer`/`wpctl` paths stay as they are until the follow-up cards convert them onto the seam.
+
 ### Added — CI: burst-branch RC lane for overnight validation
 - `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.
 - The PR lane and burst lane share a `pi-rc-deploy` concurrency group, so only one RC deploy can run at a time — the Pi never sees two RCs. A burst RC cannot overwrite another burst RC, and a PR close/restore will not mistake a burst marker for its own (`pr-N`).

@@ -115,6 +115,7 @@ add_executable(240mp
     src/audio/ALSAVolumeMixer.cpp
     src/audio/VolumeMixerFactory.cpp
     src/audio/VolumeManager.cpp
+    src/audio/MixerProcessRunner.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -430,6 +431,27 @@ if(BUILD_TESTS)
         target_compile_options(volume-manager-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME volume-manager COMMAND volume-manager-tests)
+
+    # Async mixer process seam (T1 P-5A): dedicated-thread QProcess runner with
+    # latest-wins coalescing, bounded timeouts and cached-state accessors. A
+    # fake child executable stands in for amixer/wpctl (delay, exit codes,
+    # garbage output) so the suite needs no audio hardware. Run under
+    # ASan/UBSan with detect_leaks=1 — clean shutdown is part of the contract.
+    add_executable(mixer-fake-child src/tests/fake-mixer-child.cpp)
+    add_executable(mixer-process-runner-tests
+        src/audio/MixerProcessRunner.cpp
+        src/tests/MixerProcessRunnerTest.cpp)
+    set_target_properties(mixer-process-runner-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mixer-process-runner-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(mixer-process-runner-tests PRIVATE src)
+    target_compile_definitions(mixer-process-runner-tests PRIVATE
+        FAKE_MIXER_CHILD_PATH="$<TARGET_FILE:mixer-fake-child>")
+    add_dependencies(mixer-process-runner-tests mixer-fake-child)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mixer-process-runner-tests PRIVATE -Wall -Wextra)
+        target_compile_options(mixer-fake-child PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
 
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
