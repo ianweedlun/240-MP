@@ -3,6 +3,7 @@
 #include "../../util/YtStreamSelect.h"
 #include "../../util/YtUrlFresh.h"
 #include "../../util/YtNegativeCache.h"
+#include "../../util/YtSponsorLru.h"
 #include "../../util/YtAuthGate.h"
 #include "../../util/YtBrowseRows.h"
 #include "../../util/YtDlpLocator.h"
@@ -961,6 +962,9 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
                     o.value(QStringLiteral("fetchedAt")).toDouble(0));
                 m_sponsorFetchedAt.insert(vid, stamp > 0
                     ? stamp : QDateTime::currentMSecsSinceEpoch());
+                // Rebuild the recency index in file order (writes are
+                // MRU-first); duplicates in legacy files keep first occurrence.
+                ytlru::appendIfAbsent(m_sponsorLru, vid);
             }
         }
     }
@@ -969,9 +973,11 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
 void YouTubeBackend::saveSponsorCache()
 {
     QJsonArray arr;
-    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it) {
+    // Recency order (MRU first): the file order is the reload recency signal,
+    // and the index is capped, so the rewrite stays bounded.
+    for (const QString &vid : m_sponsorLru) {
         QJsonArray rows;
-        for (const yt::Segment &s : it.value()) {
+        for (const yt::Segment &s : m_sponsorCache.value(vid)) {
             QJsonObject o;
             QJsonArray range;
             range.append(s.start);
@@ -985,9 +991,9 @@ void YouTubeBackend::saveSponsorCache()
             rows.append(o);
         }
         QJsonObject e;
-        e.insert(QStringLiteral("videoId"), it.key());
+        e.insert(QStringLiteral("videoId"), vid);
         e.insert(QStringLiteral("segments"), rows);
-        e.insert(QStringLiteral("fetchedAt"), double(m_sponsorFetchedAt.value(it.key())));
+        e.insert(QStringLiteral("fetchedAt"), double(m_sponsorFetchedAt.value(vid)));
         arr.append(e);
     }
     QFile f(sponsorCacheFilePath());
@@ -1014,8 +1020,10 @@ void YouTubeBackend::ensureKnownIdsLoaded()
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
         for (const QJsonValue &v : doc.array()) {
             const QString id = v.toString();
-            if (!id.isEmpty())
+            if (!id.isEmpty()) {
                 m_knownVideoIds.insert(id);
+                ytlru::appendIfAbsent(m_knownLru, id);
+            }
         }
     }
     // Watch history is a second source: rewatches are the most likely plays.
@@ -1023,16 +1031,20 @@ void YouTubeBackend::ensureKnownIdsLoaded()
     if (h.open(QIODevice::ReadOnly)) {
         const QJsonDocument doc = QJsonDocument::fromJson(h.readAll());
         const QJsonObject o = doc.object();
-        for (auto it = o.constBegin(); it != o.constEnd(); ++it)
-            if (!it.key().isEmpty())
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+            if (!it.key().isEmpty()) {
                 m_knownVideoIds.insert(it.key());
+                ytlru::appendIfAbsent(m_knownLru, it.key());
+            }
+        }
     }
 }
 
 void YouTubeBackend::saveKnownIds()
 {
     QJsonArray arr;
-    for (const QString &id : m_knownVideoIds)
+    // Recency order (MRU first), bounded by the index cap.
+    for (const QString &id : m_knownLru)
         arr.append(id);
     QFile f(knownIdsFilePath());
     if (f.open(QIODevice::WriteOnly))
@@ -1044,11 +1056,20 @@ void YouTubeBackend::noteKnownVideoIds(const QStringList &videoIds)
     ensureKnownIdsLoaded();
     bool changed = false;
     for (const QString &id : videoIds) {
-        if (id.isEmpty() || m_knownVideoIds.contains(id))
+        if (id.isEmpty())
             continue;
+        if (m_knownVideoIds.contains(id)) {
+            // Re-surfacing is a hit: refresh recency so hot ids survive
+            // eviction pressure, and persist the new order.
+            ytlru::touch(m_knownLru, id);
+            changed = true;
+            continue;
+        }
         m_knownVideoIds.insert(id);
+        ytlru::touch(m_knownLru, id);
         changed = true;
     }
+    ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds, kKnownVideoIdMaxEntries);
     if (changed)
         saveKnownIds();
 }
@@ -1077,7 +1098,8 @@ void YouTubeBackend::setIdleFillActive(bool idle)
         return;
     ensureSponsorCacheLoaded();
     ensureKnownIdsLoaded();
-    m_idleQueue = idleCandidates(m_knownVideoIds.values(),
+    // MRU-first known pool: idle fill confirms the hottest ids first.
+    m_idleQueue = idleCandidates(m_knownLru,
                                  QDateTime::currentMSecsSinceEpoch());
     if (m_idleQueue.isEmpty())
         return;
@@ -1130,6 +1152,9 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
                               m_sponsorFetching.contains(videoId),
                               failureBlocks)) {
     case ytsb::FetchDecision::ServeCache:
+        // A hit refreshes recency: the video is in active use, so it must
+        // outlive cold entries under eviction pressure.
+        ytlru::touch(m_sponsorLru, videoId);
         emit sponsorReady(videoId);
         return;
     case ytsb::FetchDecision::AlreadyFetching:
@@ -1164,6 +1189,9 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
             // Negative-cache the failure: retries inside the TTL are suppressed
             // so a dead domain cannot turn every cold play into a fetch.
             m_sponsorFailedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+            // Defense-in-depth beside the TTL prune: a burst of distinct
+            // failures inside one window cannot grow the map unbounded.
+            ytlru::capFailures(m_sponsorFailedAt, kSponsorFailedAtMaxEntries);
             reply->deleteLater();
             return;
         }
@@ -1174,6 +1202,11 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
                           : QVector<yt::Segment>{};
         m_sponsorCache.insert(videoId, segs);
         m_sponsorFetchedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+        // Single insert chokepoint: refresh recency, then co-evict the LRU
+        // tail from BOTH maps so no timestamp ever orphans.
+        ytlru::touch(m_sponsorLru, videoId);
+        ytlru::evictSponsorToCap(m_sponsorLru, m_sponsorCache, m_sponsorFetchedAt,
+                                 kSponsorCacheMaxEntries);
         m_sponsorFailedAt.remove(videoId); // a real answer clears any stale stamp
         saveSponsorCache();
         m_sponsorFetching.remove(videoId);

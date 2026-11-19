@@ -220,6 +220,10 @@ private:
     QHash<QString, qint64> m_sponsorFailedAt;   // videoId -> transient-failure stamp (ms)
     QSet<QString> m_sponsorFetching;
     QHash<QString, qint64> m_sponsorStartMs;
+    // Recency index for the sponsor pair (MRU front). ONE index co-evicts
+    // m_sponsorCache + m_sponsorFetchedAt so their key sets stay identical;
+    // touched on cache hit as well as insert (bounded eviction).
+    QStringList m_sponsorLru;
     bool m_sponsorCacheLoaded = false;
     QString sponsorCacheFilePath() const;
     void ensureSponsorCacheLoaded();
@@ -232,6 +236,9 @@ private:
     // foreground warm queue or resolve is busy, and aborts on input activity.
     QHash<QString, qint64> m_sponsorFetchedAt;  // videoId -> confirm stamp (ms)
     QSet<QString>          m_knownVideoIds;     // every id the UI has surfaced
+    // Independent recency index for the known pool (MRU front); bounded
+    // separately from the sponsor pool, sized <= it.
+    QStringList            m_knownLru;
     QStringList            m_idleQueue;
     QTimer                *m_idleTimer = nullptr;
     bool                   m_idleFilling = false;
@@ -415,6 +422,12 @@ private:
     // spell cannot turn into an unbounded crawl.
     static constexpr int    kIdleFillMax    = 400;
     static constexpr int    kIdleFillPaceMs = 300;
+    // Bounded eviction: hard LRU caps on the ID-keyed state, layered on
+    // top of the existing success/failure TTLs (which are unchanged). Known is
+    // sized <= sponsor so idle fill reaches quiescence instead of churning.
+    static constexpr int    kSponsorCacheMaxEntries    = 512;
+    static constexpr int    kKnownVideoIdMaxEntries    = 512;
+    static constexpr int    kSponsorFailedAtMaxEntries = 512;
 
     // Wave-capped RSS refresh queue: the signed-in feed union touches every
     // subscribed channel (~311 RSS GETs); issuing them all at once blows up

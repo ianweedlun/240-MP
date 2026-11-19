@@ -745,6 +745,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-sponsor-ttl COMMAND yt-sponsor-ttl-tests)
 
+    # Bounded eviction: hard LRU caps on the ID-keyed SponsorBlock and
+    # known-id state. Plateau, hot-entry survival, segment/timestamp co-eviction
+    # and clean refetch of evicted ids. Pure container math.
+    add_executable(yt-sponsor-lru-tests
+        src/util/tests/YtSponsorLruTest.cpp)
+    set_target_properties(yt-sponsor-lru-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-sponsor-lru-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-lru-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-lru COMMAND yt-sponsor-lru-tests)
+
     # Innertube stream selection (overnight torture t_7ffb1fd1): pure fixture
     # tests for the cap-enforcement, H.264 preference, itag-140 audio pick,
     # muxed fallback, and expiry derivation. No network, no Qt event loop,
