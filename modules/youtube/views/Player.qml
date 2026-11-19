@@ -371,6 +371,12 @@ FocusScope {
                 youtubeBackend.savePosition(videoId, 0, item.title || "", item.channelName || "")
             else if (pos > 5000)
                 youtubeBackend.savePosition(videoId, pos, item.title || "", item.channelName || "")
+            else if (reason === "stopped" && savedPositionMs > 0)
+                // START FROM THE BEGINNING leaves savedPositionMs at the old
+                // marker. If the user exits before the 5 s save threshold,
+                // clear that marker instead of resurrecting it on re-entry.
+                // Failed launches take the branch above and must preserve it.
+                youtubeBackend.savePosition(videoId, 0, item.title || "", item.channelName || "")
             var nextItemEnabled = appCore.get_setting(moduleRoot.moduleId, "autoplay_playlist_items")
             if (reason === "eof" && (nextItemEnabled === true || nextItemEnabled === "ON")
                     && playerRoot.playNextPlaylistItem())

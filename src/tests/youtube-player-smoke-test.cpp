@@ -110,8 +110,16 @@ public:
     Q_INVOKABLE bool cachedPlaybackSingle(const QString &, const QString &) const { return false; }
     Q_INVOKABLE void resolvePlayback(const QString &, const QString &) {}
     Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &) {}
-    Q_INVOKABLE void savePosition(const QString &, int, const QString &, const QString &) {}
-    Q_INVOKABLE QVariantMap getSavedPosition(const QString &) const { return {}; }
+    QVariantMap savedPosition;
+    QList<int> savedPositionWrites;
+    Q_INVOKABLE void savePosition(const QString &, int positionMs,
+                                  const QString &title, const QString &channelName) {
+        savedPositionWrites << positionMs;
+        savedPosition = {{QStringLiteral("pos"), positionMs},
+                         {QStringLiteral("title"), title},
+                         {QStringLiteral("channelName"), channelName}};
+    }
+    Q_INVOKABLE QVariantMap getSavedPosition(const QString &) const { return savedPosition; }
     Q_INVOKABLE QString ytdlFormatForResolution(const QString &) const {
         return QStringLiteral("bv+ba");
     }
@@ -378,6 +386,80 @@ int main(int argc, char **argv) {
                   .contains(QStringLiteral("UNAVAILABLE")),
               "case5: permanent failure surfaces unavailable message");
         check(mpv.plays.isEmpty(), "case5: permanent failure never spawns mpv fallback");
+        delete view;
+    }
+
+    // --- Case 6: beginning + immediate stop clears the stale resume marker ---
+    // Live repro: a 30 s saved marker was offered, START FROM THE BEGINNING
+    // reached time-pos 0, and an immediate user stop left the 30 s entry intact.
+    // Re-entry therefore offered and resumed the stale offset. A user stop below
+    // the 5 s resume threshold must instead persist 0, so the next Player takes
+    // its existing automatic-beginning path. Failed launches are different: they
+    // must not destroy a usable resume marker.
+    {
+        StubYoutube yt;
+        StubMpv mpv;
+        yt.warmPair = true;
+        yt.savedPosition = {{QStringLiteral("pos"), 30000},
+                            {QStringLiteral("title"), QStringLiteral("SMOKE VIDEO")},
+                            {QStringLiteral("channelName"), QStringLiteral("SMOKE CHANNEL")}};
+        bool loadError = false;
+        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                   QStringLiteral("VID6"), repoRoot, &loadError);
+        check(!loadError && view != nullptr, "case6: Player.qml loads with a saved marker");
+        if (!view) return 1;
+        QTest::qWait(50);
+        check(QQmlProperty::read(view, "overlayVisible").toBool(),
+              "case6: stale marker initially produces the resume prompt");
+        check(mpv.plays.isEmpty(), "case6: resume prompt holds playback");
+        const bool invoked = QMetaObject::invokeMethod(
+            view, "playAt", Qt::DirectConnection, Q_ARG(QVariant, QVariant(0.0)));
+        check(invoked, "case6: START FROM THE BEGINNING invokes playAt(0)");
+        QTest::qWait(100);
+        check(mpv.plays.size() == 1 && mpv.plays[0].startSeconds == 0.0f,
+              "case6: fresh playback starts at zero");
+        emit mpv.positionChanged(0);
+        emit mpv.playbackEnded(0, 533000, QStringLiteral("stopped"));
+        QTest::qWait(50);
+        check(yt.savedPositionWrites == QList<int>{0},
+              "case6: immediate user stop persists zero instead of leaving 30 s stale");
+        delete view;
+
+        QObject *reentry = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                      QStringLiteral("VID6"), repoRoot, &loadError);
+        check(!loadError && reentry != nullptr, "case6: re-entry Player.qml loads");
+        if (!reentry) return 1;
+        QTest::qWait(100);
+        check(!QQmlProperty::read(reentry, "overlayVisible").toBool(),
+              "case6: re-entry does not re-offer the stale marker");
+        check(mpv.plays.size() == 2 && mpv.plays[1].startSeconds == 0.0f,
+              "case6: re-entry automatically starts the fresh-play position at zero");
+        delete reentry;
+    }
+
+    // --- Case 7: failed launch preserves the prior resume marker --------------
+    {
+        StubYoutube yt;
+        StubMpv mpv;
+        yt.warmPair = true;
+        yt.savedPosition = {{QStringLiteral("pos"), 30000},
+                            {QStringLiteral("title"), QStringLiteral("SMOKE VIDEO")},
+                            {QStringLiteral("channelName"), QStringLiteral("SMOKE CHANNEL")}};
+        bool loadError = false;
+        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                   QStringLiteral("VID7"), repoRoot, &loadError);
+        check(!loadError && view != nullptr, "case7: Player.qml loads for failed-launch guard");
+        if (!view) return 1;
+        QTest::qWait(50);
+        const bool invoked = QMetaObject::invokeMethod(
+            view, "playAt", Qt::DirectConnection, Q_ARG(QVariant, QVariant(0.0)));
+        check(invoked, "case7: fresh launch invokes playAt(0)");
+        QTest::qWait(50);
+        emit mpv.playbackEnded(0, 0, QStringLiteral("failed"));
+        QTest::qWait(50);
+        check(yt.savedPositionWrites.isEmpty()
+                  && yt.savedPosition.value(QStringLiteral("pos")).toInt() == 30000,
+              "case7: failed launch does not erase the usable resume marker");
         delete view;
     }
 

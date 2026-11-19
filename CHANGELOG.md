@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: fresh-play exit no longer resurrects a stale resume marker (#103)
+- Choosing **START FROM THE BEGINNING** and exiting before the five-second save threshold now clears the previously offered marker. Re-entry starts at the beginning instead of offering and resuming the old offset; failed launches and ordinary new-video short plays remain unchanged.
+- The real-QML regression fails on the old view and passes on the fix, including the failed-launch guard. A real-video offscreen replay verified `0:30 → beginning → immediate exit → automatic fresh start`, and the full suite passes 29/29.
+
 ### Fixed — YouTube: permanent resolve failures no longer respawn yt-dlp (#103)
 - Age/login-gated (`LOGIN_REQUIRED`) and unavailable/claimed (`UNPLAYABLE`) videos now use a durable negative cache keyed by video id. Entries persist beside the URL cache and expire after a named 24-hour TTL; transient timeouts, network failures and other resolve errors are never cached.
 - List warming, focused-row warming and playback presses skip cached failures before either Innertube or yt-dlp, emitting `yt-resolve … source=negative-cache ms=0`. The Player also cancels its four-second mpv/ytdl-hook fallback on a permanent resolve failure and reports the video unavailable.
