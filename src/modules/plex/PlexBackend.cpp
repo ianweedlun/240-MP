@@ -1043,6 +1043,11 @@ void PlexBackend::start_pin_auth() {
     });
 }
 
+void PlexBackend::stop_pin_auth() {
+    m_pollTimer->stop();
+    m_pendingPinId.clear();
+}
+
 void PlexBackend::pollPinTick() {
     if (m_pendingPinId.isEmpty()) { m_pollTimer->stop(); return; }
 

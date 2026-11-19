@@ -56,6 +56,9 @@ add_subdirectory(third_party/innertube-qt)
 if(NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(Libdrm REQUIRED libdrm)
+    # main.cpp calls FcFini() at exit to release the fontconfig globals Qt
+    # leaves behind after the FontLoaders register the bundled fonts.
+    pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
 endif()
 
 # PC/SC for the NFC reader module. Optional: the module's other driver talks to
@@ -191,6 +194,7 @@ endif()
 
 if(NOT APPLE)
     target_include_directories(240mp PRIVATE ${Libdrm_INCLUDE_DIRS})
+    target_link_libraries(240mp PRIVATE PkgConfig::Fontconfig)
 endif()
 
 target_include_directories(240mp PRIVATE
