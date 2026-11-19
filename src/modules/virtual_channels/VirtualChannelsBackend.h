@@ -58,6 +58,11 @@ public:
     Q_INVOKABLE QVariantList upcoming(int channelNumber, int count = 40);
 
     static constexpr qint64 kMaxGuideSpanMs = 7LL * 24 * 3600 * 1000;
+
+    // The force-transcode decision cache holds at most this many ref|quality
+    // entries; the oldest is evicted to make room. A miss costs one item-detail
+    // fetch, which re-learns the decision -- never a wrong play decision.
+    static constexpr int kPlexForceTranscodeCacheCap = 16;
     Q_INVOKABLE QVariantList guide_grid(double fromMs, double spanMs);
 
     Q_INVOKABLE double now_ms() const;
@@ -382,6 +387,7 @@ private slots:
     void onPlexSubtitleStreamSet(const QString &partId);
     void onPlexAudioStreamSet(const QString &partId);
     void onPlexTranscodeStopped(const QString &sessionId);
+    void onPlexAuthSuccess();
     void onGenerationTick();
     void onUrlTimeout();
     void onPlexEnumTimeout();
@@ -669,7 +675,14 @@ private:
 
     qint64  m_plexPendingOffsetMs = 0;
     bool    m_plexPendingTranscodeOk = false;
+    // Learned force-transcode decisions, ref|quality -> flag. Bounded by
+    // kPlexForceTranscodeCacheCap: the key space is every media ref ever
+    // resolved, so an unbounded map grows for the whole session. The order
+    // list keeps the eviction order (oldest first; re-learning a decision
+    // refreshes its recency). A miss only costs one item-detail fetch.
     QHash<QString, bool> m_plexForceTranscodeByRef;
+    QStringList          m_plexForceTranscodeOrder;
+    void rememberPlexForceTranscode(const QString &key, bool force);
     bool    m_previewTranscodeActive = false;
     bool    requestServerUrl(const vchan::Slot &s, bool chooseTracks = false);
     bool    askServerForStream(const vchan::Slot &s);

@@ -75,6 +75,7 @@ public:
     }
 
 signals:
+    void authSuccess();
     void itemLoaded(const QVariant &detail);
     void librariesLoaded(const QVariant &libraries);
     void itemsLoaded(const QVariant &items);

@@ -257,7 +257,9 @@ private:
     QString     m_lastShuffledKey;
 
     // showRatingKey -> year, so revisiting a show's episodes costs one lookup.
-    // Cleared on a server switch, since ratingKeys are server-local.
+    // Bounded by the library's show count and cleared on server switch
+    // (ratingKeys are server-local); no mid-session eviction -- a cap would
+    // only re-fetch cheap years, so the X-2 triage deliberately left it.
     QHash<QString, int> m_showYears;
 
     // Connection probing

@@ -151,6 +151,8 @@ VirtualChannelsBackend::VirtualChannelsBackend(const QString &appRoot,
                 connect(m_plex, SIGNAL(audioStreamSet(QString)), this, SLOT(onPlexAudioStreamSet(QString)));
             if (mo->indexOfSignal("transcodeStopped(QString)") >= 0)
                 connect(m_plex, SIGNAL(transcodeStopped(QString)), this, SLOT(onPlexTranscodeStopped(QString)));
+            if (mo->indexOfSignal("authSuccess()") >= 0)
+                connect(m_plex, SIGNAL(authSuccess()), this, SLOT(onPlexAuthSuccess()));
         } else {
             qWarning("[VirtualChannels] Plex backend has no streamUrlReady signal — Plex slots will not play");
             m_plex = nullptr;
@@ -898,6 +900,36 @@ void VirtualChannelsBackend::applyTrackChoice(const QString &ref, const QVariant
         m_subtitleIndex > 0 ? streamIdAt(m_subtitleStreams, m_subtitleIndex) : QString();
 }
 
+// The decision cache is bounded: its key space is every media ref ever
+// resolved at every quality, which grows for the whole session (torture X-2
+// measured it monotonic, with no remove site). Oldest goes first; re-learning
+// a decision refreshes its recency. Eviction is safe by construction: a miss
+// sends the resolution back through load_item_detail, which re-learns the
+// decision before anything plays, so a pruned entry costs one fetch, never a
+// wrong play decision.
+void VirtualChannelsBackend::rememberPlexForceTranscode(const QString &key, bool force) {
+    if (m_plexForceTranscodeByRef.contains(key)) {
+        m_plexForceTranscodeByRef.insert(key, force);
+        m_plexForceTranscodeOrder.removeAll(key);
+        m_plexForceTranscodeOrder.append(key);
+        return;
+    }
+    while (m_plexForceTranscodeOrder.size() >= kPlexForceTranscodeCacheCap) {
+        const QString oldest = m_plexForceTranscodeOrder.takeFirst();
+        m_plexForceTranscodeByRef.remove(oldest);
+    }
+    m_plexForceTranscodeByRef.insert(key, force);
+    m_plexForceTranscodeOrder.append(key);
+}
+
+// ratingKeys are server-local: a fresh auth (login or server switch) can point
+// the same key at a different item, so no learned decision survives it -- the
+// same reason PlexBackend drops its show years on select_server.
+void VirtualChannelsBackend::onPlexAuthSuccess() {
+    m_plexForceTranscodeByRef.clear();
+    m_plexForceTranscodeOrder.clear();
+}
+
 void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     if (!m_urlPending || m_plexAwaitingDetailFor.isEmpty())
         return;
@@ -940,7 +972,7 @@ void VirtualChannelsBackend::onPlexItemLoaded(const QVariant &detail) {
     // press is not repeated.
     const QString quality = plexVideoQuality();
     const bool itemForceTranscode = d.value(QStringLiteral("forceTranscode"), false).toBool();
-    m_plexForceTranscodeByRef.insert(ref + QLatin1Char('|') + quality, itemForceTranscode);
+    rememberPlexForceTranscode(ref + QLatin1Char('|') + quality, itemForceTranscode);
     const bool allowTranscode = m_plexPendingTranscodeOk
         && (quality == QLatin1String("auto")
             || (m_previewChannel >= 0 ? itemForceTranscode : true));

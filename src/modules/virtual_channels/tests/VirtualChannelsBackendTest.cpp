@@ -1472,7 +1472,8 @@ QJsonObject plexChannel(int number) {
 }
 
 void writeAiringNow(const Fixture &fx, int number, const QString &ref,
-                    const QString &src = QStringLiteral("plex")) {
+                    const QString &src = QStringLiteral("plex"),
+                    const QString &partKey = QString()) {
     QJsonObject slot;
     slot["start"] = double(QDateTime::currentMSecsSinceEpoch() - 60 * 1000);
     slot["dur"]   = double(60 * 60 * 1000);
@@ -1480,6 +1481,7 @@ void writeAiringNow(const Fixture &fx, int number, const QString &ref,
     slot["src"]   = src;
     slot["ref"]   = ref;
     slot["title"] = QStringLiteral("Bloodlines");
+    if (!partKey.isEmpty()) slot["part_key"] = partKey;
     QJsonArray entries; entries.append(slot);
     QJsonObject root;
     root["channel"]      = number;
@@ -2053,6 +2055,126 @@ void testPreviewNeverWrites() {
     checkEq(plex4k.count("request_transcode"), 1, "4K preview transcodes above resolution cap");
 }
 
+// The force-transcode decision cache is bounded (torture X-2: it grew for the
+// whole session, one entry per media ref ever resolved, with no remove site).
+// These tests drive the real resolution path -- tune -> load_item_detail ->
+// decision -> stream -- and assert the bound and the eviction order by their
+// observable effects: which resolutions re-fetch a detail and which play from
+// the learned decision. Pruning must never change what plays: a miss re-learns.
+void tuneAndRelease(VirtualChannelsBackend &b, FakePlexServer &plex, const Fixture &fx,
+                    int ch, const QString &ref, const QString &partKey = QString(),
+                    bool forceTranscode = false) {
+    // The fake answers every detail ask with this one map, so it must name the
+    // ref being tuned -- a mismatched answer is dropped before the decision
+    // is learned, exactly as the backend drops a late answer for an old tune.
+    plex.detail = plexDetail(ref, 0);
+    if (forceTranscode) plex.detail[QStringLiteral("forceTranscode")] = true;
+    const int stopsBefore = plex.count(QStringLiteral("stop_transcode"));
+    writeAiringNow(fx, ch, ref, QStringLiteral("plex"), partKey);
+    b.tune(ch); spin(10);
+    // A transcode-after-transcode tune holds its stream for the last session's
+    // stop; the fake's answer releases it, as the server's would.
+    if (plex.count(QStringLiteral("stop_transcode")) > stopsBefore) {
+        emit plex.transcodeStopped(lastStopped(plex)); spin(10);
+    }
+}
+
+void testForceTranscodeCacheIsBounded() {
+    section("Backend: the force-transcode decision cache is bounded and pruning never changes the decision");
+    Fixture fx;
+    fx.write(plexChannel(5));
+    FakePlexServer plex;                        // quality "2000": decisions are consulted
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const QString partKey = QStringLiteral("/library/parts/11234/1/file.mkv");
+    constexpr int cap = VirtualChannelsBackend::kPlexForceTranscodeCacheCap;
+    const int n = cap + 8;
+    QStringList refs;
+    for (int i = 0; i < n; ++i) refs << QString::number(9000 + i);
+
+    // Every ref airs once: each is a cold resolution (detail fetched, decision
+    // learned). The cache may keep at most `cap` of them.
+    for (const QString &ref : refs)
+        tuneAndRelease(b, plex, fx, 5, ref, partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), n, "every distinct ref was learned once");
+
+    // The oldest survivor plays from its learned decision without a fetch...
+    int fetches = plex.count(QStringLiteral("load_item_detail"));
+    int direct = plex.count(QStringLiteral("build_stream_url"));
+    tuneAndRelease(b, plex, fx, 5, refs[n - cap], partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches, "the oldest survivor is still cached");
+    checkEq(plex.count(QStringLiteral("build_stream_url")), direct + 1,
+            "and its learned no-transcode decision direct-plays the warm tune");
+
+    // ...while one place older was evicted and must be re-learned.
+    tuneAndRelease(b, plex, fx, 5, refs[n - cap - 1], partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches + 1, "the evicted ref is re-learned");
+
+    // That re-learning evicted the oldest survivor in turn: the bound held.
+    tuneAndRelease(b, plex, fx, 5, refs[n - cap], partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches + 2,
+            "the cache stayed at its cap through the churn");
+
+    // A still-airing ref whose decision was pruned resolves exactly as it did
+    // when first learned -- here a force-transcode item: the cold tune
+    // transcodes, and the re-learned decision keeps transcoding when warm.
+    const QString hot = refs[0];
+    int transcodes = plex.count(QStringLiteral("request_transcode"));
+    tuneAndRelease(b, plex, fx, 5, hot, partKey, /*forceTranscode*/ true);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches + 3, "the pruned decision is fetched again");
+    checkEq(plex.count(QStringLiteral("request_transcode")), transcodes + 1, "the re-learned force item transcodes");
+    fetches = plex.count(QStringLiteral("load_item_detail"));
+    transcodes = plex.count(QStringLiteral("request_transcode"));
+    tuneAndRelease(b, plex, fx, 5, hot, partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches, "the warm force item needs no fetch");
+    checkEq(plex.count(QStringLiteral("request_transcode")), transcodes + 1,
+            "the cached force decision still transcodes");
+
+    // The same for a no-transcode item: re-learned, then warm-direct.
+    const QString cool = refs[1];
+    tuneAndRelease(b, plex, fx, 5, cool, partKey);
+    fetches = plex.count(QStringLiteral("load_item_detail"));
+    direct = plex.count(QStringLiteral("build_stream_url"));
+    tuneAndRelease(b, plex, fx, 5, cool, partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches, "the re-learned no-transcode item is cached");
+    checkEq(plex.count(QStringLiteral("build_stream_url")), direct + 1,
+            "and warm-plays direct, exactly as the decision says");
+
+    // A fresh auth (login or server switch) drops every learned decision:
+    // ratingKeys are server-local, so the same key may name another item.
+    emit plex.authSuccess(); spin(5);
+    fetches = plex.count(QStringLiteral("load_item_detail"));
+    tuneAndRelease(b, plex, fx, 5, cool, partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches + 1,
+            "a fresh auth invalidates the learned decisions");
+}
+
+void testForceTranscodeCacheRefreshesRecency() {
+    section("Backend: re-learning a decision refreshes its place in the eviction order");
+    Fixture fx;
+    fx.write(plexChannel(5));
+    FakePlexServer plex;
+    VirtualChannelsBackend b(fx.data(), fx.data(), &plex);
+    const QString partKey = QStringLiteral("/library/parts/11234/1/file.mkv");
+    constexpr int cap = VirtualChannelsBackend::kPlexForceTranscodeCacheCap;
+    QStringList refs;
+    for (int i = 0; i < cap; ++i) refs << QString::number(9100 + i);
+    for (const QString &ref : refs)
+        tuneAndRelease(b, plex, fx, 5, ref, partKey);
+    // Re-learn the oldest through a detail fetch (no part key forces one):
+    // it moves to the newest place instead of staying first out.
+    tuneAndRelease(b, plex, fx, 5, refs[0]);
+    // One new ref now evicts the second-oldest, not the refreshed one.
+    const QString fresh = QStringLiteral("9200");
+    tuneAndRelease(b, plex, fx, 5, fresh, partKey);
+    const int fetches = plex.count(QStringLiteral("load_item_detail"));
+    tuneAndRelease(b, plex, fx, 5, refs[0], partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches,
+            "the refreshed decision survived the eviction");
+    tuneAndRelease(b, plex, fx, 5, refs[1], partKey);
+    checkEq(plex.count(QStringLiteral("load_item_detail")), fetches + 1,
+            "the next-oldest went first instead");
+}
+
 }  // namespace
 
 // A genre recipe must air what the channel's own kind airs: a TV channel keeps
@@ -2480,6 +2602,8 @@ int runVirtualChannelsBackendTests() {
     testLocalFileGetsMpvArgs();
     testSurfLeavesTheLastProgrammesWritesBehind();
     testPreviewNeverWrites();
+    testForceTranscodeCacheIsBounded();
+    testForceTranscodeCacheRefreshesRecency();
     testChannelLogoStyle();
     testPresetLogos();
     testSpecialNumbersNeverCollide();
