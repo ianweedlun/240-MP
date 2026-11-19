@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QStringList>
+#include "player/SeekHoldPolicy.h"
 
 class AppCore;
 class DisplayHandoff;
@@ -48,7 +49,10 @@ public:
     // which a process that has stopped servicing that socket never reads.
     Q_INVOKABLE void forceStop();
     Q_INVOKABLE void seekTo(int positionMs);
-    Q_INVOKABLE void sendKey(const QString &key);
+    Q_INVOKABLE void sendKey(const QString &key, bool autoRepeat = false);
+    // Key-up for the direct-IPC path and QML alike: ends a held-key speed ramp
+    // or flushes the coalesced rewind accumulator (see SeekHoldPolicy).
+    Q_INVOKABLE void sendKeyUp(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system
     // mixer stays the single loudness authority (#34). There is deliberately
@@ -111,6 +115,7 @@ private slots:
     void onProcessFinished();
     void tryConnectIpc();
     void onIpcReadyRead();
+    void onSeekFlush();
 
 private:
     // Hardware video-decode profile, detected once from /proc/device-tree/model.
@@ -118,6 +123,10 @@ private:
 
     void sendCommand(const QJsonArray &args);
     void sendCommand(const QJsonArray &args, int requestId);
+    void executePolicyCommand(const SeekHoldPolicy::Command &cmd);
+    void setPlaybackSpeed(double speed);
+    void syncSeekFlushTimer();
+    void resetSeekHold();
     VideoProfile detectVideoProfile() const;
     // Appends the profile-specific --vo/--gpu-context/--hwdec flags (honouring the
     // app-level "mpv_video_args" override) to a forming mpv argument list.
@@ -157,6 +166,8 @@ private:
     QLocalSocket *m_ipc            = nullptr;
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
+    QTimer       *m_seekFlushTimer = nullptr;
+    SeekHoldPolicy m_seekPolicy;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
     QString       m_appRoot;

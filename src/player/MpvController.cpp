@@ -45,6 +45,13 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         f.write("ESC quit\n");
         f.write("BS quit\n");
         f.write("ENTER cycle pause\n");
+        // Seek steps for the native/physical-keyboard path. The app's own key
+        // paths (QML and direct IPC) shape seeks through SeekHoldPolicy with
+        // the same steps; held directions never reach mpv as repeated keypresses.
+        f.write("RIGHT seek 10 relative+exact\n");
+        f.write("LEFT seek -10 relative+exact\n");
+        f.write("UP seek 60 relative+exact\n");
+        f.write("DOWN seek -60 relative+exact\n");
         f.close();
     }
 
@@ -112,6 +119,10 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     });
     connect(m_ipc, &QLocalSocket::readyRead, this, &MpvController::onIpcReadyRead);
 
+    m_seekFlushTimer = new QTimer(this);
+    m_seekFlushTimer->setSingleShot(true);
+    m_seekFlushTimer->setInterval(SeekHoldPolicy::kCoalesceFlushMs);
+    connect(m_seekFlushTimer, &QTimer::timeout, this, &MpvController::onSeekFlush);
     m_connectTimer = new QTimer(this);
     m_connectTimer->setInterval(100);
     connect(m_connectTimer, &QTimer::timeout, this, &MpvController::tryConnectIpc);
@@ -171,6 +182,8 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // return can never leak it into the next, non-YouTube launch.
     const QString sbRanges = m_oscRanges;
     m_oscRanges.clear();
+    // A new launch starts at normal speed with no hold state carried over.
+    resetSeekHold();
     if (m_process) {
         m_process->disconnect();
         if (m_process->state() != QProcess::NotRunning) {
@@ -564,6 +577,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 
 void MpvController::stop() {
     m_pendingOsd.clear();
+    resetSeekHold();
 
     if (m_ipc->state() == QLocalSocket::ConnectedState) {
         sendCommand({"quit"});
@@ -574,6 +588,7 @@ void MpvController::stop() {
 
 void MpvController::forceStop() {
     m_pendingOsd.clear();
+    resetSeekHold();
     if (!m_process || m_process->state() == QProcess::NotRunning) return;
     m_process->terminate();
     QPointer<QProcess> proc = m_process;
@@ -586,8 +601,61 @@ void MpvController::seekTo(int positionMs) {
     sendCommand({"seek", positionMs / 1000.0, "absolute+exact"});
 }
 
-void MpvController::sendKey(const QString &key) {
-    sendCommand({"keypress", key});
+void MpvController::sendKey(const QString &key, bool autoRepeat) {
+    // Both key paths converge here: QML (window active) and the direct-IPC
+    // connect in main.cpp (mpv owns the screen). SeekHoldPolicy shapes taps
+    // into single exact seeks and holds into a speed ramp / coalesced rewind,
+    // so a 10 presses/s held key can never backlog the demuxer again.
+    executePolicyCommand(m_seekPolicy.press(key, autoRepeat));
+    syncSeekFlushTimer();
+}
+
+void MpvController::sendKeyUp(const QString &key) {
+    executePolicyCommand(m_seekPolicy.release(key));
+    syncSeekFlushTimer();
+}
+
+void MpvController::onSeekFlush() {
+    executePolicyCommand(m_seekPolicy.flush());
+    syncSeekFlushTimer();
+}
+
+void MpvController::syncSeekFlushTimer() {
+    if (m_seekPolicy.flushTimerWanted()) {
+        if (!m_seekFlushTimer->isActive())
+            m_seekFlushTimer->start();
+    } else {
+        m_seekFlushTimer->stop();
+    }
+}
+
+void MpvController::resetSeekHold() {
+    m_seekPolicy.reset();
+    m_seekFlushTimer->stop();
+}
+
+void MpvController::executePolicyCommand(const SeekHoldPolicy::Command &cmd) {
+    switch (cmd.kind) {
+    case SeekHoldPolicy::Command::Seek:
+        sendCommand({"seek", cmd.value, "relative+exact"});
+        break;
+    case SeekHoldPolicy::Command::Speed:
+        setPlaybackSpeed(cmd.value);
+        break;
+    case SeekHoldPolicy::Command::Key:
+        sendCommand({"keypress", cmd.key});
+        break;
+    case SeekHoldPolicy::Command::None:
+        break;
+    }
+}
+
+void MpvController::setPlaybackSpeed(double speed) {
+    if (m_ipc->state() != QLocalSocket::ConnectedState)
+        return;   // no child owns the screen; nothing to ramp
+    sendCommand({"set_property", "speed", speed});
+    if (m_hasMediaKeysScript)
+        sendCommand({"script-message", "240mp-speed-osd", QString::number(speed)});
 }
 
 void MpvController::showOsdSkipPrompt() {
@@ -769,6 +837,7 @@ void MpvController::onIpcReadyRead() {
 }
 
 void MpvController::onProcessFinished() {
+    resetSeekHold();
     int exitCode = m_process ? m_process->exitCode() : -1;
     if (m_process) {
         const QByteArray remaining = m_process->readAll();

@@ -224,6 +224,8 @@ int main(int argc, char *argv[]) {
     // gamepad actions bypass QML and drive mpv directly over IPC.
     QObject::connect(&inputManager, &InputManager::mpvKeyRequested,
                      &mpvController, &MpvController::sendKey);
+    QObject::connect(&inputManager, &InputManager::mpvKeyReleased,
+                     &mpvController, &MpvController::sendKeyUp);
 
     // The child-owned renderer for the same number: while mpv owns the screen the
     // app's QML bar cannot draw, so the level is pushed to the mpv lua OSD. With
