@@ -39,6 +39,9 @@ class YouTubeBackend : public QObject {
 public:
     explicit YouTubeBackend(const QString &appRoot, const QString &dataRoot,
                             QObject *parent = nullptr);
+    // Flushes a pending debounced sponsor save so no confirmed window is lost
+    // on app exit (the save timer coalesces idle-fill bursts into one write).
+    ~YouTubeBackend() override;
 
     // Synchronous subscriptions-file check for the menu view:
     // { ok: bool, error: QString, fileExists: bool, channelCount: int }
@@ -225,9 +228,16 @@ private:
     // touched on cache hit as well as insert (bounded eviction).
     QStringList m_sponsorLru;
     bool m_sponsorCacheLoaded = false;
+    // Debounced persistence: an idle-fill burst lands one answer per pace tick,
+    // and rewriting the (bounded) array per answer is redundant SD-card wear.
+    // A dirty flag + restarting single-shot timer coalesces the burst into one
+    // write; the destructor flushes so app exit never loses a confirmed window.
+    QTimer *m_sponsorSaveTimer = nullptr;
+    bool m_sponsorSaveDirty = false;
     QString sponsorCacheFilePath() const;
     void ensureSponsorCacheLoaded();
     void saveSponsorCache();
+    void markSponsorCacheDirty();
 
     // Idle SponsorBlock fill. The Pi is on all day; while nobody is pressing
     // keys we walk every video id we have ever seen and confirm its segment
@@ -422,6 +432,9 @@ private:
     // spell cannot turn into an unbounded crawl.
     static constexpr int    kIdleFillMax    = 400;
     static constexpr int    kIdleFillPaceMs = 300;
+    // Longer than the idle pace so a whole burst coalesces into one bounded
+    // rewrite; a lone foreground answer still persists within half a second.
+    static constexpr int    kSponsorSaveDebounceMs = 500;
     // Bounded eviction: hard LRU caps on the ID-keyed state, layered on
     // top of the existing success/failure TTLs (which are unchanged). Known is
     // sized <= sponsor so idle fill reaches quiescence instead of churning.

@@ -687,6 +687,25 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-negative-cache-backend COMMAND yt-negative-cache-backend-tests)
 
+    # Persistence gate for the bounded ID-keyed state (MEM-01 follow-up):
+    # oversized/legacy/corrupt files must load straight into the caps, self-heal
+    # into bounded MRU-first writes, and the debounced save must flush on exit.
+    # Seeds files and constructs the real backend — no network, no proxy.
+    add_executable(yt-sponsor-persistence-tests
+        src/modules/youtube/tests/YouTubeSponsorPersistenceTest.cpp
+        src/modules/youtube/YouTubeBackend.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp
+        src/util/YtDlpLocator.cpp)
+    set_target_properties(yt-sponsor-persistence-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-sponsor-persistence-tests PRIVATE src)
+    target_link_libraries(yt-sponsor-persistence-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test innertube-qt)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-persistence-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-persistence COMMAND yt-sponsor-persistence-tests)
+
     # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
     # before-expiry semantics. No processes, no network.
     add_executable(yt-auth-gate-tests

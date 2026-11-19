@@ -79,6 +79,15 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
     });
 }
 
+YouTubeBackend::~YouTubeBackend()
+{
+    // Flush a debounced save before the members die: app exit must not lose a
+    // confirmed window that landed inside the debounce interval. The timer is
+    // a child QObject and cannot fire during destruction (no event loop here).
+    if (m_sponsorSaveDirty)
+        saveSponsorCache();
+}
+
 // ---------------------------------------------------------------------------
 // Subscriptions file
 // ---------------------------------------------------------------------------
@@ -948,24 +957,62 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
         if (doc.isArray()) {
+            // Anything dropped here (invalid row, duplicate, orphan, prune)
+            // means the legacy file no longer matches memory -> self-heal it
+            // into the bounded MRU-first form with one synchronous rewrite.
+            bool legacyDirty = false;
             for (const QJsonValue &e : doc.array()) {
                 const QJsonObject o = e.toObject();
                 const QString vid = o.value(QStringLiteral("videoId")).toString();
-                if (vid.isEmpty())
+                if (vid.isEmpty()) {
+                    legacyDirty = true;
                     continue;
-                m_sponsorCache.insert(vid, yt::segmentsFromRows(
-                    o.value(QStringLiteral("segments")).toArray()));
-                // Entries written before the stamp existed are stamped NOW, so
-                // an upgraded cache ages out gradually rather than refetching
-                // every video on first boot.
-                const qint64 stamp = static_cast<qint64>(
-                    o.value(QStringLiteral("fetchedAt")).toDouble(0));
-                m_sponsorFetchedAt.insert(vid, stamp > 0
-                    ? stamp : QDateTime::currentMSecsSinceEpoch());
+                }
+                // Atomic entry: a row without a segments array gets NO cache
+                // entry and NO stamp, so a stamp-only legacy row can never
+                // orphan a timestamp. An EMPTY array is valid (confirmed "no
+                // segments"); every real legacy format wrote the array.
+                const QJsonValue rows = o.value(QStringLiteral("segments"));
+                if (!rows.isArray()) {
+                    legacyDirty = true;
+                    continue;
+                }
+                // Duplicates keep the FIRST occurrence whole (payload, stamp
+                // and position), so the legacy prune stays deterministic.
+                if (m_sponsorCache.contains(vid)) {
+                    legacyDirty = true;
+                    continue;
+                }
+                m_sponsorCache.insert(vid, yt::segmentsFromRows(rows.toArray()));
+                // Keep the ORIGINAL stamp (0 = pre-stamp legacy entry) through
+                // the prune; re-stamping happens only AFTER ordering, below.
+                m_sponsorFetchedAt.insert(vid, static_cast<qint64>(
+                    o.value(QStringLiteral("fetchedAt")).toDouble(0)));
                 // Rebuild the recency index in file order (writes are
-                // MRU-first); duplicates in legacy files keep first occurrence.
+                // MRU-first); legacy files have no hit-recency signal.
                 ytlru::appendIfAbsent(m_sponsorLru, vid);
             }
+            if (ytlru::dropOrphanStamps(m_sponsorCache, m_sponsorFetchedAt) > 0)
+                legacyDirty = true;
+            // Oversized legacy file -> deterministic prune to the cap (newest
+            // stamps win). A bounded file is untouched, stale residents keep
+            // serving playback until their refetch lands.
+            if (ytlru::pruneSponsorOnLoad(m_sponsorLru, m_sponsorCache,
+                                          m_sponsorFetchedAt,
+                                          QDateTime::currentMSecsSinceEpoch(),
+                                          kSponsorCacheMaxEntries) > 0)
+                legacyDirty = true;
+            // Entries written before the stamp existed are stamped NOW, so
+            // an upgraded cache ages out gradually rather than refetching
+            // every video on first boot. AFTER the prune, never before: a
+            // re-stamp to now must not bias which legacy entries survive.
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            for (auto it = m_sponsorFetchedAt.begin(); it != m_sponsorFetchedAt.end(); ++it) {
+                if (it.value() <= 0)
+                    it.value() = now;
+            }
+            if (legacyDirty)
+                saveSponsorCache();
         }
     }
 }
@@ -1001,6 +1048,26 @@ void YouTubeBackend::saveSponsorCache()
         f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
 }
 
+void YouTubeBackend::markSponsorCacheDirty()
+{
+    m_sponsorSaveDirty = true;
+    if (!m_sponsorSaveTimer) {
+        m_sponsorSaveTimer = new QTimer(this);
+        m_sponsorSaveTimer->setSingleShot(true);
+        m_sponsorSaveTimer->setInterval(kSponsorSaveDebounceMs);
+        connect(m_sponsorSaveTimer, &QTimer::timeout, this, [this]() {
+            if (m_sponsorSaveDirty) {
+                m_sponsorSaveDirty = false;
+                saveSponsorCache();
+            }
+        });
+    }
+    // Restart on every answer: while answers keep landing inside the interval
+    // (idle-fill burst) the write keeps sliding to the end of the burst, so
+    // 400 paced confirmations cost ONE bounded rewrite, not 400.
+    m_sponsorSaveTimer->start();
+}
+
 // ---------------------------------------------------------------------------
 // Idle SponsorBlock fill
 // ---------------------------------------------------------------------------
@@ -1015,17 +1082,32 @@ void YouTubeBackend::ensureKnownIdsLoaded()
     if (m_knownIdsLoaded)
         return;
     m_knownIdsLoaded = true;
+    bool legacyDirty = false;
     QFile f(knownIdsFilePath());
     if (f.open(QIODevice::ReadOnly)) {
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
         for (const QJsonValue &v : doc.array()) {
             const QString id = v.toString();
-            if (!id.isEmpty()) {
-                m_knownVideoIds.insert(id);
-                ytlru::appendIfAbsent(m_knownLru, id);
+            if (id.isEmpty()) {
+                legacyDirty = true;
+                continue;
             }
+            // Duplicates keep the first occurrence (file order is the only
+            // recency signal a legacy string array has).
+            if (m_knownVideoIds.contains(id)) {
+                legacyDirty = true;
+                continue;
+            }
+            m_knownVideoIds.insert(id);
+            ytlru::appendIfAbsent(m_knownLru, id);
         }
     }
+    // Oversized legacy file: keep the FIRST cap ids in file order BEFORE the
+    // history merge. Dropped ids are re-surfaced on the next browse — a clean
+    // miss, never a corruption.
+    if (!ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds,
+                                kKnownVideoIdMaxEntries).isEmpty())
+        legacyDirty = true;
     // Watch history is a second source: rewatches are the most likely plays.
     QFile h(m_dataRoot + QStringLiteral("/youtube_history.json"));
     if (h.open(QIODevice::ReadOnly)) {
@@ -1038,6 +1120,15 @@ void YouTubeBackend::ensureKnownIdsLoaded()
             }
         }
     }
+    // Final trim: the merge can push even a bounded file over cap. The tail
+    // goes first — those are the just-appended history keys, so every id the
+    // file itself carried keeps its front position. No load path may leave
+    // the pool above cap, even before the first mutation.
+    ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds, kKnownVideoIdMaxEntries);
+    // Self-heal an oversized/dirty legacy file once. A clean bounded file is
+    // not rewritten: its ids all survive the merge trim, so memory == file.
+    if (legacyDirty)
+        saveKnownIds();
 }
 
 void YouTubeBackend::saveKnownIds()
@@ -1208,7 +1299,7 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
         ytlru::evictSponsorToCap(m_sponsorLru, m_sponsorCache, m_sponsorFetchedAt,
                                  kSponsorCacheMaxEntries);
         m_sponsorFailedAt.remove(videoId); // a real answer clears any stale stamp
-        saveSponsorCache();
+        markSponsorCacheDirty();
         m_sponsorFetching.remove(videoId);
         const qint64 start = m_sponsorStartMs.take(videoId);
         qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",

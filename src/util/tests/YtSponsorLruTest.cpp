@@ -20,6 +20,9 @@ private slots:
     void evictedSponsorIdIsCleanlyRefetchable();
     void capFailuresDropsOldestDeterministically();
     void mixedOpsNeverOrphanATimestamp();
+    void pruneSponsorOnLoadKeepsNewestStampsDeterministically();
+    void pruneSponsorOnLoadDropsStaleFirstAndNeverRestamps();
+    void dropOrphanStampsRemovesOnlyOrphans();
 };
 
 // The backend's insert protocol, mirrored exactly: insert into both maps,
@@ -271,6 +274,118 @@ void YtSponsorLruTest::mixedOpsNeverOrphanATimestamp()
         QVERIFY(segs.size() <= cap);
         assertCoherent(lru, segs, stamps);
     }
+}
+
+// --- Load-time legacy prune (persistence contract) -------------------------
+
+// Build a loaded state in file order without any pruning, mirroring the
+// backend parse: one index entry, one segment vector, one ORIGINAL stamp.
+static void loadEntry(QStringList &lru, QHash<QString, QVector<int>> &segs,
+                      QHash<QString, qint64> &stamps, const QString &id, qint64 stamp)
+{
+    segs.insert(id, {1});
+    stamps.insert(id, stamp);
+    ytlru::appendIfAbsent(lru, id);
+}
+
+void YtSponsorLruTest::pruneSponsorOnLoadKeepsNewestStampsDeterministically()
+{
+    // Over cap: newest stamps win, equal stamps keep the earlier file
+    // position, and the index is rebuilt MRU-first in surviving order.
+    const int cap = 3;
+    QStringList lru;
+    QHash<QString, QVector<int>> segs;
+    QHash<QString, qint64> stamps;
+    loadEntry(lru, segs, stamps, QStringLiteral("a"), 10);
+    loadEntry(lru, segs, stamps, QStringLiteral("b"), 30);
+    loadEntry(lru, segs, stamps, QStringLiteral("c"), 20);
+    loadEntry(lru, segs, stamps, QStringLiteral("d"), 30); // tie with b, later in file
+    loadEntry(lru, segs, stamps, QStringLiteral("e"), 5);
+    loadEntry(lru, segs, stamps, QStringLiteral("f"), 25);
+    loadEntry(lru, segs, stamps, QStringLiteral("g"), 1);
+    QCOMPARE(ytlru::pruneSponsorOnLoad(lru, segs, stamps, 1000, cap), 4);
+    QCOMPARE(lru, QStringList({QStringLiteral("b"), QStringLiteral("d"), QStringLiteral("f")}));
+    QCOMPARE(segs.size(), cap);
+    QCOMPARE(stamps.value(QStringLiteral("b")), 30); // original stamps untouched
+    QCOMPARE(stamps.value(QStringLiteral("d")), 30);
+    QCOMPARE(stamps.value(QStringLiteral("f")), 25);
+    QVERIFY(!segs.contains(QStringLiteral("a")));
+    QVERIFY(!stamps.contains(QStringLiteral("g"))); // co-evicted, no orphan
+    assertCoherent(lru, segs, stamps);
+
+    // Bounded file: absolute no-op, even with stale residents (they keep
+    // serving playback until their refetch lands — prune is capacity-only).
+    QStringList blru;
+    QHash<QString, QVector<int>> bsegs;
+    QHash<QString, qint64> bstamps;
+    loadEntry(blru, bsegs, bstamps, QStringLiteral("old"), 1); // ancient
+    loadEntry(blru, bsegs, bstamps, QStringLiteral("new"), 999);
+    QCOMPARE(ytlru::pruneSponsorOnLoad(blru, bsegs, bstamps, 1000, cap), 0);
+    QCOMPARE(blru, QStringList({QStringLiteral("old"), QStringLiteral("new")}));
+    QCOMPARE(bsegs.size(), 2);
+}
+
+void YtSponsorLruTest::pruneSponsorOnLoadDropsStaleFirstAndNeverRestamps()
+{
+    const qint64 now = 2000000000LL;
+    const qint64 staleCutoff = now - ytsb::kSuccessTtlMs;
+    const int cap = 3;
+    QStringList lru;
+    QHash<QString, QVector<int>> segs;
+    QHash<QString, qint64> stamps;
+    loadEntry(lru, segs, stamps, QStringLiteral("s1"), 100);            // stale
+    loadEntry(lru, segs, stamps, QStringLiteral("s2"), 200);            // stale
+    loadEntry(lru, segs, stamps, QStringLiteral("n1"), now - 100000);   // fresh
+    loadEntry(lru, segs, stamps, QStringLiteral("u"), 0);               // pre-stamp
+    loadEntry(lru, segs, stamps, QStringLiteral("n2"), now - 50000);
+    loadEntry(lru, segs, stamps, QStringLiteral("n3"), now - 10000);
+    loadEntry(lru, segs, stamps, QStringLiteral("n4"), now - 1000);
+    QVERIFY(staleCutoff > 200); // s1/s2 really are stale, n* really are fresh
+    // Stale drop leaves 5 > cap 3 -> newest-wins keeps n4,n3,n2. The stampless
+    // entry sorts LAST (known-fresh beats unknown-age) and is dropped; the
+    // helper never re-stamps anything, so ordering used ORIGINAL stamps.
+    // 7 loaded - 3 kept = 4 dropped (2 stale + n1 + u).
+    QCOMPARE(ytlru::pruneSponsorOnLoad(lru, segs, stamps, now, cap), 4);
+    QCOMPARE(lru, QStringList({QStringLiteral("n4"), QStringLiteral("n3"), QStringLiteral("n2")}));
+    QCOMPARE(stamps.value(QStringLiteral("n4")), now - 1000);
+    QVERIFY(!segs.contains(QStringLiteral("u")));
+    QVERIFY(!segs.contains(QStringLiteral("s1")));
+    assertCoherent(lru, segs, stamps);
+
+    // If the stale drop alone brings the file under cap, NO newest-cut happens
+    // and a stampless survivor keeps its 0 for the caller to stamp after.
+    QStringList lru2;
+    QHash<QString, QVector<int>> segs2;
+    QHash<QString, qint64> stamps2;
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("s1"), 100);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("s2"), 200);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("n1"), now - 100000);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("u"), 0);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("n2"), now - 50000);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("n3"), now - 10000);
+    loadEntry(lru2, segs2, stamps2, QStringLiteral("n4"), now - 1000);
+    QCOMPARE(ytlru::pruneSponsorOnLoad(lru2, segs2, stamps2, now, 5), 2);
+    QCOMPARE(lru2, QStringList({QStringLiteral("n1"), QStringLiteral("u"),
+                                QStringLiteral("n2"), QStringLiteral("n3"),
+                                QStringLiteral("n4")})); // file order preserved
+    QCOMPARE(stamps2.value(QStringLiteral("u")), 0); // untouched by the helper
+    assertCoherent(lru2, segs2, stamps2);
+}
+
+void YtSponsorLruTest::dropOrphanStampsRemovesOnlyOrphans()
+{
+    QHash<QString, QVector<int>> segs;
+    QHash<QString, qint64> stamps;
+    segs.insert(QStringLiteral("a"), {1});
+    segs.insert(QStringLiteral("b"), {1});
+    stamps.insert(QStringLiteral("a"), 10);
+    stamps.insert(QStringLiteral("b"), 20);
+    stamps.insert(QStringLiteral("orphan"), 30); // stamp without segments
+    QCOMPARE(ytlru::dropOrphanStamps(segs, stamps), 1);
+    QCOMPARE(stamps.size(), 2);
+    QVERIFY(!stamps.contains(QStringLiteral("orphan")));
+    QCOMPARE(stamps.value(QStringLiteral("a")), 10);
+    QCOMPARE(ytlru::dropOrphanStamps(segs, stamps), 0); // clean pair: no-op
 }
 
 QTEST_APPLESS_MAIN(YtSponsorLruTest)

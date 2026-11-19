@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: SponsorBlock and known-ID persistence stays bounded
+- The SponsorBlock segment cache and the known-video-id pool are now bounded on disk as well as in memory (512 entries each). Loading a legacy oversized file prunes it immediately — the sponsor cache keeps the newest `fetchedAt` entries (stale ones drop first, stampless pre-upgrade entries compete as oldest and are never re-stamped before the ordering decision), and the known pool keeps the first 512 ids in file order before the watch-history merge. Segment and timestamp key sets stay identical; orphan timestamps are dropped.
+- Legacy files self-heal into the bounded MRU-first form on load; corrupt or truncated files still fail safe to empty state. Confirmed sponsor answers are persisted through a short coalescing debounce instead of one full-array rewrite per response, and any pending save flushes on shutdown so no confirmed window is lost.
+
 ### Fixed — YouTube: fresh-play exit no longer resurrects a stale resume marker (#103)
 - Choosing **START FROM THE BEGINNING** and exiting before the five-second save threshold now clears the previously offered marker. Re-entry starts at the beginning instead of offering and resuming the old offset; failed launches and ordinary new-video short plays remain unchanged.
 - The real-QML regression fails on the old view and passes on the fix, including the failed-launch guard. A real-video offscreen replay verified `0:30 → beginning → immediate exit → automatic fresh start`, and the full suite passes 29/29.
