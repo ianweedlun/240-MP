@@ -921,10 +921,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME mpv-failedtostart COMMAND mpv-failedtostart-tests)
     # Same QTEST_MAIN/offscreen constraint as mpv-quit-intent above. Isolate the
-    # IPC socket into a per-test TMPDIR so the "no socket litter" assertion does
-    # not race with other tests that share the default fixed socket path.
-    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/mpv-failedtostart-tmp)
-    set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/mpv-failedtostart-tmp")
+    # IPC socket into a per-build TMPDIR so parallel tests cannot race on it.
+    # Keep the path short: mpv's Unix socket is limited by sockaddr_un.sun_path
+    # (108 bytes on Linux), which a nested worktree build dir can exceed.
+    set(_failedtostart_tmp_base "$ENV{TMPDIR}")
+    if(NOT _failedtostart_tmp_base)
+        set(_failedtostart_tmp_base "/tmp")
+    endif()
+    string(MD5 _failedtostart_tmp_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${_failedtostart_tmp_hash}" 0 8 _failedtostart_tmp_hash)
+    set(_failedtostart_tmp "${_failedtostart_tmp_base}/240mp-ft-${_failedtostart_tmp_hash}")
+    file(MAKE_DIRECTORY "${_failedtostart_tmp}")
+    set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_failedtostart_tmp}")
 
 endif()
 
