@@ -409,6 +409,24 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
 
+    # T1 M-3: re-registering the same backend/module id must not multiply
+    # AppCore's signal fan-out. Real AppCore + probe backend, QSignalSpy on
+    # all three re-emitted signals; control (x1) and stress (x10) arms. The
+    # stress arm FAILS BY DESIGN until registerModule() is idempotent.
+    # No QML engine, no network (QGuiApplication for offscreen Qt).
+    add_executable(appcore-reregistration-tests
+        src/AppCore.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/AppCoreReregistrationTest.cpp)
+    set_target_properties(appcore-reregistration-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-reregistration-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-reregistration-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-reregistration-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
+
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
     # No real audio hardware needed — the factory picks a no-op on WSL/CI.
