@@ -587,6 +587,25 @@ void MpvController::seekTo(int positionMs) {
 }
 
 void MpvController::sendKey(const QString &key) {
+    // R-2: quit-intent keys are guaranteed-delivery. The QML players' Back
+    // handlers are sendKey-only (no stop()/goBack() fallback), and every other
+    // sendCommand caller is a connected-only feature whose pre-connect drop is
+    // correct. ESC/BS/STOP are the exception: before the IPC socket reaches
+    // ConnectedState the old path dropped the keypress at the sendCommand gate,
+    // orphaning the just-spawned mpv until natural EOF — forever under
+    // --loop-playlist=inf. Route the quit intent straight to forceStop() there
+    // (terminate + QPointer-guarded SIGKILL escalation), which reaps the child
+    // and emits playbackEnded("stopped") so the view goes back. Once connected,
+    // the keypress is forwarded byte-identically so the lua forced-binding
+    // semantics survive (OSC menu-esc/menu-bs close the menu; screensaver
+    // ss-dismiss wakes the saver; only then does a later press quit).
+    if (key == QLatin1String("ESC") || key == QLatin1String("BS")
+        || key == QLatin1String("STOP")) {
+        if (m_ipc->state() != QLocalSocket::ConnectedState) {
+            forceStop();
+            return;
+        }
+    }
     sendCommand({"keypress", key});
 }
 
