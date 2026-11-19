@@ -12,7 +12,11 @@ using vtest::section;
 
 namespace {
 
-struct Result {
+// A QObject so the connections below die with it: each block attaches its
+// own Result to a shared source, and a lambda outliving its stack frame
+// writes into dead scope when the next block's signal fires (ASan
+// stack-use-after-scope). The context argument severs them at scope end.
+struct Result : QObject {
     bool finished = false;
     bool failed   = false;
     QString reason;
@@ -21,14 +25,14 @@ struct Result {
     QVariantList browseItems;
 
     void attach(MediaServerSource *src) {
-        QObject::connect(src, &MediaServerSource::enumerationFinished,
+        QObject::connect(src, &MediaServerSource::enumerationFinished, this,
                          [this](const QVector<MediaItem> &i) { finished = true; items = i; });
-        QObject::connect(src, &MediaServerSource::enumerationFailed,
+        QObject::connect(src, &MediaServerSource::enumerationFailed, this,
                          [this](const QString &r) { failed = true; reason = r; });
-        QObject::connect(src, &MediaServerSource::browseReady,
+        QObject::connect(src, &MediaServerSource::browseReady, this,
                          [this](const QString &k, const QVariantList &i) {
                              finished = true; browseKind = k; browseItems = i; });
-        QObject::connect(src, &MediaServerSource::browseFailed,
+        QObject::connect(src, &MediaServerSource::browseFailed, this,
                          [this](const QString &k, const QString &r) {
                              failed = true; browseKind = k; reason = r; });
     }
