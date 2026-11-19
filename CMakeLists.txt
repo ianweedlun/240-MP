@@ -554,19 +554,13 @@ if(BUILD_TESTS)
         if(APPLE AND NOT stall_case MATCHES "faults$")
             continue()
         endif()
-        # pipewire-delay200 is EXPECTED-RED until the PipeWire async
-        # conversion (kanban t_2ecfe298) lands: --baseline asserts the
-        # recorded pre-fix shape (stall present, 1 call/press, red bands),
-        # keeping the case two-sided — it flips to FAIL ("fix landed") once
-        # that card converts the backend. Remove --baseline at that point.
-        set(stall_mode "")
-        if(stall_case STREQUAL "pipewire-delay200")
-            set(stall_mode "--baseline")
-        endif()
+        # Both mixers are async on the mixer process seam (T1 P-5A), so
+        # every case asserts the fixed shape in normal mode. --baseline
+        # remains an orchestrator mode for the two-sided red-shape proof.
         add_test(NAME volume-stall-${stall_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_volume_stall_case.py
-                --case ${stall_case} ${stall_mode}
+                --case ${stall_case}
                 --probe $<TARGET_FILE:volume-stall-probe>
                 --stub-bin $<TARGET_FILE:mixer-stub>
                 --repo-root ${CMAKE_CURRENT_SOURCE_DIR})

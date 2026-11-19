@@ -41,8 +41,11 @@ namespace audio {
 //    stateChanged() below is the seam for it.
 //  * Construct and destroy on the owner (UI) thread. Construction spawns
 //    nothing and keeps the historical cached initial state (level 100,
-//    unmuted); destruction kills any in-flight child bounded via the
-//    runner's shutdown contract. Do not recreate per key press.
+//    unmuted); hasHardwareState() stays false until the first confirmed
+//    refresh (the VolumeManager::mixerReady() gate) — cached defaults are
+//    not a hardware observation. Destruction kills any in-flight child
+//    bounded via the runner's shutdown contract. Do not recreate per key
+//    press.
 class PipeWireVolumeMixer : public QObject, public VolumeMixer {
     Q_OBJECT
 public:
@@ -54,6 +57,10 @@ public:
     bool isMuted() const override;
     bool setMuted(bool muted) override;
     QString backendName() const override;
+
+    // False until the first hardware-confirmed refresh: construction seeds
+    // cached defaults, not an observation (VolumeManager::mixerReady gate).
+    bool hasHardwareState() const override;
 
     // Lock-free diagnostics for tests and the regression harness.
     quint64 startedCount() const;
@@ -76,6 +83,12 @@ private:
     // historical cached initial values; a failed mutation rolls back here.
     int m_confirmedLevel = 100;
     bool m_confirmedMuted = false;
+    // True once a refresh has been parsed and adopted (a hardware
+    // observation). The runner's built-in flag only serves requests parsed
+    // by the runner itself; this backend parses in onFinished behind the
+    // generation guard, so it tracks its own observation. Never revoked:
+    // failures roll back to the last confirmed (hardware-derived) state.
+    bool m_hardwareObserved = false;
     // Generation counter: every mutation submit increments m_seq and carries
     // it in the request tag ("set-volume#7"). Results whose generation is
     // older than the latest submitted mutation are stale and never applied.

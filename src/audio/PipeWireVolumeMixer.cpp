@@ -114,6 +114,11 @@ QString PipeWireVolumeMixer::backendName() const
     return QStringLiteral("pipewire");
 }
 
+bool PipeWireVolumeMixer::hasHardwareState() const
+{
+    return m_hardwareObserved;
+}
+
 quint64 PipeWireVolumeMixer::startedCount() const
 {
     return m_runner.startedCount();
@@ -167,6 +172,7 @@ void PipeWireVolumeMixer::onFinished(const MixerProcessResult &result)
         // Confirm the level from hardware; mute is managed solely by set-mute
         // (pre-fix never read mute back), so leave the cached mute untouched.
         m_confirmedLevel = parsed;
+        m_hardwareObserved = true;
         m_runner.setCachedState(parsed, m_runner.cachedMuted());
         emit stateChanged(parsed, m_runner.cachedMuted());
         return;

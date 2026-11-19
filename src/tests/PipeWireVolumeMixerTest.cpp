@@ -135,6 +135,7 @@ private Q_SLOTS:
         QCOMPARE(m.isMuted(), false);
         QCOMPARE(logLines(rig.log), 0);
         QCOMPARE(m.startedCount(), quint64(0));
+        QCOMPARE(m.hasHardwareState(), false);
     }
 
     // Cached reads never spawn, even with a slow child available.
@@ -148,6 +149,21 @@ private Q_SLOTS:
         }
         QCOMPARE(logLines(rig.log), 0);
         QCOMPARE(m.startedCount(), quint64(0));
+        QCOMPARE(m.hasHardwareState(), false);
+    }
+
+    // mixerReady contract: cached defaults are not a hardware observation;
+    // the first confirmed refresh flips hasHardwareState() true.
+    void hardwareStateArrivesWithFirstRefresh()
+    {
+        Rig rig(200);
+        QVERIFY(rig.ok);
+        PipeWireVolumeMixer m;
+        QCOMPARE(m.hasHardwareState(), false);
+        QVERIFY(m.setLevel(85));
+        QVERIFY(waitSettle(m));
+        QCOMPARE(m.hasHardwareState(), true);
+        QCOMPARE(m.level(), 85);
     }
 
     // The core stall gate: every public call returns <16 ms while a 200 ms
