@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Added — build(youtube): vendor innertube-qt, verdigris and expected-lite (no-network)
+- `third_party/innertube-qt` (innertube-qt @ 7252590) with verdigris @ 8abfb8d and expected-lite v0.8.0/182165b vendored into `third_party/` for offline builds; `third_party/README.md` documents upstream SHAs, licences and patches.
+- The vendored tree guarantees a no-network CMake configure; `FetchContent_Declare` is removed and no `_deps/` is created.
+- `libinnertube-qt.a` builds in-tree and `240mp` links it; `ctest` is 27/27.
+
 ### Changed — YouTube: in-process Innertube resolver replaces the per-play yt-dlp spawn
 - The cold-play resolve was a `yt-dlp -g` subprocess (~5 s on the Pi). It is now an in-process Innertube Player request against the public IOS client (`com.google.ios.youtube/20.10.4`), built on `third_party/innertube-qt` with vendored verdigris and expected-lite, so the build needs no network fetch. The spike measured 172–385 ms; a lab probe of the new wrapper measured 180–216 ms, and the returned itag 135 (480p H.264) + itag 140 (m4a) URLs answered **HTTP 206** with the right MIME from a `Range` request.
 - Stream selection is a pure, unit-tested function (`src/util/YtStreamSelect.h`, new `yt-stream-select` CTest): the tallest H.264 track at or under the resolution cap, itag 140 preferred for audio, a muxed single stream only when no audio-only track exists, and expiry taken from the URL's own `expire=` with the response's `expiresInSeconds` as fallback.

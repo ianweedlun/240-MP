@@ -319,7 +319,7 @@ endif()
 target_include_directories(innertube-qt PUBLIC
     src
     lib/verdigris/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/expected-lite)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../expected-lite/include)
 
 # Include directories, libraries
 target_link_libraries(innertube-qt PUBLIC Qt::Core Qt::Gui Qt::Network Qt::Widgets)
