@@ -401,16 +401,22 @@ if(BUILD_TESTS)
 
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
-    # No real audio hardware needed — the factory picks a no-op on WSL/CI.
+    # No real audio hardware needed — the factory picks a no-op on WSL/CI, and
+    # the async ALSA backend is driven end-to-end with the compiled mixer-stub
+    # child (TORTURE_* env knobs) through the real MixerProcessRunner seam.
     add_executable(volume-mixer-tests
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeMixerTest.cpp)
     set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
     target_include_directories(volume-mixer-tests PRIVATE src)
+    target_compile_definitions(volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    add_dependencies(volume-mixer-tests mixer-stub)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
     endif()
@@ -422,6 +428,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeManagerTest.cpp)
     set_target_properties(volume-manager-tests PROPERTIES AUTOMOC ON)
@@ -452,6 +459,104 @@ if(BUILD_TESTS)
         target_compile_options(mixer-fake-child PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
+
+    # P-5A delayed-mixer UI-stall regression (torture T1): a slow system mixer
+    # must not stall the UI thread >16 ms. Drives the REAL InputManager file
+    # channel + REAL VolumeManager + REAL ALSA/PipeWire mixers offscreen, with
+    # scratch PATH-stub amixer/wpctl whose delay/failure mode the orchestrator
+    # controls (TORTURE_DELAY_MS / TORTURE_STUB_MODE). No audio hardware, no
+    # system state: all delay and state live in scratch dirs. Two-sided: the
+    # delay200 cases and alsa-delay0 FAIL on the unfixed snapshot (ALSA ~1.5 s
+    # direct / ~1.5 s heartbeat, 7 amixer spawns per press; PipeWire ~211 ms);
+    # noop-control proves the rig itself is green with an instant mixer, and
+    # the fault cases (nonzero exit / garbage / missing executable) must stay
+    # bounded and sanitizer-clean. Needs python3 (stdlib only). RUN_SERIAL:
+    # the runs share the app's /tmp/240mp_key.in debug channel.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target volume-stall-probe mixer-stub
+    #   ctest --test-dir build-test -R volume-stall --output-on-failure
+    # See src/tests/README-volume-stall.md (env vars, RESULT fields, baseline).
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # The PATH-stub mixer: one compiled binary the orchestrator copies into
+    # scratch bin dirs as amixer/wpctl. Compiled, not scripted — interpreter
+    # startup would dwarf the ~3 ms spawn cost the baseline was measured
+    # with. Built WITHOUT sanitizers even in sanitizer builds (it is fixture
+    # infrastructure, not product code; ASan startup would skew the timings).
+    add_executable(mixer-stub src/tests/mixer-stubs/mixer_stub.cpp)
+    set_target_properties(mixer-stub PROPERTIES AUTOMOC OFF)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mixer-stub PRIVATE -Wall -Wextra
+            -fno-sanitize=address,undefined)
+        target_link_options(mixer-stub PRIVATE -fno-sanitize=address,undefined)
+    endif()
+    add_executable(volume-stall-probe
+        src/tests/VolumeStallProbe.cpp
+        # Same link closure the lab harness proved for InputManager+AppCore:
+        # the input layer references MpvController (media-key IPC) and the
+        # RetroArch backend (launch handoff), so their symbols must resolve.
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/input/InputManager.cpp
+        src/modules/retroarch/RetroArchBackend.cpp
+        src/modules/retroarch/RecentGamesStore.cpp
+        src/audio/VolumeManager.cpp
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/MpvLocator.cpp
+        src/util/ExecPath.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/FontconfigOverride.cpp)
+    set_target_properties(volume-stall-probe PROPERTIES AUTOMOC ON)
+    target_link_libraries(volume-stall-probe PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick SDL2::SDL2
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(volume-stall-probe PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(volume-stall-probe PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    # Repo root as a C string literal (same set()/\" pattern as the smokes:
+    # a bare inline \" gets stripped by target_compile_definitions).
+    set(MP240_VOLUME_STALL_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+    target_compile_definitions(volume-stall-probe PRIVATE ${MP240_VOLUME_STALL_ROOT_DEF})
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(volume-stall-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(stall_case alsa-delay200 alsa-delay0 pipewire-delay200 pipewire-delay0
+                       noop-control alsa-faults pipewire-faults)
+        # The 16 ms wall-clock gate needs a quiet host. The macOS CI runner
+        # (macos-15-intel) jitters 50-58 ms on the noop control's heartbeat
+        # with ZERO mixer I/O — rig noise, not product (the canary's exact
+        # verdict, see README). Timing cases therefore run on Linux only;
+        # fault cases (boundedness/sanitizer, no 16 ms gate) run everywhere.
+        if(APPLE AND NOT stall_case MATCHES "faults$")
+            continue()
+        endif()
+        # pipewire-delay200 is EXPECTED-RED until the PipeWire async
+        # conversion (kanban t_2ecfe298) lands: --baseline asserts the
+        # recorded pre-fix shape (stall present, 1 call/press, red bands),
+        # keeping the case two-sided — it flips to FAIL ("fix landed") once
+        # that card converts the backend. Remove --baseline at that point.
+        set(stall_mode "")
+        if(stall_case STREQUAL "pipewire-delay200")
+            set(stall_mode "--baseline")
+        endif()
+        add_test(NAME volume-stall-${stall_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_volume_stall_case.py
+                --case ${stall_case} ${stall_mode}
+                --probe $<TARGET_FILE:volume-stall-probe>
+                --stub-bin $<TARGET_FILE:mixer-stub>
+                --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(volume-stall-${stall_case} PROPERTIES
+            TIMEOUT 180
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
 
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision

@@ -1,6 +1,6 @@
 #include "audio/ALSAVolumeMixer.h"
 
-#include <QProcess>
+#include <QPointer>
 #include <QRegularExpression>
 
 namespace audio {
@@ -38,26 +38,39 @@ QStringList simpleControlNames(const QString &scontrolsOutput) {
     return names;
 }
 
-// The real backend: one amixer process per call, 1 s budget.
-QString runAmixer(const QStringList &args) {
-    QProcess p;
-    p.start(QStringLiteral("amixer"), args);
-    p.waitForFinished(1000);
-    return QString(p.readAllStandardOutput());
-}
-
 } // namespace
 
 ALSAVolumeMixer::ALSAVolumeMixer(const QString &control)
-    : ALSAVolumeMixer(control, &runAmixer) {}
+    : ALSAVolumeMixer(control, nullptr, QStringLiteral("amixer")) {}
 
-ALSAVolumeMixer::ALSAVolumeMixer(const QString &control, AmixerRunner runner)
-    : m_runner(std::move(runner)) {
-    // One `scontrols` scan resolves both elements: the volume control we drive
-    // and the paired playback switch that actually carries mute.
-    const QString scontrols = run({QStringLiteral("scontrols")});
-    m_control = control.isEmpty() ? pickControl(scontrols) : control;
-    m_switchControl = pickSwitchControl(scontrols, m_control);
+ALSAVolumeMixer::ALSAVolumeMixer(const QString &control, MixerProcessRunner *runner,
+                                 const QString &program)
+    // nullptr = own the runner. It must be created HERE, not as a delegating
+    // argument: `new MixerProcessRunner(this)` in the delegating ctor's arg
+    // list runs before the QObject base exists, and parenting to a
+    // not-yet-constructed QObject is UB (SEGV in QObject::thread()).
+    // In this mem-init list the QObject base is already initialized.
+    : m_runner(runner ? runner : new MixerProcessRunner(this)),
+      m_program(program), m_pinnedControl(control) {
+    // The runner never spawns on this thread: construction only queues the
+    // discovery scan and returns with the historical defaults (100, unmuted).
+    connect(m_runner, &MixerProcessRunner::finished,
+            this, &ALSAVolumeMixer::onRunnerFinished);
+    connect(m_runner, &MixerProcessRunner::stateChanged,
+            this, &ALSAVolumeMixer::stateChanged);
+    startDiscovery();
+}
+
+ALSAVolumeMixer::~ALSAVolumeMixer() = default;
+
+void ALSAVolumeMixer::startDiscovery() {
+    MixerProcessRequest req;
+    req.program = m_program;
+    req.arguments = {QStringLiteral("scontrols")};
+    req.tag = QStringLiteral("scontrols");
+    // No parser: the raw control list is handled in onRunnerFinished().
+    m_outstanding = true;
+    m_runner->submit(req);
 }
 
 QString ALSAVolumeMixer::pickControl(const QString &scontrolsOutput) {
@@ -128,28 +141,6 @@ bool ALSAVolumeMixer::parseSwitchMuted(const QString &amixerGetOutput, bool *ok)
     return sawOff;
 }
 
-QString ALSAVolumeMixer::run(const QStringList &args) const {
-    return m_runner ? m_runner(args) : QString();
-}
-
-QString ALSAVolumeMixer::muteTarget() const {
-    return m_switchControl.isEmpty() ? m_control : m_switchControl;
-}
-
-bool ALSAVolumeMixer::setLevel(int percent) {
-    const int v = qBound(0, percent, 100);
-    // `amixer sset Master 50%` — the % is literal in the argument.
-    const QString out = run({QStringLiteral("sset"), m_control, QString::number(v) + QStringLiteral("%")});
-    m_level = v;
-    // amixer echoes the new state on success; empty means the call failed.
-    return !out.trimmed().isEmpty() && out.contains(m_control, Qt::CaseInsensitive);
-}
-
-int ALSAVolumeMixer::level() const {
-    const int parsed = parseLevelPercent(run({QStringLiteral("get"), m_control}));
-    return parsed >= 0 ? parsed : m_level;
-}
-
 int ALSAVolumeMixer::parseLevelPercent(const QString &amixerGetOutput) {
     // "Front Left: Playback 50 [71%] [-10.00dB] [on]" -> 71
     static const QRegularExpression re(QStringLiteral("\\[?(\\d+)%\\]?"));
@@ -158,29 +149,200 @@ int ALSAVolumeMixer::parseLevelPercent(const QString &amixerGetOutput) {
     return m.captured(1).toInt();
 }
 
-bool ALSAVolumeMixer::isMuted() const {
-    // Read the hardware every time: a mute applied by amixer, another process
-    // or a boot-time mixer restore is otherwise invisible to the app.
-    bool ok = false;
-    const bool muted = parseSwitchMuted(run({QStringLiteral("sget"), muteTarget()}), &ok);
-    if (!ok) return m_muted; // unreadable card — best knowledge we have
-    m_muted = muted;
-    return muted;
+QString ALSAVolumeMixer::muteTarget() const {
+    return m_switchControl.isEmpty() ? m_control : m_switchControl;
 }
 
-bool ALSAVolumeMixer::setMuted(bool muted) {
-    const QString target = muteTarget();
-    run({QStringLiteral("set"), target, muted ? QStringLiteral("mute") : QStringLiteral("unmute")});
+bool ALSAVolumeMixer::setLevel(int percent) {
+    const int v = qBound(0, percent, 100);
+    // Optimistic seed: VolumeManager persists and signals from level() right
+    // after this returns, so the cache must already carry the requested value.
+    // The sset echo reconciles it with hardware; a failed call keeps the
+    // request (the historical m_level = v behaviour) until the next observation.
+    m_runner->setCachedState(v, m_runner->cachedMuted());
+    ++m_generation;
+    m_pendingLevel = v;
+    m_levelReadTried = false;
+    m_muteReadTried = false;
+    pump();
+    return true; // accepted — hardware confirmation arrives via stateChanged()
+}
 
-    // Confirm against hardware before touching the cache: a failed or
-    // mis-targeted call must not leave the app believing the new state.
-    bool ok = false;
-    const bool now = parseSwitchMuted(run({QStringLiteral("sget"), target}), &ok);
-    if (!ok) return false;
-    m_muted = now;
-    return now == muted;
+int ALSAVolumeMixer::level() const { return m_runner->cachedLevel(); }
+
+bool ALSAVolumeMixer::isMuted() const { return m_runner->cachedMuted(); }
+
+bool ALSAVolumeMixer::setMuted(bool muted) {
+    m_runner->setCachedState(m_runner->cachedLevel(), muted);
+    ++m_generation;
+    m_pendingMute = muted;
+    m_levelReadTried = false;
+    m_muteReadTried = false;
+    pump();
+    return true; // accepted — the set echo reconciles the cache with hardware
+}
+
+bool ALSAVolumeMixer::hasHardwareState() const { return m_runner->hasHardwareState(); }
+
+bool ALSAVolumeMixer::isIdle() const {
+    return !m_outstanding && !m_pendingLevel && !m_pendingMute;
 }
 
 QString ALSAVolumeMixer::backendName() const { return QStringLiteral("alsa"); }
+
+void ALSAVolumeMixer::pump() {
+    // One outstanding request at a time: every submit is guaranteed a
+    // finished() event, so the chain can neither wedge nor lose a mutation to
+    // the runner's latest-wins trailing slot. Rapid repeats accumulate in the
+    // per-dimension pending slots (latest wins) instead of piling up children.
+    if (m_outstanding || !m_discovered) return;
+
+    if (m_pendingLevel) {
+        const int v = *m_pendingLevel;
+        m_submittedLevel = v;
+        MixerProcessRequest req;
+        req.program = m_program;
+        // `amixer sset Master 50%` — the % is literal in the argument. The
+        // echo carries the resulting level (and mute on combined controls).
+        req.arguments = {QStringLiteral("sset"), m_control,
+                         QString::number(v) + QStringLiteral("%")};
+        req.tag = QStringLiteral("sset");
+        req.parser = [guard = QPointer<ALSAVolumeMixer>(this)](const QString &out)
+            -> std::optional<MixerState> {
+            return guard ? guard->parseVolumeEcho(out) : std::nullopt;
+        };
+        m_outstanding = true;
+        m_runner->submit(req);
+        return;
+    }
+    if (m_pendingMute) {
+        const bool muted = *m_pendingMute;
+        m_submittedMute = muted;
+        MixerProcessRequest req;
+        req.program = m_program;
+        req.arguments = {QStringLiteral("set"), muteTarget(),
+                         muted ? QStringLiteral("mute") : QStringLiteral("unmute")};
+        req.tag = QStringLiteral("set-mute");
+        req.parser = [guard = QPointer<ALSAVolumeMixer>(this)](const QString &out)
+            -> std::optional<MixerState> {
+            return guard ? guard->parseSwitchEcho(out) : std::nullopt;
+        };
+        m_outstanding = true;
+        m_runner->submit(req);
+        return;
+    }
+    // No mutation pending: observe whatever hardware has not confirmed yet.
+    // A read is tried once per trigger (discovery or accepted mutation) — a
+    // failing card must not spin the queue with retries.
+    if (!m_levelObserved && !m_levelReadTried) {
+        submitLevelRead();
+        return;
+    }
+    if (!m_switchControl.isEmpty() && !m_muteObserved && !m_muteReadTried) {
+        submitMuteRead();
+        return;
+    }
+}
+
+void ALSAVolumeMixer::submitLevelRead() {
+    m_levelReadTried = true;
+    MixerProcessRequest req;
+    req.program = m_program;
+    req.arguments = {QStringLiteral("sget"), m_control};
+    req.tag = QStringLiteral("sget-volume");
+    const quint64 generation = m_generation;
+    req.parser = [guard = QPointer<ALSAVolumeMixer>(this), generation](const QString &out)
+        -> std::optional<MixerState> {
+        return guard ? guard->parseRead(out, generation, /*isMuteElement=*/false)
+                     : std::nullopt;
+    };
+    m_outstanding = true;
+    m_runner->submit(req);
+}
+
+void ALSAVolumeMixer::submitMuteRead() {
+    m_muteReadTried = true;
+    MixerProcessRequest req;
+    req.program = m_program;
+    req.arguments = {QStringLiteral("sget"), muteTarget()};
+    req.tag = QStringLiteral("sget-mute");
+    const quint64 generation = m_generation;
+    req.parser = [guard = QPointer<ALSAVolumeMixer>(this), generation](const QString &out)
+        -> std::optional<MixerState> {
+        return guard ? guard->parseRead(out, generation, /*isMuteElement=*/true)
+                     : std::nullopt;
+    };
+    m_outstanding = true;
+    m_runner->submit(req);
+}
+
+std::optional<MixerState> ALSAVolumeMixer::parseVolumeEcho(const QString &stdOut) {
+    // Same success shape the synchronous backend checked: amixer echoes the
+    // control it drove, with the resulting level. Empty/foreign output means
+    // the call failed — leave the (optimistic) cache untouched.
+    if (!stdOut.contains(m_control, Qt::CaseInsensitive)) return std::nullopt;
+    const int level = parseLevelPercent(stdOut);
+    if (level < 0) return std::nullopt;
+    m_levelObserved = true;
+    bool ok = false;
+    const bool muted = parseSwitchMuted(stdOut, &ok);
+    if (ok) m_muteObserved = true; // combined controls carry the switch too
+    return MixerState{level, ok ? muted : m_runner->cachedMuted()};
+}
+
+std::optional<MixerState> ALSAVolumeMixer::parseSwitchEcho(const QString &stdOut) {
+    if (!stdOut.contains(muteTarget(), Qt::CaseInsensitive)) return std::nullopt;
+    bool ok = false;
+    const bool muted = parseSwitchMuted(stdOut, &ok);
+    if (!ok) return std::nullopt;
+    m_muteObserved = true;
+    // A mute write does not move the level; keep the cached one.
+    return MixerState{m_runner->cachedLevel(), muted};
+}
+
+std::optional<MixerState> ALSAVolumeMixer::parseRead(const QString &stdOut,
+                                                     quint64 generation,
+                                                     bool isMuteElement) {
+    // Staleness guard: a read that was in flight when a newer mutation was
+    // accepted must not resurrect the old hardware value over the user's
+    // request. The mutation's own echo will report the truth.
+    if (generation != m_generation) return std::nullopt;
+    if (isMuteElement) return parseSwitchEcho(stdOut);
+    return parseVolumeEcho(stdOut);
+}
+
+void ALSAVolumeMixer::onRunnerFinished(const audio::MixerProcessResult &result) {
+    m_outstanding = false;
+
+    if (result.tag == QLatin1String("scontrols")) {
+        // One scan resolves both elements. A failed scan (missing amixer,
+        // nonzero exit, garbage) yields the historical 'Master' fallback, so
+        // mutations fail cleanly instead of driving an arbitrary control.
+        m_control = m_pinnedControl.isEmpty() ? pickControl(result.stdOut) : m_pinnedControl;
+        m_switchControl = pickSwitchControl(result.stdOut, m_control);
+        m_discovered = true;
+        if (!m_readyEmitted) {
+            m_readyEmitted = true;
+            emit stateReady();
+        }
+        pump(); // held mutations first (restore order), then initial reads
+        return;
+    }
+
+    if (result.tag == QLatin1String("sset")) {
+        // Consume the pending request only if no newer value arrived while the
+        // child ran; a newer request stays pending and pump() re-submits it.
+        if (m_pendingLevel && m_submittedLevel && *m_pendingLevel == *m_submittedLevel)
+            m_pendingLevel.reset();
+        m_submittedLevel.reset();
+    } else if (result.tag == QLatin1String("set-mute")) {
+        if (m_pendingMute && m_submittedMute && *m_pendingMute == *m_submittedMute)
+            m_pendingMute.reset();
+        m_submittedMute.reset();
+    }
+    // Reads need no bookkeeping: the parser already applied (or discarded)
+    // them, and a failed read is never retried on its own.
+    pump();
+}
 
 } // namespace audio

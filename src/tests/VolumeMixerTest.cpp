@@ -1,12 +1,22 @@
 // Verifies the app-wide system-volume abstraction (issue #34): the
-// VolumeMixer contract and the factory's runtime backend detection.
-// No real audio hardware is needed — on WSL/CI the factory falls back to the
-// no-op mixer, which is exactly the path exercised here.
+// VolumeMixer contract, the factory's runtime backend detection, and the
+// async ALSA backend (T1 P-5A) end-to-end through the real MixerProcessRunner
+// seam. No real audio hardware is needed — on WSL/CI the factory falls back
+// to the no-op mixer, and the ALSA behavioural tests drive the compiled
+// mixer-stub child (MIXER_STUB_PATH) with the TORTURE_* env knobs, exactly
+// like the volume-stall harness does.
+#include <QElapsedTimer>
+#include <QFile>
+#include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 
+#include <functional>
 #include <memory>
 
 #include "audio/ALSAVolumeMixer.h"
+#include "audio/MixerProcessRunner.h"
 #include "audio/NoopVolumeMixer.h"
 #include "audio/PipeWireVolumeMixer.h"
 #include "audio/VolumeMixerFactory.h"
@@ -15,57 +25,110 @@ using namespace audio;
 
 namespace {
 
-// Stand-in for a sound card: answers `scontrols`/`sget` and applies (or
-// ignores) `set` exactly like amixer would, so the mixer's read-back logic runs
-// for real without any audio hardware.
-struct AmixerStub {
-    QString volumeControl = QStringLiteral("PCM");
-    QString switchControl = QStringLiteral("PCM Playback Switch");
-    bool switchPresent = false; // combined control (a Pi) by default
-    bool hardwareMuted = false;
-    bool applySet = true;       // false = amixer errors out, card unchanged
-    bool sgetReturnsEmpty = false;
-    QStringList calls;
+// Per-test stub environment: state file, argv log, delay/fault/card knobs.
+// The runner's children inherit the process env at spawn time, so setting it
+// before construction is enough. Restored on destruction so tests stay
+// independent.
+struct StubEnv {
+    QTemporaryDir dir;
+    QString statePath;
+    QString logPath;
+    QString amixerPath;
 
-    QString run(const QStringList &args) {
-        calls << args.join(QLatin1Char(' '));
-        const QString cmd = args.value(0);
-
-        if (cmd == QStringLiteral("scontrols")) {
-            QString out = QStringLiteral("Simple mixer control '%1',0\n").arg(volumeControl);
-            if (switchPresent)
-                out += QStringLiteral("Simple mixer control '%1',0\n").arg(switchControl);
-            return out;
-        }
-        if (cmd == QStringLiteral("set")) {
-            const bool mute = args.value(2) == QStringLiteral("mute");
-            if (applySet) hardwareMuted = mute;
-            return QStringLiteral("Simple mixer control '%1',0\n  Mono: Playback [%2]\n")
-                .arg(args.value(1), hardwareMuted ? QStringLiteral("off") : QStringLiteral("on"));
-        }
-        if (cmd == QStringLiteral("sget")) {
-            if (sgetReturnsEmpty) return QString(); // amixer failed: stderr only
-            return QStringLiteral("Simple mixer control '%1',0\n"
-                                  "  Capabilities: pswitch pswitch-joined\n"
-                                  "  Playback channels: Mono\n"
-                                  "  Mono: Playback [%2]\n")
-                .arg(args.value(1), hardwareMuted ? QStringLiteral("off") : QStringLiteral("on"));
-        }
-        return QString();
+    explicit StubEnv(int delayMs = 0, const QByteArray &mode = "normal",
+                     const QByteArray &card = "combined") {
+        statePath = dir.filePath(QStringLiteral("state"));
+        logPath = dir.filePath(QStringLiteral("argv.log"));
+        QFile f(statePath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            qFatal("volume-mixer-tests: cannot seed stub state file");
+        f.write("50 0\n"); // same initial state the stall harness uses
+        f.close();
+        // The stub dispatches on basename(argv[0]) == "amixer"/"wpctl", so
+        // install a copy under that name exactly like the harness orchestrator.
+        // MIXER_STUB_PATH is the compiled stub's absolute path (CMake).
+        amixerPath = dir.filePath(QStringLiteral("amixer"));
+        if (!QFile::copy(QStringLiteral(MIXER_STUB_PATH), amixerPath))
+            qFatal("volume-mixer-tests: cannot copy mixer-stub from %s", MIXER_STUB_PATH);
+        QFile::setPermissions(amixerPath,
+                              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner |
+                              QFile::ReadGroup | QFile::ExeGroup |
+                              QFile::ReadOther | QFile::ExeOther);
+        qputenv("TORTURE_DELAY_MS", QByteArray::number(delayMs));
+        qputenv("TORTURE_STUB_MODE", mode);
+        qputenv("TORTURE_STUB_STATE", statePath.toUtf8());
+        qputenv("TORTURE_STUB_CARD", card);
+        qputenv("TORTURE_MIXER_LOG", logPath.toUtf8());
     }
-
-    bool sawCall(const QString &exact) const { return calls.contains(exact); }
-    int countCalls(const QString &prefix) const {
-        int n = 0;
-        for (const QString &c : calls)
-            if (c.startsWith(prefix)) ++n;
-        return n;
+    ~StubEnv() {
+        qunsetenv("TORTURE_DELAY_MS");
+        qunsetenv("TORTURE_STUB_MODE");
+        qunsetenv("TORTURE_STUB_STATE");
+        qunsetenv("TORTURE_STUB_CARD");
+        qunsetenv("TORTURE_MIXER_LOG");
     }
 };
 
-ALSAVolumeMixer::AmixerRunner stubRunner(const std::shared_ptr<AmixerStub> &stub) {
-    return [stub](const QStringList &args) { return stub->run(args); };
+QStringList logLines(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
+    QStringList lines;
+    while (!f.atEnd()) {
+        const QString line = QString::fromUtf8(f.readLine()).trimmed();
+        if (!line.isEmpty()) lines << line;
+    }
+    return lines;
 }
+
+void clearLog(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        qFatal("volume-mixer-tests: cannot clear mixer argv log");
+}
+
+QString stateFileBody(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();
+    return QString::fromUtf8(f.readAll()).trimmed();
+}
+
+bool pumpUntil(const std::function<bool()> &predicate, int timeoutMs = 5000) {
+    QElapsedTimer clock;
+    clock.start();
+    while (!predicate()) {
+        if (clock.elapsed() > timeoutMs) return false;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    return true;
+}
+
+// Tracks every runner completion so "settled" means every started child has
+// reported AND its owner-thread result was processed — not merely "no child
+// is running right now" (which is also true in the gap before a spawn).
+// The mixer's isIdle() closes the remaining gaps: it is false from submit()
+// until the completion handler runs (covering queued-but-unspawned children,
+// which startedCount cannot see yet) and false again the moment a handler
+// chains the next request. No wall-clock quiet window is needed — the
+// predicate is exact, not timing-dependent.
+struct SettleWatch {
+    quint64 finished = 0;
+    MixerProcessResult::Status lastStatus = MixerProcessResult::Status::Success;
+    SettleWatch(MixerProcessRunner *runner, const ALSAVolumeMixer *mixer)
+        : m_mixer(mixer) {
+        QObject::connect(runner, &MixerProcessRunner::finished,
+                         runner, [this](const MixerProcessResult &r) {
+            ++finished;
+            lastStatus = r.status;
+        });
+    }
+    bool settled(MixerProcessRunner *runner) const {
+        return m_mixer->isIdle() && finished == runner->startedCount()
+            && !runner->isBusy();
+    }
+private:
+    const ALSAVolumeMixer *m_mixer;
+};
 
 } // namespace
 
@@ -130,17 +193,14 @@ private Q_SLOTS:
             "Simple mixer control 'PCM',0\n"
             "Simple mixer control 'Headphone',0\n");
         QCOMPARE(ALSAVolumeMixer::pickControl(pi), QStringLiteral("PCM"));
-
         // Desktop card.
         const QString desktop = QStringLiteral(
             "Simple mixer control 'PCM',0\n"
             "Simple mixer control 'Master',0\n");
         QCOMPARE(ALSAVolumeMixer::pickControl(desktop), QStringLiteral("Master"));
-
         // Only a headphone control (some Pi configs).
         const QString phone = QStringLiteral("Simple mixer control 'Headphone',0\n");
         QCOMPARE(ALSAVolumeMixer::pickControl(phone), QStringLiteral("Headphone"));
-
         // Nothing usable -> historical default, not an arbitrary control.
         QCOMPARE(ALSAVolumeMixer::pickControl(QStringLiteral("Simple mixer control 'Mic',0\n")),
                  QStringLiteral("Master"));
@@ -249,79 +309,340 @@ private Q_SLOTS:
         QCOMPARE(ALSAVolumeMixer::parseLevelPercent(piOff), 75);
     }
 
-    // Mute on a split-control card: the write and the read-back both address the
-    // SWITCH element, the cached flag follows hardware, and a mute applied
-    // outside the app is visible immediately.
-    void testAlsaMuteReadBackTargetsSwitch() {
-        auto stub = std::make_shared<AmixerStub>();
-        stub->volumeControl = QStringLiteral("PCM Playback Volume");
-        stub->switchControl = QStringLiteral("PCM Playback Switch");
-        stub->switchPresent = true;
+    // ---- Async ALSA behaviour (T1 P-5A), real runner + stub child ----------
 
-        ALSAVolumeMixer mixer(QString(), stubRunner(stub));
-        QCOMPARE(stub->calls.value(0), QStringLiteral("scontrols"));
-        QVERIFY(!mixer.isMuted());
-        QVERIFY(stub->sawCall(QStringLiteral("sget PCM Playback Switch")));
+    // Construction must not block even with a 200 ms mixer: sane cached
+    // defaults immediately, hardware observation (and the stateReady /
+    // stateChanged signals) afterwards. Startup costs exactly two children:
+    // scontrols discovery + one sget (the combined control carries mute too).
+    void testAlsaAsyncConstructionNonBlocking() {
+        StubEnv env(200);
+        MixerProcessRunner runner;
+        QElapsedTimer clock;
+        clock.start();
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        const qint64 ctorMs = clock.elapsed();
+        QVERIFY2(ctorMs < 16, qPrintable(QStringLiteral("ctor blocked %1ms").arg(ctorMs)));
+        QCOMPARE(mixer.level(), 100); // cached default, no spawn
+        QCOMPARE(mixer.isMuted(), false);
+        QVERIFY(!mixer.hasHardwareState());
 
-        // Someone else mutes the card: isMuted() must report it, cache or not.
-        stub->hardwareMuted = true;
-        QVERIFY(mixer.isMuted());
-
-        // Unmute through the mixer: it must talk to the switch, never to the
-        // volume element, and confirm the result from hardware.
-        stub->calls.clear();
-        QVERIFY(mixer.setMuted(false));
-        QVERIFY(stub->sawCall(QStringLiteral("set PCM Playback Switch unmute")));
-        QVERIFY(stub->sawCall(QStringLiteral("sget PCM Playback Switch")));
-        QCOMPARE(stub->countCalls(QStringLiteral("set PCM Playback Volume")), 0);
-        QVERIFY(!mixer.isMuted());
-
-        QVERIFY(mixer.setMuted(true));
-        QVERIFY(stub->hardwareMuted);
-        QVERIFY(mixer.isMuted());
+        QSignalSpy readySpy(&mixer, &ALSAVolumeMixer::stateReady);
+        QSignalSpy stateSpy(&mixer, &ALSAVolumeMixer::stateChanged);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QCOMPARE(mixer.level(), 50); // stub initial state observed
+        QCOMPARE(mixer.isMuted(), false);
+        QCOMPARE(readySpy.count(), 1);
+        QVERIFY(stateSpy.count() >= 1);
+        QCOMPARE(stateSpy.last().at(0).toInt(), 50);
+        QCOMPARE(stateSpy.last().at(1).toBool(), false);
+        const QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 2);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("scontrols")));
+        QVERIFY(lines.at(1).endsWith(QStringLiteral("sget PCM")));
     }
 
-    // A `set` that does not take effect must not be reported as success, and
-    // must not leave the cached flag believing the new state (the old code
-    // assigned the flag before checking anything).
-    void testAlsaSetMutedRequiresConfirmation() {
-        auto stub = std::make_shared<AmixerStub>();
-        ALSAVolumeMixer mixer(QString(), stubRunner(stub));
-        QVERIFY(!mixer.isMuted());
+    // One sset per level change — the echo carries the resulting state, so no
+    // get/sset/get round trips. Clamping stays 0..100, same as before.
+    void testAlsaSetLevelSingleInvocationAndClamp() {
+        StubEnv env(0);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
 
-        stub->applySet = false; // amixer echoes but the card ignores the write
-        QVERIFY(!mixer.setMuted(true));
-        QVERIFY(stub->sawCall(QStringLiteral("set PCM mute"))); // the write was attempted
-        QVERIFY(!mixer.isMuted());                              // still unmuted
+        clearLog(env.logPath);
+        QVERIFY(mixer.setLevel(150));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 100);
+        QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("sset PCM 100%")));
 
-        // Read-back unavailable entirely: state unknown, so report failure and
-        // keep the last hardware-observed value rather than the requested one.
-        stub->hardwareMuted = true;
-        QVERIFY(mixer.isMuted()); // establishes a known-good cache
-        stub->sgetReturnsEmpty = true;
-        QVERIFY(!mixer.setMuted(false));
-        QVERIFY(mixer.isMuted()); // falls back to the last value read from hardware
+        QVERIFY(mixer.setLevel(-7));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 0);
+        lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 2);
+        QVERIFY(lines.at(1).endsWith(QStringLiteral("sset PCM 0%")));
+
+        QVERIFY(mixer.setLevel(42));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 42);
+        lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 3);
+        QVERIFY(lines.at(2).endsWith(QStringLiteral("sset PCM 42%")));
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("42 0"));
     }
 
-    // No separate switch (the Pi's combined control): mute is driven on the
-    // volume control itself, which carries the pswitch, and still read back.
-    void testAlsaMuteCombinedControlFallback() {
-        auto stub = std::make_shared<AmixerStub>();
-        stub->volumeControl = QStringLiteral("PCM");
-        stub->switchPresent = false;
-
-        ALSAVolumeMixer mixer(QString(), stubRunner(stub));
-        QVERIFY(stub->sawCall(QStringLiteral("scontrols")));
-        QVERIFY(!mixer.isMuted());
-
+    // A level change must not disturb mute: on a combined control the sset
+    // echo carries [off], and the cache keeps reporting muted.
+    void testAlsaLevelChangePreservesMute() {
+        StubEnv env(0);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
         QVERIFY(mixer.setMuted(true));
-        QVERIFY(stub->sawCall(QStringLiteral("set PCM mute")));
-        QVERIFY(stub->sawCall(QStringLiteral("sget PCM")));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
         QVERIFY(mixer.isMuted());
 
-        QVERIFY(mixer.setMuted(false));
-        QVERIFY(stub->sawCall(QStringLiteral("set PCM unmute")));
+        clearLog(env.logPath);
+        QVERIFY(mixer.setLevel(60));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 60);
+        QVERIFY(mixer.isMuted());
+        const QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("sset PCM 60%")));
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("60 1"));
+    }
+
+    // Rapid repeats: the backend absorbs the burst into one pending value per
+    // dimension, so three presses cost at most two children and the LAST
+    // requested value always reaches hardware. Conservation law holds:
+    // started + coalesced == submitted (the backend never doubles outstanding).
+    void testAlsaRapidPressesCoalesce() {
+        StubEnv env(200);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        const int startedBefore = runner.startedCount();
+
+        clearLog(env.logPath);
+        QVERIFY(mixer.setLevel(45));
+        QVERIFY(mixer.setLevel(40));
+        QVERIFY(mixer.setLevel(35));
+        QCOMPARE(mixer.level(), 35); // optimistic cache tracks the last request
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 35);
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("35 0"));
+        const int burstChildren = logLines(env.logPath).size();
+        QVERIFY(burstChildren >= 1);
+        QVERIFY(burstChildren <= 2);
+        QCOMPARE(runner.startedCount(), startedBefore + burstChildren);
+        QCOMPARE(runner.coalescedCount(), 0); // absorbed before submit, not in the runner
+    }
+
+    // Split-control card: mute writes/reads address the SWITCH element, never
+    // the volume element; level writes address the volume element and leave
+    // the mute flag alone (the split echo carries no switch).
+    void testAlsaMuteSplitSwitchTarget() {
+        StubEnv env(0, "normal", "split");
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 50);
         QVERIFY(!mixer.isMuted());
+        // Startup: scontrols + sget volume + sget switch (separate elements).
+        QCOMPARE(logLines(env.logPath).size(), 3);
+
+        clearLog(env.logPath);
+        QVERIFY(mixer.setMuted(true));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(mixer.isMuted());
+        QCOMPARE(mixer.level(), 50);
+        QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("set PCM Playback Switch mute")));
+
+        QVERIFY(mixer.setMuted(false));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(!mixer.isMuted());
+        lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 2);
+        QVERIFY(lines.at(1).endsWith(QStringLiteral("set PCM Playback Switch unmute")));
+
+        clearLog(env.logPath);
+        QVERIFY(mixer.setLevel(20));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 20);
+        QVERIFY(!mixer.isMuted()); // split sset echo has no switch -> cache kept
+        lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("sset PCM Playback Volume 20%")));
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("20 0"));
+    }
+
+    // Combined control (the Pi): mute is driven on the volume control itself,
+    // which carries the pswitch, and reconciled from the set echo.
+    void testAlsaMuteCombinedTarget() {
+        StubEnv env(0);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+
+        clearLog(env.logPath);
+        QVERIFY(mixer.setMuted(true));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(mixer.isMuted());
+        QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 1);
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("set PCM mute")));
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("50 1"));
+
+        QVERIFY(mixer.setMuted(false));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(!mixer.isMuted());
+        lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 2);
+        QVERIFY(lines.at(1).endsWith(QStringLiteral("set PCM unmute")));
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("50 0"));
+    }
+
+    // Failing mixer (nonzero exit): discovery still completes, stateReady
+    // still fires, cached state stays usable, nothing hangs. Mutations are
+    // accepted optimistically (the historical m_level = v behaviour) and the
+    // next successful observation would reconcile them.
+    void testAlsaFailureKeepsStateUsable() {
+        StubEnv env(0, "exit1");
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QSignalSpy readySpy(&mixer, &ALSAVolumeMixer::stateReady);
+        QVERIFY(pumpUntil([&] { return readySpy.count() == 1; }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(!mixer.hasHardwareState());
+        QCOMPARE(mixer.level(), 100); // default still usable
+        QCOMPARE(mixer.isMuted(), false);
+
+        QVERIFY(mixer.setLevel(30)); // accepted despite the broken mixer
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 30);
+        QCOMPARE(mixer.isMuted(), false);
+        QVERIFY(logLines(env.logPath).size() >= 2); // discovery + write attempted
+        QCOMPARE(watch.lastStatus, MixerProcessResult::Status::NonZeroExit);
+    }
+
+    // Garbage output parses to nothing: the cache keeps its defaults, the
+    // backend stays usable, and no state is invented from unparseable text.
+    void testAlsaGarbageKeepsDefaults() {
+        StubEnv env(0, "garbage");
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QSignalSpy readySpy(&mixer, &ALSAVolumeMixer::stateReady);
+        QVERIFY(pumpUntil([&] { return readySpy.count() == 1; }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(!mixer.hasHardwareState());
+        QCOMPARE(mixer.level(), 100);
+        QCOMPARE(mixer.isMuted(), false);
+
+        QVERIFY(mixer.setLevel(20));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 20); // optimistic, usable
+        QVERIFY(!mixer.hasHardwareState()); // garbage never counts as observation
+    }
+
+    // Missing executable: construction is still instant, discovery reports
+    // SpawnFailed and completes, cached state stays usable, no hang.
+    void testAlsaMissingBinaryNoHang() {
+        StubEnv env(0);
+        MixerProcessRunner runner;
+        QElapsedTimer clock;
+        clock.start();
+        ALSAVolumeMixer mixer(QString(), &runner,
+                              env.dir.filePath(QStringLiteral("no-such-amixer")));
+        QVERIFY(clock.elapsed() < 16);
+        SettleWatch watch(&runner, &mixer);
+        QSignalSpy readySpy(&mixer, &ALSAVolumeMixer::stateReady);
+        QVERIFY(pumpUntil([&] { return readySpy.count() == 1; }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(watch.lastStatus, MixerProcessResult::Status::SpawnFailed);
+        QVERIFY(!mixer.hasHardwareState());
+        QCOMPARE(mixer.level(), 100);
+        QVERIFY(mixer.setLevel(40));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 40);
+    }
+
+    // A child slower than the 1000 ms budget is killed and reported TimedOut;
+    // the cache stays usable and the caller never waits on it.
+    void testAlsaTimeoutBounded() {
+        StubEnv env(1500); // > default 1000 ms budget
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QElapsedTimer clock;
+        clock.start();
+        QVERIFY(pumpUntil([&] { return watch.finished >= 1; }, 3000));
+        QVERIFY(clock.elapsed() < 3000);
+        QCOMPARE(watch.lastStatus, MixerProcessResult::Status::TimedOut);
+        QVERIFY(!mixer.hasHardwareState());
+        QCOMPARE(mixer.level(), 100); // cached default still usable
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }, 3000));
+    }
+
+    // Persisted-value compatibility: restore() calls setLevel/setMuted right
+    // after construction, before discovery completes. The mutations must be
+    // held, then flushed in order (level, then mute) against the DISCOVERED
+    // control — never a guessed one — and both must reach hardware.
+    void testAlsaRestoreFlushOrder() {
+        StubEnv env(50);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(mixer.setLevel(70));
+        QVERIFY(mixer.setMuted(true));
+        QCOMPARE(mixer.level(), 70); // optimistic, immediate
+        QVERIFY(mixer.isMuted());
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QVERIFY(mixer.hasHardwareState());
+        QCOMPARE(mixer.level(), 70);
+        QVERIFY(mixer.isMuted());
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("70 1"));
+        const QStringList lines = logLines(env.logPath);
+        QCOMPARE(lines.size(), 3); // scontrols + sset + set; echoes observed both
+        QVERIFY(lines.at(0).endsWith(QStringLiteral("scontrols")));
+        QVERIFY(lines.at(1).endsWith(QStringLiteral("sset PCM 70%")));
+        QVERIFY(lines.at(2).endsWith(QStringLiteral("set PCM mute")));
+    }
+
+    // A read that was in flight when a newer mutation was accepted must not
+    // resurrect the old hardware value over the user's request.
+    void testAlsaStaleReadCannotResurrect() {
+        StubEnv env(200);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        // Wait until the initial sget is in flight (scontrols done, sget started).
+        QVERIFY(pumpUntil([&] { return runner.startedCount() >= 2; }));
+        QSignalSpy stateSpy(&mixer, &ALSAVolumeMixer::stateChanged);
+        QVERIFY(mixer.setLevel(80)); // lands while the 50-read is still running
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 80);
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("80 0"));
+        // Every observation emitted after the press must carry the new value;
+        // the late 50-read was discarded by the generation guard.
+        QVERIFY(stateSpy.count() >= 1);
+        for (const auto &args : stateSpy)
+            QCOMPARE(args.at(0).toInt(), 80);
+    }
+
+    // level()/isMuted() are pure cache reads: any number of them spawns nothing.
+    void testAlsaCachedReadsNeverSpawn() {
+        StubEnv env(200);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        const int started = runner.startedCount();
+        clearLog(env.logPath);
+        for (int i = 0; i < 50; ++i) {
+            QCOMPARE(mixer.level(), 50);
+            QCOMPARE(mixer.isMuted(), false);
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QCOMPARE(logLines(env.logPath).size(), 0);
+        QCOMPARE(runner.startedCount(), started);
     }
 };
 
