@@ -478,6 +478,24 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
 
+    # PipeWire async backend contract (T1 P-5A): drives the real backend against
+    # the checked-in compiled mixer-stub on PATH (no audio hardware). Timing,
+    # coalescing, clamp no-ops and every failure-mode rollback, sanitizer-clean.
+    add_executable(pipewire-volume-mixer-tests
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/tests/PipeWireVolumeMixerTest.cpp)
+    set_target_properties(pipewire-volume-mixer-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(pipewire-volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(pipewire-volume-mixer-tests PRIVATE src)
+    add_dependencies(pipewire-volume-mixer-tests mixer-stub)
+    target_compile_definitions(pipewire-volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(pipewire-volume-mixer-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME pipewire-volume-mixer COMMAND pipewire-volume-mixer-tests)
+
     # P-5A delayed-mixer UI-stall regression (torture T1): a slow system mixer
     # must not stall the UI thread >16 ms. Drives the REAL InputManager file
     # channel + REAL VolumeManager + REAL ALSA/PipeWire mixers offscreen, with
@@ -545,7 +563,7 @@ if(BUILD_TESTS)
         target_compile_options(volume-stall-probe PRIVATE -Wall -Wextra)
     endif()
     foreach(stall_case alsa-delay200 alsa-delay0 pipewire-delay200 pipewire-delay0
-                       noop-control alsa-faults pipewire-faults)
+                       noop-control alsa-faults pipewire-faults alsa-edge pipewire-edge)
         # The 16 ms wall-clock gate needs a quiet host. The macOS CI runner
         # (macos-15-intel) jitters 50-58 ms on the noop control's heartbeat
         # with ZERO mixer I/O — rig noise, not product (the canary's exact
@@ -554,19 +572,13 @@ if(BUILD_TESTS)
         if(APPLE AND NOT stall_case MATCHES "faults$")
             continue()
         endif()
-        # pipewire-delay200 is EXPECTED-RED until the PipeWire async
-        # conversion (kanban t_2ecfe298) lands: --baseline asserts the
-        # recorded pre-fix shape (stall present, 1 call/press, red bands),
-        # keeping the case two-sided — it flips to FAIL ("fix landed") once
-        # that card converts the backend. Remove --baseline at that point.
-        set(stall_mode "")
-        if(stall_case STREQUAL "pipewire-delay200")
-            set(stall_mode "--baseline")
-        endif()
+        # Both mixers are async on the mixer process seam (T1 P-5A), so
+        # every case asserts the fixed shape in normal mode. --baseline
+        # remains an orchestrator mode for the two-sided red-shape proof.
         add_test(NAME volume-stall-${stall_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_volume_stall_case.py
-                --case ${stall_case} ${stall_mode}
+                --case ${stall_case}
                 --probe $<TARGET_FILE:volume-stall-probe>
                 --stub-bin $<TARGET_FILE:mixer-stub>
                 --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
