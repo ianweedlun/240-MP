@@ -644,6 +644,31 @@ private Q_SLOTS:
         QCOMPARE(logLines(env.logPath).size(), 0);
         QCOMPARE(runner.startedCount(), started);
     }
+
+    // A mutation echo superseded by a newer press must not clobber the newer
+    // optimistic cache or emit an intermediate burst value (t_82bed393): the
+    // submit-time generation guard discards it, exactly like a stale read.
+    void testAlsaSupersededEchoNeverFlickers() {
+        StubEnv env(200);
+        MixerProcessRunner runner;
+        ALSAVolumeMixer mixer(QString(), &runner, env.amixerPath);
+        SettleWatch watch(&runner, &mixer);
+        QVERIFY(pumpUntil([&] { return mixer.hasHardwareState(); }));
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 50);
+        QSignalSpy stateSpy(&mixer, &ALSAVolumeMixer::stateChanged);
+        QVERIFY(mixer.setLevel(45));   // sset 45 starts (200 ms child)
+        QVERIFY(mixer.setLevel(35));   // newer press while the 45-echo sleeps
+        QCOMPARE(mixer.level(), 35);   // optimistic cache keeps the newest
+        QVERIFY(pumpUntil([&] { return watch.settled(&runner); }));
+        QCOMPARE(mixer.level(), 35);
+        QCOMPARE(stateFileBody(env.statePath), QStringLiteral("35 0"));
+        // No observation may carry the superseded 45: the only emission is the
+        // final 35 confirmation (pre-fix, the 45-echo transiently emitted 45).
+        QVERIFY(stateSpy.count() >= 1);
+        for (const auto &args : stateSpy)
+            QCOMPARE(args.at(0).toInt(), 35);
+    }
 };
 
 QTEST_MAIN(VolumeMixerTest)

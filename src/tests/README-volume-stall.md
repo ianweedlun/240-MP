@@ -85,25 +85,26 @@ is a clamp no-op that never reaches the mixer.
 |---|---|---|
 | `volume-stall-alsa-delay200` | **FAIL** (ui-stall) | PASS |
 | `volume-stall-alsa-delay0` | **FAIL** (ui-stall: 7 spawns > 16 ms) | PASS |
-| `volume-stall-pipewire-delay200` | **FAIL** (ui-stall) | expected-red (`--baseline`) until t_2ecfe298, then PASS |
+| `volume-stall-pipewire-delay200` | **FAIL** (ui-stall) | PASS |
 | `volume-stall-pipewire-delay0` | borderline (heartbeat sits on the 16 ms boundary) | PASS |
 | `volume-stall-noop-control` | PASS (rig self-check) | PASS |
 | `volume-stall-alsa-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
 | `volume-stall-pipewire-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
 
-Two registration scopes (CMakeLists, BUILD_TESTS block):
+Registration scope (CMakeLists, BUILD_TESTS block):
 
 - **Timing cases are Linux-only.** The 16 ms wall-clock gate needs a quiet
   host; the macOS CI runner (macos-15-intel) jitters 50–58 ms on the noop
   control's heartbeat with zero mixer I/O — the canary's exact "rig noise,
   not product" verdict. Fault cases (boundedness/sanitizer, no 16 ms gate)
   still run on every platform.
-- **`pipewire-delay200` runs in `--baseline` (expected-red) mode** until the
-  PipeWire async conversion (kanban t_2ecfe298) lands: it asserts the
-  recorded pre-fix shape (stall present, 1 call/press, red bands) instead
-  of the fixed shape, so CI stays honest while the defect is still owned
-  by an open card. When that card converts the backend, this case flips to
-  FAIL ("run unexpectedly green — fix landed") — remove `--baseline` then.
+- **All cases run in normal mode.** Both backends are async on the mixer
+  process seam (ALSA: #108; PipeWire: t_2ecfe298), so every case asserts
+  the fixed shape. `--baseline` remains an orchestrator mode for the
+  two-sided proof: it asserts the recorded pre-fix shape (stall present,
+  red bands, ALSA 7/press) and now FAILs with "run unexpectedly green —
+  fix landed" on the delay200 cases, proving the gate still detects a
+  regression to synchronous mixers.
 
 Fault cases run three sub-runs each: `exit1` (nonzero exit, no output),
 `garbage` (unparseable output), `missing` (no executable on PATH → factory
@@ -115,16 +116,18 @@ timing case. It is the canary that separates rig noise from product defect.
 
 **Async phase boundaries.** Backends built on `audio::MixerProcessRunner`
 never block the caller, so phase counts cannot be read immediately after a
-call: the probe first waits for `VolumeManager::mixerReady()` (startup
-probe + initial read; skipped for fault runs), then settles the argv log
+call: the probe first waits for `VolumeManager::mixerReady()` (first
+hardware observation — ALSA reads at startup, PipeWire confirms on its
+first mutation; skipped for fault runs), then settles the argv log
 (`waitLogQuiescent`: no new line for stub-delay + 150 ms) before each count
 and before reading final state. All settling happens OUTSIDE the timed
 windows — the 16 ms gate still measures only the caller-visible call.
 Latest-wins coalescing means the 3-press direct burst is asserted as a
-TOTAL of 1..6 children (async ALSA: 1..2), while the isolated injected
-press must cost 1..2 (pre-fix ALSA: 7). `--baseline` keeps asserting the
-recorded pre-fix shape (7/press, red bands), so once a fix lands the
-baseline case flips to FAIL with `baseline-red` — the two-sided proof.
+TOTAL of 1..6 children (async ALSA: 1..2; async PipeWire: 2 — mutation +
+refresh), while the isolated injected press must cost 1..2 (pre-fix ALSA:
+7). `--baseline` keeps asserting the recorded pre-fix shape (ALSA 7/press,
+red bands); with both fixes landed it FAILs with `baseline-red` — the
+two-sided proof.
 
 ## Env vars (orchestrator → probe + stubs)
 
@@ -219,3 +222,39 @@ printed; they are KB-sized.
   (~3 ms/spawn quiet, ~10-25 ms busy). The delay200 runs are dominated by
   the stub sleep and stay tight; zero-delay numbers drift. Baseline bands
   are wide for this reason; loadavg is recorded in the evidence.
+
+## VolumeManager decoupling (t_82bed393)
+
+The key path is now fully decoupled from mixer I/O: `VolumeManager` computes
+mutations from cached state (optimistic update), submits the async mixer
+request, and emits exactly one coherent `volumeChanged(level, muted)` per
+effective press — the amplifier raise-while-muted is a single atomic update,
+never two paints. It subscribes to the backends' `stateChanged` seam and
+reconciles when hardware reports differently (rounding, external change,
+failure rollback), so UI and persisted state converge instead of stranding
+apart. The snapshot cache-poisoning defect above is adjudicated here:
+PipeWire rolls a failed mutation back to its last confirmed value
+(dimension-scoped — a failed level write never clobbers a newer optimistic
+mute), and the manager adopts that rollback.
+
+Persistence is debounced (250 ms single-shot) and executed off the UI thread
+on a single-thread `QThreadPool`; key repeat coalesces to one write, and
+destruction flushes any pending write synchronously, so restart always
+restores the last state. `volume.json` keys/format and restore-on-startup are
+unchanged; restore itself never rewrites the file. The `persist-matches`
+invariant is unaffected: the probe reads persisted state only after
+`waitLogQuiescent` + the 2500 ms heartbeat window, well past the debounce.
+
+Ordering hardening: PipeWire coalesces in per-dimension pending slots with at
+most one request outstanding at the seam (a queued `set-mute` can no longer be
+replaced by a following `set-level` — the amplifier burst used to lose the
+mute exactly that way); ALSA mutation echoes carry submit-time generation
+stamps, so a superseded echo can neither clobber the newer optimistic cache
+nor flicker the OSD. `coalescedCount()` counts pending-slot drops plus runner
+drops, keeping the conservation law exact.
+
+Verified: unit suites 24/26/17 green ×5 under ASan/UBSan/LSan
+(`detect_leaks=1`); `--strict-semantics` PASS on all timing/noop/fault cases
+on both backends (direct mean 0.00 ms, heartbeat peak 6 ms, ladders exact,
+persisted==final); `--case baseline` inversion preserved (10 baseline-shape
+violations, zero semantic violations); full ctest 33/33.
