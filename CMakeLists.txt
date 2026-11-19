@@ -401,16 +401,22 @@ if(BUILD_TESTS)
 
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
-    # No real audio hardware needed — the factory picks a no-op on WSL/CI.
+    # No real audio hardware needed — the factory picks a no-op on WSL/CI, and
+    # the async ALSA backend is driven end-to-end with the compiled mixer-stub
+    # child (TORTURE_* env knobs) through the real MixerProcessRunner seam.
     add_executable(volume-mixer-tests
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeMixerTest.cpp)
     set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
     target_include_directories(volume-mixer-tests PRIVATE src)
+    target_compile_definitions(volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    add_dependencies(volume-mixer-tests mixer-stub)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
     endif()
@@ -422,6 +428,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeManagerTest.cpp)
     set_target_properties(volume-manager-tests PROPERTIES AUTOMOC ON)
@@ -496,6 +503,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/util/MpvBasicOptions.cpp
         src/util/YtDlpLocator.cpp

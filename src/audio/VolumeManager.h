@@ -41,6 +41,10 @@ public:
     bool muted() const;
     QString backendName() const;   // for the OSD/status line, e.g. "pipewire"
     QString dataRoot() const { return m_dataRoot; }
+    // True once the backend's cache reflects hardware (async mixers probe in
+    // the background after construction; synchronous ones are ready at once).
+    // Startup sequencing waits on this instead of blocking on mixer I/O.
+    bool mixerReady() const { return m_mixer ? m_mixer->hasHardwareState() : true; }
 
     Q_INVOKABLE void changeVolume(int delta);
     Q_INVOKABLE void setLevel(int percent);

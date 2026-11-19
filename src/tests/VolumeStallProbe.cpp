@@ -89,6 +89,33 @@ int mixerLogLines(const QString &path)
     return lines;
 }
 
+// Async counting boundary (T1 P-5A fix): mixer children run on the runner's
+// worker thread, so a phase boundary must wait for the argv log to settle
+// before counting — otherwise the count races the spawn. "Settled" = no new
+// line for delay + 150 ms (the largest gap between consecutive children is
+// one child's runtime plus spawn overhead). Bounded so a missing mixer or a
+// stuck stub can never wedge the probe.
+void waitLogQuiescent(const QString &mixerLog, int delayMs)
+{
+    const int quietWindowMs = delayMs + 150;
+    QElapsedTimer clock;
+    clock.start();
+    const qint64 deadlineMs = qMax(4000, delayMs * 15);
+    int lastCount = mixerLogLines(mixerLog);
+    qint64 lastChange = 0;
+    while (clock.elapsed() < deadlineMs) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+        const int count = mixerLogLines(mixerLog);
+        if (count != lastCount) {
+            lastCount = count;
+            lastChange = clock.elapsed();
+        } else if (clock.elapsed() - lastChange >= quietWindowMs) {
+            return;
+        }
+    }
+}
+
 QJsonObject readJson(const QString &path)
 {
     QFile f(path);
@@ -127,6 +154,22 @@ int runScenario(const RunInput &in)
                                             std::make_unique<audio::NoopVolumeMixer>())
                                       : nullptr);
     const qint64 constructMs = constructClock.elapsed();
+
+    // Async startup contract (T1 P-5A fix): the mixer probes hardware in the
+    // background, so measured presses must wait for the first hardware
+    // observation — otherwise deltas would be computed against the cached
+    // default (100) instead of the real level, breaking the settled ladder.
+    // The wait itself pumps the event loop; it is NOT part of any stall gate.
+    // Fault runs skip it: a failing mixer never reports hardware state, and
+    // their assertions are bounded completion + sane cached state.
+    qint64 readyWaitMs = 0;
+    if (!in.faultMode) {
+        QElapsedTimer readyClock;
+        readyClock.start();
+        waitUntil([&] { return volume.mixerReady(); }, qMax(2000, in.stubDelayMs * 10));
+        readyWaitMs = readyClock.elapsed();
+    }
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
     const int callsAfterConstructor = mixerLogLines(in.mixerLog);
 
     AppCore core(in.repoRoot, in.dataRoot);
@@ -162,6 +205,7 @@ int runScenario(const RunInput &in)
         audio::applyVolumeKey(volume, audio::VolumeKey::Down);
         directTimes.push_back(one.elapsed());
     }
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
     const int callsAfterDirect = mixerLogLines(in.mixerLog);
     const int postDirectLevel = lastSignalLevel;
 
@@ -188,6 +232,7 @@ int runScenario(const RunInput &in)
             {QStringLiteral("mute_toggle_ms"), muteMs},
             {QStringLiteral("mute_toggle_result"), muteResult}
         };
+        waitLogQuiescent(in.mixerLog, in.stubDelayMs);
         const int callsAfterExtra = mixerLogLines(in.mixerLog);
         const int finalLevel = volume.level();
         const bool finalMuted = volume.muted();
@@ -221,7 +266,10 @@ int runScenario(const RunInput &in)
             {QStringLiteral("mixer_calls_after_direct"), callsAfterDirect},
             {QStringLiteral("mixer_calls_after_presses"), callsAfterExtra},
             {QStringLiteral("mixer_calls_total"), callsTotal},
+            {QStringLiteral("mixer_calls_direct_total"), callsAfterDirect - callsAfterConstructor},
             {QStringLiteral("per_press_direct"), (callsAfterDirect - callsAfterConstructor) / 3},
+            {QStringLiteral("backend_ready"), volume.mixerReady()},
+            {QStringLiteral("ready_wait_ms"), readyWaitMs},
             {QStringLiteral("extra_presses"), extraPresses},
             {QStringLiteral("fault_extra"), faultExtra},
             {QStringLiteral("target_ms"), kTargetMs},
@@ -263,6 +311,7 @@ int runScenario(const RunInput &in)
     });
     waitUntil([] { return false; }, 2500);
     heartbeat.stop();
+    waitLogQuiescent(in.mixerLog, in.stubDelayMs);
     const int callsAfterPresses = mixerLogLines(in.mixerLog);
     extraPresses = 1;
     injectedKeyDelivered = volumeChangedSignals >= 4 && lastSignalLevel != postDirectLevel;
@@ -306,8 +355,11 @@ int runScenario(const RunInput &in)
         {QStringLiteral("mixer_calls_after_direct"), callsAfterDirect},
         {QStringLiteral("mixer_calls_after_presses"), callsAfterPresses},
         {QStringLiteral("mixer_calls_total"), callsTotal},
+        {QStringLiteral("mixer_calls_direct_total"), callsAfterDirect - callsAfterConstructor},
         {QStringLiteral("per_press_direct"), (callsAfterDirect - callsAfterConstructor) / 3},
         {QStringLiteral("per_press_extra"), callsAfterPresses - callsAfterDirect},
+        {QStringLiteral("backend_ready"), volume.mixerReady()},
+        {QStringLiteral("ready_wait_ms"), readyWaitMs},
         {QStringLiteral("extra_presses"), extraPresses},
         {QStringLiteral("target_ms"), kTargetMs},
         {QStringLiteral("pass"), pass},

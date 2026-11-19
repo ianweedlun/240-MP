@@ -16,6 +16,13 @@
 //                       calls count too. The probe parses this for counts.
 //   TORTURE_STUB_MODE   normal (default) | exit1 (nonzero exit, no output) |
 //                       garbage (unparseable output, exit 0).
+//   TORTURE_STUB_CARD   combined (default) | split. combined exposes one 'PCM'
+//                       element carrying volume+switch (the Pi bcm2835 shape,
+//                       byte-identical to the recorded baseline). split
+//                       exposes 'PCM Playback Volume' + 'PCM Playback Switch'
+//                       like a desktop card, with control-name validation, so
+//                       the async backend's separate-switch addressing is
+//                       testable without hardware (T1 P-5A ALSA conversion).
 //   TORTURE_STUB_STATE  state file ("level muted" text) in the scratch dir;
 //                       defaults to stub-state.txt next to the mixer log.
 //                       Stateful so presses actually move the mixer:
@@ -125,15 +132,63 @@ void amixerBlock(const State &s)
                 s.level, s.level, sw, s.level, s.level, sw);
 }
 
+bool splitCard()
+{
+    const char *env = std::getenv("TORTURE_STUB_CARD");
+    return env && std::strcmp(env, "split") == 0;
+}
+
+// Split-card element blocks: the volume half carries no switch rows, the
+// switch half no level rows — exactly how a desktop card names them.
+void amixerVolumeBlock(const State &s)
+{
+    std::printf("Simple mixer control 'PCM Playback Volume',0\n"
+                "  Capabilities: pvolume\n"
+                "  Playback channels: Front Left - Front Right\n"
+                "  Front Left: Playback %d [%d%%]\n"
+                "  Front Right: Playback %d [%d%%]\n",
+                s.level, s.level, s.level, s.level);
+}
+
+void amixerSwitchBlock(const State &s)
+{
+    std::printf("Simple mixer control 'PCM Playback Switch',0\n"
+                "  Capabilities: pswitch pswitch-joined\n"
+                "  Playback channels: Mono\n"
+                "  Mono: Playback [%s]\n",
+                s.muted ? "off" : "on");
+}
+
 int runAmixer(int argc, char **argv, const std::string &path)
 {
     State s = loadState(path);
     const char *cmd = argc > 1 ? argv[1] : "";
+    const bool split = splitCard();
+    const char *ctl = argc > 2 ? argv[2] : "";
+    const bool ctlIsVolume = split && std::strcmp(ctl, "PCM Playback Volume") == 0;
+    const bool ctlIsSwitch = split && std::strcmp(ctl, "PCM Playback Switch") == 0;
     if (std::strcmp(cmd, "scontrols") == 0) {
-        std::printf("Simple mixer control 'PCM',0\n");
+        if (split)
+            std::printf("Simple mixer control 'PCM Playback Volume',0\n"
+                        "Simple mixer control 'PCM Playback Switch',0\n");
+        else
+            std::printf("Simple mixer control 'PCM',0\n");
     } else if (std::strcmp(cmd, "get") == 0 || std::strcmp(cmd, "sget") == 0) {
-        amixerBlock(s);
+        if (split) {
+            if (ctlIsVolume) amixerVolumeBlock(s);
+            else if (ctlIsSwitch) amixerSwitchBlock(s);
+            else {
+                std::fprintf(stderr, "amixer-stub: unknown control '%s'\n", ctl);
+                return 1;
+            }
+        } else {
+            amixerBlock(s);
+        }
     } else if (std::strcmp(cmd, "sset") == 0 && argc >= 4) {
+        if (split && !ctlIsVolume) {
+            std::fprintf(stderr, "amixer-stub: unknown control '%s'\n", ctl);
+            return 1;
+        }
         int v = 0;
         if (std::sscanf(argv[3], "%d%%", &v) != 1) {
             std::fprintf(stderr, "amixer-stub: bad percentage\n");
@@ -141,12 +196,18 @@ int runAmixer(int argc, char **argv, const std::string &path)
         }
         s.level = v < 0 ? 0 : (v > 100 ? 100 : v);
         saveState(path, s);
-        amixerBlock(s);
+        if (split) amixerVolumeBlock(s);
+        else amixerBlock(s);
     } else if (std::strcmp(cmd, "set") == 0 && argc >= 4 &&
                (std::strcmp(argv[3], "mute") == 0 || std::strcmp(argv[3], "unmute") == 0)) {
+        if (split && !ctlIsSwitch) {
+            std::fprintf(stderr, "amixer-stub: unknown control '%s'\n", ctl);
+            return 1;
+        }
         s.muted = std::strcmp(argv[3], "mute") == 0;
         saveState(path, s);
-        amixerBlock(s);
+        if (split) amixerSwitchBlock(s);
+        else amixerBlock(s);
     } else {
         std::fprintf(stderr, "amixer-stub: unknown command '%s'\n", cmd);
         return 1;

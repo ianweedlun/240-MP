@@ -99,6 +99,19 @@ If `noop-control` ever fails, the host is too noisy for a 16 ms wall-clock
 gate (or the rig broke) — re-run on a quieter machine before trusting a red
 timing case. It is the canary that separates rig noise from product defect.
 
+**Async phase boundaries.** Backends built on `audio::MixerProcessRunner`
+never block the caller, so phase counts cannot be read immediately after a
+call: the probe first waits for `VolumeManager::mixerReady()` (startup
+probe + initial read; skipped for fault runs), then settles the argv log
+(`waitLogQuiescent`: no new line for stub-delay + 150 ms) before each count
+and before reading final state. All settling happens OUTSIDE the timed
+windows — the 16 ms gate still measures only the caller-visible call.
+Latest-wins coalescing means the 3-press direct burst is asserted as a
+TOTAL of 1..6 children (async ALSA: 1..2), while the isolated injected
+press must cost 1..2 (pre-fix ALSA: 7). `--baseline` keeps asserting the
+recorded pre-fix shape (7/press, red bands), so once a fix lands the
+baseline case flips to FAIL with `baseline-red` — the two-sided proof.
+
 ## Env vars (orchestrator → probe + stubs)
 
 | var | meaning |
@@ -110,6 +123,7 @@ timing case. It is the canary that separates rig noise from product defect.
 | `TORTURE_STUB_STATE` | stub state file (`level muted` text); initial `50 0` |
 | `TORTURE_DELAY_MS` | stub sleep before responding (0 or 200 in the suite) |
 | `TORTURE_STUB_MODE` | `normal` \| `exit1` \| `garbage` |
+| `TORTURE_STUB_CARD` | ALSA stub card shape: `combined` (default — Pi-style `PCM` with playback+capture in one control) \| `split` (desktop-style `PCM Playback Volume` + `PCM Playback Switch`, exercises control validation on `sset`) |
 | `TORTURE_FORCE_NOOP` | `1` only for the noop control (probe refuses `volume-noop` without it) |
 | `TORTURE_SNAPSHOT` | git sha of the tree under test (RESULT provenance) |
 | `ASAN_OPTIONS` | `detect_leaks=1` (sanitizer-clean is asserted from stderr) |
@@ -129,8 +143,13 @@ One JSON object per run (also saved to `result.json` in the evidence dir):
 - `backend_requested` / `backend_selected` — `alsa` / `pipewire` / `none`;
   must match (a stray `wpctl` on PATH would silently switch the backend).
 - `stub_delay_ms`, `stub_mode`, `snapshot` — run conditions.
-- `constructor_ms` — `VolumeManager` construction (ALSA scans `scontrols`
-  here; a slow mixer stalls app startup before any keypress).
+- `constructor_ms` — `VolumeManager` construction. Pre-fix, ALSA scanned
+  `scontrols` synchronously here (a slow mixer stalled app startup); the
+  async backend returns immediately and probes in the background.
+- `backend_ready`, `ready_wait_ms` — async startup contract: whether the
+  backend reported a hardware observation, and how long the probe waited
+  for it (outside every timed window). Synchronous backends are ready at
+  once (`ready_wait_ms` 0). Fault runs skip the wait by design.
 - `direct_key_times_ms[]`, `direct_key_mean_ms`, `direct_key_max_ms` —
   wall time of 3 direct `applyVolumeKey(Down)` calls (the exact call the
   `InputManager` eventFilter makes for a hardware key).
@@ -144,14 +163,20 @@ One JSON object per run (also saved to `result.json` in the evidence dir):
   `persisted_muted` — settled semantics. With the stateful stubs the ladder
   is ALSA 50→35→30, PipeWire/noop 100→85→80.
 - `mixer_calls_after_constructor` / `_after_direct` / `_after_presses` /
-  `_total` — phase-boundary counts parsed from the argv log;
-  `per_press_direct` = (after_direct − after_constructor)/3,
-  `per_press_extra` = calls for the injected press (ALSA: **7**).
+  `_total` — phase-boundary counts parsed from the argv log, each taken
+  after an async settle (see below). `mixer_calls_direct_total` = the
+  3-press burst's total children; `per_press_direct` = that total / 3
+  (integer division — with latest-wins coalescing a 3-press burst costs
+  1..2 children TOTAL, so this floors to 0; the burst total is the
+  meaningful number). `per_press_extra` = children for the isolated
+  injected press (pre-fix ALSA: **7**; async target: **≤2**, normally 1).
 - `target_ms` (16), `pass` (probe-local hint; the orchestrator is
   authoritative), `anchor` (defect source locations).
 
 Verdicts are named invariants: `probe-ran`, `no-hang`, `sanitizer-clean`,
-`backend-selected`, `sane-state`, `injection-delivered`, `mixer-reached`,
+`backend-selected`, `sane-state`, `injection-delivered`,
+`mixer-reached/amplification` (burst total 1..6, isolated press 1..2),
+`backend-ready` (non-fault, non-baseline runs must observe hardware),
 `ui-stall` (constructor, direct max and heartbeat peak all < 16 ms),
 `missing-fallback`, plus `baseline-red` / `baseline-band` /
 `baseline-amplification` in `--baseline` mode and `semantic-ladder` /

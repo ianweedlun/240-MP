@@ -241,10 +241,25 @@ def check_timing(run, violations, case, backend, baseline, strict_semantics):
             violations.append("INVARIANT mixer-reached VIOLATED [%s]: noop control "
                               "spawned %s mixer processes" % (label, res.get("mixer_calls_total")))
     else:
-        if not (res.get("per_press_direct", 0) >= 1 and res.get("per_press_extra", 0) >= 1):
-            violations.append("INVARIANT mixer-reached VIOLATED [%s]: per_press_direct=%s "
-                              "per_press_extra=%s — volume keys never reached the mixer"
-                              % (label, res.get("per_press_direct"), res.get("per_press_extra")))
+        # Async contract (T1 P-5A fix): rapid presses coalesce latest-wins in
+        # the mixer seam, so a 3-press burst costs 1..2 children TOTAL — the
+        # old ">=1 child per press" invariant encoded the synchronous 7x
+        # round-trip shape and is meaningless under coalescing. The invariants
+        # now: the burst reached the mixer at least once, burst amplification
+        # stays <=2 children/press (the card's target), and the isolated
+        # injected press costs 1..2 children.
+        direct_total = res.get("mixer_calls_direct_total", 0)
+        per_extra = res.get("per_press_extra", 0)
+        if not (1 <= direct_total <= 6 and 1 <= per_extra <= 2):
+            violations.append("INVARIANT mixer-reached/amplification VIOLATED [%s]: "
+                              "direct_total=%s (want 1..6 for 3 coalescing presses), "
+                              "per_press_extra=%s (want 1..2) — keys never reached the "
+                              "mixer, or per-press amplification exceeds the <=2 target"
+                              % (label, direct_total, per_extra))
+        if not baseline and not res.get("backend_ready", False):
+            violations.append("INVARIANT backend-ready VIOLATED [%s]: mixer never "
+                              "reported a hardware observation (ready_wait_ms=%s)"
+                              % (label, res.get("ready_wait_ms")))
     ctor = res.get("constructor_ms", 0)
     dmax = res.get("direct_key_max_ms", 0)
     peak = res.get("injection_peak_heartbeat_gap_ms", 0)
@@ -307,10 +322,13 @@ def check_fault(run, violations, backend, mode, present):
         violations.append("INVARIANT backend-selected VIOLATED [%s]: expected %r, got %r"
                           % (label, expect_backend, res.get("backend_selected")))
     if present:
-        if res.get("per_press_direct", 0) < 1:
+        # Coalescing makes per-press counts meaningless on a failing mixer
+        # (held mutations flush after discovery); the invariant is that the
+        # failing mixer was invoked at all.
+        if res.get("mixer_calls_total", 0) < 1:
             violations.append("INVARIANT mixer-reached VIOLATED [%s]: failing mixer was "
-                              "never invoked (per_press_direct=%s)"
-                              % (label, res.get("per_press_direct")))
+                              "never invoked (mixer_calls_total=%s)"
+                              % (label, res.get("mixer_calls_total")))
     else:
         if res.get("mixer_calls_total") != 0:
             violations.append("INVARIANT missing-fallback VIOLATED [%s]: %s mixer calls "
