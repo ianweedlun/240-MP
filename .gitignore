@@ -28,6 +28,8 @@ build-*/
 
 devbuild/
 .local-build-*/
+# P-5A volume-stall harness evidence (run artifacts, any cwd)
+volume-stall-evidence/
 
 # Secrets and agent scratch state — never commit credentials or sweep live worktrees
 ######################
