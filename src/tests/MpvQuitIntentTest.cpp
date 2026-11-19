@@ -194,7 +194,9 @@ private Q_SLOTS:
         // Wait for connected playback (time-pos events flow only once connected).
         QVERIFY(spinUntil([&]{ return positions >= 2; }, 5000));
         const int beforeMenu = positions;
-        mpv.sendKey(QStringLiteral("UP"));      // open the OSC menu (open_menu_up)
+        mpv.showOscMenu();   // open the OSC menu via the explicit lua menu-show
+                             // message — UP is seek-shaped on the app key path
+                             // now (#124), so a keypress no longer opens the menu
         spinFor(400);   // let toggle_menu's lua callback install forced menu-esc
         mpv.sendKey(QStringLiteral("ESC"));     // menu-esc: closes menu, keeps playing
         // Playback must CONTINUE (more time-pos events), not end.

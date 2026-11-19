@@ -104,6 +104,7 @@ add_executable(240mp
     src/modules/virtual_channels/TVDBAuth.cpp
     src/modules/virtual_channels/TVDBNetworkResolver.cpp
     src/player/MpvController.cpp
+    src/player/SeekHoldPolicy.cpp
     src/util/MpvBasicOptions.cpp
     src/util/YtDlpLocator.cpp
     src/util/MpvLocator.cpp
@@ -550,6 +551,19 @@ if(BUILD_TESTS)
         target_compile_options(mixer-process-runner-tests PRIVATE -Wall -Wextra)
         target_compile_options(mixer-fake-child PRIVATE -Wall -Wextra)
     endif()
+
+    # Held-key seek shaping (YouTube slow-stream fix): pure policy logic, no
+    # mpv/IPC/timers needed — the owner drives flush() from a QTimer.
+    add_executable(seek-hold-policy-tests
+        src/player/SeekHoldPolicy.cpp
+        src/tests/SeekHoldPolicyTest.cpp)
+    set_target_properties(seek-hold-policy-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(seek-hold-policy-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(seek-hold-policy-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(seek-hold-policy-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME seek-hold-policy COMMAND seek-hold-policy-tests)
     add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
 
     # PipeWire async backend contract (T1 P-5A): drives the real backend against
@@ -606,6 +620,7 @@ if(BUILD_TESTS)
         # RetroArch backend (launch handoff), so their symbols must resolve.
         src/AppCore.cpp
         src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
         src/input/InputManager.cpp
         src/modules/retroarch/RetroArchBackend.cpp
         src/modules/retroarch/RecentGamesStore.cpp
@@ -790,6 +805,16 @@ if(BUILD_TESTS)
     set(MP240_PLEX_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
     add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
+
+    # YouTube Player held-key wiring: repeat flag + key-up must cross to
+    # MpvController (SeekHoldPolicy shapes them; logic unit-tested separately).
+    add_executable(youtube-seek-smoke src/tests/youtube-seek-smoke-test.cpp)
+    set_target_properties(youtube-seek-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-seek-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_include_directories(youtube-seek-smoke PRIVATE src)
+    target_compile_definitions(youtube-seek-smoke PRIVATE MP240_REPO_ROOT="${CMAKE_SOURCE_DIR}")
+    add_test(NAME youtube-seek-smoke COMMAND youtube-seek-smoke)
 
     add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
     set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
@@ -986,6 +1011,7 @@ if(BUILD_TESTS)
     add_executable(mpv-quit-intent-tests
         src/AppCore.cpp
         src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
@@ -1020,6 +1046,7 @@ if(BUILD_TESTS)
     add_executable(mpv-failedtostart-tests
         src/AppCore.cpp
         src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
@@ -1059,6 +1086,7 @@ if(BUILD_TESTS)
     add_executable(mpv-instance-socket-tests
         src/AppCore.cpp
         src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp

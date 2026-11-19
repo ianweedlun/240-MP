@@ -723,9 +723,16 @@ void InputManager::releaseAction(Action a) {
         m_repeatDelayTimer.stop();
         m_repeatTimer.stop();
     }
-    // mpv's "keypress" command is one-shot — releases only matter for QML.
-    if (windowActive())
+    // mpv's "keypress" command is one-shot, but the app's held-key shaping
+    // (speed ramp / coalesced rewind) ends on key-up — forward the release on
+    // the direct-IPC path too. QML gets its release as a posted key event.
+    if (windowActive()) {
         postKey(qtKeyForAction(a), QEvent::KeyRelease, false);
+    } else {
+        const QString mpvKey = mpvKeyForAction(a);
+        if (!mpvKey.isEmpty())
+            emit mpvKeyReleased(mpvKey);
+    }
 }
 
 // While the Qt window is active, actions become posted key events into QML.
@@ -857,7 +864,7 @@ void InputManager::deliverPress(Action a, bool autoRepeat) {
     if (windowActive() || mpvKey.isEmpty())
         postKey(qtKeyForAction(a), QEvent::KeyPress, autoRepeat);
     else
-        emit mpvKeyRequested(mpvKey);
+        emit mpvKeyRequested(mpvKey, autoRepeat);
 }
 
 void InputManager::onRepeatDelayElapsed() {
@@ -1177,7 +1184,7 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
             // VolumeManager key. Everything left fires once per press so a held
             // key is a single seek/chapter jump.
             if (!ke->isAutoRepeat())
-                emit mpvKeyRequested(mediaKey);
+                emit mpvKeyRequested(mediaKey, false);
         }
         return true;
     }

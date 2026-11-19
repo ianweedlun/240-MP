@@ -322,16 +322,16 @@ FocusScope {
                     mpvController.sendKey("BS")
                 event.accepted = true
             } else if (event.key === Qt.Key_Up) {
-                mpvController.sendKey("UP")
+                mpvController.sendKey("UP", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Down) {
-                mpvController.sendKey("DOWN")
+                mpvController.sendKey("DOWN", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Left) {
-                mpvController.sendKey("LEFT")
+                mpvController.sendKey("LEFT", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Right) {
-                mpvController.sendKey("RIGHT")
+                mpvController.sendKey("RIGHT", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Space) {
                 mpvController.sendKey("SPACE")
@@ -341,6 +341,26 @@ FocusScope {
                 event.accepted = true
             }
         }
+    }
+
+    // Held-direction shaping lives in MpvController (SeekHoldPolicy); the view
+    // only has to tell it about key-up so a speed ramp ends and a coalesced
+    // rewind flushes its remainder. The direct-IPC path gets the same release
+    // from InputManager.mpvKeyReleased.
+    Keys.onReleased: function(event) {
+        if (event.key === Qt.Key_Left) {
+            mpvController.sendKeyUp("LEFT")
+            event.accepted = true
+        } else if (event.key === Qt.Key_Right) {
+            mpvController.sendKeyUp("RIGHT")
+            event.accepted = true
+        }
+    }
+
+    // Leaving the view mid-hold must not strand a 4x speed or a pending flush.
+    Component.onDestruction: {
+        mpvController.sendKeyUp("RIGHT")
+        mpvController.sendKeyUp("LEFT")
     }
 
     Connections {
