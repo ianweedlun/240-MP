@@ -21,6 +21,8 @@ jobs:
     steps:
       # Homebrew's sdl2 is now the sdl2-compat/SDL3 shim, so SDL2 is built from
       # source at the pinned version (see the composite action).
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:
@@ -133,6 +135,8 @@ jobs:
     steps:
       # mpv is a runtime dep (not a build dep), so the configure/build step here
       # needs no MPV_BIN; the AppImage lane below builds mpv from source first.
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:

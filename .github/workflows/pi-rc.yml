@@ -133,7 +133,7 @@ jobs:
           # binary is byte-identical to official beta, md5 included.
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           TARBALL="240-MP-pi-rc-${{ github.event.pull_request.number }}-linux-arm64-$(git rev-parse --short HEAD)"
@@ -349,7 +349,7 @@ jobs:
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           sha12=$(git rev-parse --short=12 HEAD)
@@ -493,7 +493,7 @@ jobs:
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="buildonly-pi-rc"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           TARBALL="240-MP-pi-rc-buildonly-linux-arm64-$(git rev-parse --short HEAD)"
