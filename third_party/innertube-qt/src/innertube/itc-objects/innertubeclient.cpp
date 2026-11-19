@@ -252,6 +252,7 @@ QString InnertubeClient::resolveClientName(ClientType clientType)
     case ClientType::MWEB: return "MWEB";
     case ClientType::ANDROID: return "ANDROID";
     case ClientType::IOS: return "IOS";
+    case ClientType::VISIONOS: return "VISIONOS";
     case ClientType::TVHTML5: return "TVHTML5";
     case ClientType::TVLITE: return "TVLITE";
     case ClientType::TVANDROID: return "TVANDROID";

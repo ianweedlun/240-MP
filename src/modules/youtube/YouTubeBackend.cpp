@@ -1141,6 +1141,11 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
     const QString fmt = ytdlFormatForResolution(resolution);
     if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
         return; // nothing stored for this pair: the cold path is already in effect
+    // A cached URL that failed to PLAY must not be re-minted by the same
+    // resolver. invalidateCachedUrl is only called on a playback failure, so
+    // mark the key's in-process attempt spent: the retry goes to yt-dlp instead
+    // of looping resolve -> 403 -> evict -> resolve on the same client.
+    m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
     QFile f(urlCacheFilePath());
     if (!f.open(QIODevice::WriteOnly))
         return;

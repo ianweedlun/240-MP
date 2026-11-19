@@ -730,6 +730,21 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-stream-select COMMAND yt-stream-select-tests)
 
+    # Lab gate probe (NOT a ctest test — it needs the network and mpv).
+    # Resolves through the real YtInnertubeResolver and requires mpv to decode
+    # BOTH streams. A curl Range probe is not a playability proof: IOS URLs
+    # answer bounded ranges but 403 the open-ended range ffmpeg sends.
+    #   ./build-test/yt-resolver-probe <videoId>
+    add_executable(yt-resolver-probe
+        src/modules/youtube/tests/YtResolverProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-resolver-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-resolver-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-resolver-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+
     # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
     # exactly once per completed hand-off and only AFTER the CRTC state is
     # captured, displayReturned() once per return, and a refused hand-off stays

@@ -66,7 +66,11 @@ public:
         IOS_PRODUCER = 92,
         TVHTML5_FOR_KIDS = 93,
         GOOGLE_LIST_RECS = 94,
-        MEDIA_CONNECT_FRONTEND = 95
+        MEDIA_CONNECT_FRONTEND = 95,
+        // 240-MP local addition: VISIONOS is yt-dlp's JS-less default client and
+        // the only one whose googlevideo URLs stream with an open-ended Range
+        // (IOS URLs 403 on `bytes=0-`, which is what ffmpeg sends).
+        VISIONOS = 101
     };
 
     QString browserName;

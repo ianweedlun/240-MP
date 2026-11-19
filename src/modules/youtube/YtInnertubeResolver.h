@@ -3,13 +3,14 @@
 // In-process YouTube Innertube resolver (overnight torture t_7ffb1fd1).
 //
 // Replaces the per-play `yt-dlp -g` spawn with one Player request against the
-// public IOS client (com.google.ios.youtube/20.10.4). The spike card
-// t_4e50d23f measured 172-385 ms per resolve on the Pi against ~5 s for the
-// yt-dlp spawn, and proved the returned googlevideo URLs fetch HTTP 206 from
-// the Pi's own egress IP.
+// VISIONOS client, using a page-derived visitorData. IOS-client URLs resolve
+// fast but 403 on the open-ended `Range: bytes=0-` that ffmpeg sends, so they
+// never play; VISIONOS URLs return 200 bare / 206 open-ended. The gate is mpv
+// decode of BOTH streams (build-test/yt-resolver-probe), not a curl probe.
 //
-// Why the IOS client: it is the one public client whose Player response still
-// carries direct googlevideo URLs for H.264 adaptive streams. URLs are
+// Why VISIONOS: yt-dlp's JS-less default client. Its Player response carries
+// direct googlevideo URLs (no signatureCipher, no n-transform) and those URLs
+// stream with an open-ended Range. URLs are
 // IP-bound (ip=) and expire in ~6 h (expire=), so this MUST run on the target
 // — the resolver is constructed by the backend, which lives on the Pi.
 //
@@ -71,6 +72,8 @@ signals:
 
 private:
     void ensureClient();
+    void fetchVisitorData();
+    void startPlayer();
     void emitResult(const YtResolveResult &result);
 
     InnerTube *m_it = nullptr;
@@ -83,4 +86,12 @@ private:
     bool    m_inFlight = false;
     bool    m_clientReady = false;
     qint64  m_generation = 0;   // invalidates a reply abandoned by the timeout
+
+    // VISIONOS is bot-walled unless visitorData came from a real YouTube page.
+    // The vendored client's generateVisitorData() synthesises one and YouTube
+    // rejects it (LOGIN_REQUIRED), so fetch it once per process and reuse it.
+    QString m_visitorData;
+    bool    m_vdStarted = false;
+    bool    m_vdDone = false;
+    bool    m_pendingStart = false;
 };
