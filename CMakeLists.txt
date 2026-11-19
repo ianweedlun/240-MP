@@ -729,6 +729,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
 
+    # T2 (issue #111): per-instance mpv temp paths — pure helper tests.
+    # No process spawning; exercise the sun_path bound and uniqueness logic.
+    add_executable(mpv-instance-paths-tests
+        src/util/tests/MpvInstancePathsTest.cpp)
+    set_target_properties(mpv-instance-paths-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-paths-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(mpv-instance-paths-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(mpv-instance-paths-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-paths COMMAND mpv-instance-paths-tests)
+
     # Built-in palette consistency tests: themes table (Main.qml) vs the Settings
     # picker list (views/Settings.qml) — drift guard for adding color schemes.
     add_executable(palette-tests
@@ -872,6 +884,33 @@ if(BUILD_TESTS)
     # the offscreen platform must come from the environment (the QML smokes can
     # qputenv it in main; this one cannot). Headless CI lanes have no display.
     set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # T2 (issue #111): real MpvController per-instance socket contract.
+    # No mpv spawning — constructs the controller and checks socketPath()/logFilePath().
+    add_executable(mpv-instance-socket-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvInstanceSocketTest.cpp)
+    set_target_properties(mpv-instance-socket-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-socket-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-instance-socket-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-instance-socket-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-instance-socket-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-instance-socket-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-socket COMMAND mpv-instance-socket-tests)
+    set_tests_properties(mpv-instance-socket PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 endif()
 
