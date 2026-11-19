@@ -195,7 +195,14 @@ int main(int argc, char **argv) {
     comp.setInitialProperties(view, {{QStringLiteral("navParams"), params}});
     comp.completeCreate();
     if (!view) return 1;
-    QTest::qWait(150); // the deferred 50ms startTimer must fire
+    // The deferred 50 ms startTimer can be delayed by font discovery and other
+    // tests on a loaded CI runner. Wait for the observable launch, not a fixed
+    // wall-clock slice; a missing launch still fails after the bounded deadline.
+    int directPlayWaitMs = 0;
+    while (mpv.plays.isEmpty() && directPlayWaitMs < 2000) {
+        QTest::qWait(20);
+        directPlayWaitMs += 20;
+    }
     check(mpv.plays.size() == 1, "direct play launches once on completion");
     if (mpv.plays.isEmpty()) return 1;
 
