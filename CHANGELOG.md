@@ -10,6 +10,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Focused unit suite (`mixer-process-runner`, CTest) drives a fake delayed child executable through slow success, timeout, nonzero exit, garbage output, missing binary, rapid-fire coalescing, caller-thread timing and busy-shutdown cases — clean under ASan/UBSan with `detect_leaks=1`. No audio hardware needed.
 - Backend behavior is unchanged in this step: the existing synchronous `amixer`/`wpctl` paths stay as they are until the follow-up cards convert them onto the seam.
 
+### Fixed — YouTube: SponsorBlock and known-ID persistence stays bounded
+- The SponsorBlock segment cache and the known-video-id pool are now bounded on disk as well as in memory (512 entries each). Loading a legacy oversized file prunes it immediately — the sponsor cache keeps the newest `fetchedAt` entries (stale ones drop first, stampless pre-upgrade entries compete as oldest and are never re-stamped before the ordering decision), and the known pool keeps the first 512 ids in file order before the watch-history merge. Segment and timestamp key sets stay identical; orphan timestamps are dropped.
+- Legacy files self-heal into the bounded MRU-first form on load; corrupt or truncated files still fail safe to empty state. Confirmed sponsor answers are persisted through a short coalescing debounce instead of one full-array rewrite per response, and any pending save flushes on shutdown so no confirmed window is lost.
+
+### Fixed — YouTube: fresh-play exit no longer resurrects a stale resume marker (#103)
+- Choosing **START FROM THE BEGINNING** and exiting before the five-second save threshold now clears the previously offered marker. Re-entry starts at the beginning instead of offering and resuming the old offset; failed launches and ordinary new-video short plays remain unchanged.
+- The real-QML regression fails on the old view and passes on the fix, including the failed-launch guard. A real-video offscreen replay verified `0:30 → beginning → immediate exit → automatic fresh start`, and the full suite passes 29/29.
+
+### Fixed — YouTube: permanent resolve failures no longer respawn yt-dlp (#103)
+- Age/login-gated (`LOGIN_REQUIRED`) and unavailable/claimed (`UNPLAYABLE`) videos now use a durable negative cache keyed by video id. Entries persist beside the URL cache and expire after a named 24-hour TTL; transient timeouts, network failures and other resolve errors are never cached.
+- List warming, focused-row warming and playback presses skip cached failures before either Innertube or yt-dlp, emitting `yt-resolve … source=negative-cache ms=0`. The Player also cancels its four-second mpv/ytdl-hook fallback on a permanent resolve failure and reports the video unavailable.
+- Behavior tests cover both permanent classes, transient classification, exact TTL expiry, persistence across backend restart, all three resolve entry points and the cancelled Player fallback.
+
+### Fixed — YouTube: playback starts with the video's default audio language (#103)
+- VISIONOS `adaptiveFormats` now expose `audioTrack.audioIsDefault`, `displayName`, and `id` to the picker. The explicitly default track wins; with no default marker, an `original` track is the fallback, then stable track identity makes the choice independent of response ordering. Indexed itag-140 AAC remains preferred within each group.
+- The warm URL cache key is versioned so pre-fix pairs cannot keep serving the first-listed dub after the RC upgrade.
+- A live multi-audio probe reproduced the defect: the old picker chose Spanish (`es.3`) instead of English original/default (`en.4`). Behavior tests cover that fixture, default-versus-original precedence, both no-default fallbacks, and the unchanged muxed path. The yt-dlp fallback was probed too and already selects English original/default, so it is unchanged.
+
+### Fixed — YouTube: Innertube URLs now actually play (VISIONOS + page-derived visitorData)
+- The resolver used the IOS client. Its googlevideo URLs answer a **bounded** `Range` (`bytes=0-1000` → 206) but **403** the open-ended `Range: bytes=0-` that ffmpeg/mpv actually sends, so every real playback failed with `No video or audio streams selected` while the spike's curl probe passed. The client is now **VISIONOS** (yt-dlp's JS-less default, client id 101), whose URLs return 200 bare and 206 open-ended. Client fields are copied from yt-dlp's `youtube/_base.py`, not guessed.
+- VISIONOS is bot-walled (`LOGIN_REQUIRED`) unless `visitorData` came from a real YouTube page. The vendored `generateVisitorData()` is synthetic and rejected, so the resolver fetches it once per process from youtube.com, asynchronously, inside the existing 4 s timeout.
+- A cached URL that fails to **play** now marks that key's in-process attempt spent, so the retry falls back to yt-dlp instead of looping resolve → 403 → evict → resolve on the same client.
+- New lab gate `build-test/yt-resolver-probe <videoId>`: resolves through the real `YtInnertubeResolver` and requires **mpv to decode both streams** (`Starting playback`, h264 **and** aac). Verified two-sided — VISIONOS passes, IOS fails with 403/exit 2. A curl range probe is a screen, never the gate.
+- Pi RC measurement: press → first frame **1407 ms**, `VO: [drm] 854x480`, `AO: [alsa] 44100Hz stereo`, **zero 403s** across the session.
+
+### Added — YouTube: idle SponsorBlock cache fill
+- The Pi is on all day, so segment windows are confirmed while nobody is pressing keys. `IdleTracker::activeChanged` starts a paced walk of every video id the UI has surfaced (`youtube_known_ids.json`) plus watch history; any input activity stops it immediately.
+- Strictly lower priority than live navigation: the pump yields whenever a foreground warm queue or resolve is busy. Foreground sponsor fetches measured 594–705 ms against 310–400 ms for a bare request purely because of connection contention, so a background filler that competed would make presses slower.
+- Paced at one request per 300 ms and capped at 400 per idle window — `sponsor.ajay.app` is a free community service, not a crawl target.
+- Confirmed windows now carry a `fetchedAt` stamp and a **14-day success TTL**. Previously any cached entry was served forever, so a durable cache would keep skipping to boundaries submitted months ago. A refresh keeps serving the old segments until the new answer lands. Entries predating the stamp are stamped at load, so an upgraded cache ages out gradually instead of refetching everything on first boot.
+- Selection is a pure, unit-tested function (`ytsb::idleSelect`): dedupe, input order, cap, and skip rules for fresh/in-flight/recently-failed. `yt-sponsor-ttl` grows 7 → 11 tests.
+- Intent: a play finds its EDL already on disk, so SponsorBlock skipping works on the **first** play with no launch wait and no runtime seeking — keeping the seamless `edl://` cut rather than adopting SmartTube/Red's visible seek.
+
+### Added — build(youtube): vendor innertube-qt, verdigris and expected-lite (no-network)
+- `third_party/innertube-qt` (innertube-qt @ 7252590) with verdigris @ 8abfb8d and expected-lite v0.8.0/182165b vendored into `third_party/` for offline builds; `third_party/README.md` documents upstream SHAs, licences and patches.
+- The vendored tree guarantees a no-network CMake configure; `FetchContent_Declare` is removed and no `_deps/` is created.
+- `libinnertube-qt.a` builds in-tree and `240mp` links it; `ctest` is 27/27.
+
+### Changed — YouTube: in-process Innertube resolver replaces the per-play yt-dlp spawn
+- The cold-play resolve was a `yt-dlp -g` subprocess (~5 s on the Pi). It is now an in-process Innertube Player request against the public IOS client (`com.google.ios.youtube/20.10.4`), built on `third_party/innertube-qt` with vendored verdigris and expected-lite, so the build needs no network fetch. The spike measured 172–385 ms; a lab probe of the new wrapper measured 180–216 ms, and the returned itag 135 (480p H.264) + itag 140 (m4a) URLs answered **HTTP 206** with the right MIME from a `Range` request.
+- Stream selection is a pure, unit-tested function (`src/util/YtStreamSelect.h`, new `yt-stream-select` CTest): the tallest H.264 track at or under the resolution cap, itag 140 preferred for audio, a muxed single stream only when no audio-only track exists, and expiry taken from the URL's own `expire=` with the response's `expiresInSeconds` as fallback.
+- The yt-dlp path is kept as a fallback for one release: a key gets exactly one Innertube attempt, then the spawn owns it — no retry loop, never two resolvers at once. The fallback's elapsed figure is backdated to the original launch, so the state log shows the whole ladder.
+- The warm pass now covers a whole list page (was the front 12 rows; queue cap 24 → 64), and the highlighted row warms its URL pair on every focus change, so a cold pick can still take the direct path. Both are idempotent: already-fresh, in-flight, or queued rows are skipped.
+- The Player's bounded resolve wait drops from 15 s to 4 s — the in-process resolve answers in well under a second, so a dead network reaches mpv's ytdl hook sooner.
+- New `yt-resolve vid=… source=… ms=…` state-log lines (source = `innertube`, `ytdlp`, `cache`, `negative-cache`, or a failure class) make the win measurable on the Pi from `/tmp/240mp_state.log`.
+- Gates: `yt-stream-select` unit suite, `youtube-player-smoke` (23 assertions over the real `Player.qml`), full `ctest` 27/27 green locally, and the real app starts offscreen and shuts down cleanly. No owner CRT yet — implemented, unvalidated.
+
+### Changed — YouTube: SponsorBlock no longer gates playback launch
+- The Player's cold path held first frame for up to 6 s waiting for `sponsorReady`. The hold, `launchAfterSponsor` and the 6 s `sponsorWaitTimer` are gone: `onPlaybackUrlReady` now launches on the stream URL pair alone, so an unreachable `sponsor.ajay.app` adds zero wait to first frame. The EDL is frozen from whatever is cached at the launch instant; a window that lands later is cached and applies on the **next** play (no live re-apply, per the card's accepted gap).
+- Segment windows are prefetched for the **whole list page** (not just the 12 URL-warmed rows) and for the focused row on every highlight change, so the common cold play already has its EDL on file. The bulk prefetch is bounded (50) and the focus prefetch covers anything past it while scrolling.
+- Transient (non-4xx) segment failures are negative-cached for 10 minutes — one request per video per window instead of one per play — with the suppression map pruned so it stays bounded. A 4xx remains a permanent confirmed-empty hit.
+- `yt-sponsor hit|miss|late` state-log lines (and `late-arrived` when a window lands after a launch) make the path readable on the Pi from `/tmp/240mp_state.log`.
+- Gates: new `yt-sponsor-ttl` unit suite (7/7) and `youtube-player-smoke` (23 assertions over the real `Player.qml`, offscreen). Verified both ways: against the pre-fix QML the smoke fails 3 assertions (including the 6 s cold-path hold and the dead-sponsor launch); against this change it passes 23/23.
+
 ### Added — CI: burst-branch RC lane for overnight validation
 - `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.
 - The PR lane and burst lane share a `pi-rc-deploy` concurrency group, so only one RC deploy can run at a time — the Pi never sees two RCs. A burst RC cannot overwrite another burst RC, and a PR close/restore will not mistake a burst marker for its own (`pr-N`).

@@ -10,9 +10,13 @@
 #include <QVariantMap>
 #include <QJsonObject>
 #include <QQueue>
+#include <QTimer>
 #include <QNetworkAccessManager>
 #include "../../util/YtSponsorEdl.h"
+#include "../../util/YtSponsorTtl.h"
 #include "../../util/YtPendingReplay.h"
+
+class YtInnertubeResolver;
 
 // Backend for the YouTube module (V1 "feed" approach — no auth).
 //
@@ -35,6 +39,9 @@ class YouTubeBackend : public QObject {
 public:
     explicit YouTubeBackend(const QString &appRoot, const QString &dataRoot,
                             QObject *parent = nullptr);
+    // Flushes a pending debounced sponsor save so no confirmed window is lost
+    // on app exit (the save timer coalesces idle-fill bursts into one write).
+    ~YouTubeBackend() override;
 
     // Synchronous subscriptions-file check for the menu view:
     // { ok: bool, error: QString, fileExists: bool, channelCount: int }
@@ -98,10 +105,21 @@ public:
     Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
                                       const QString &resolution);
 
-    // SponsorBlock: ask for the k-anonymous segment window for a video (cached
-    // hits re-emit sponsorReady synchronously). Also fired for every warmed row
-    // so list pages arrive with segments pre-cached before the first pick.
+    // SponsorBlock: ask for the k-anonymous segment window for a video. Cached
+    // hits re-emit sponsorReady synchronously; a transient failure is
+    // negative-cached for ytsb::kFailureTtlMs so a dead sponsor.ajay.app costs
+    // one request per video per window. Also fired for every prefetched row so
+    // list pages arrive with segments pre-cached before the first pick.
     Q_INVOKABLE void requestSponsorSegments(const QString &videoId);
+    // Idle fill driver — wired to IdleTracker in main.cpp. `idle` true starts a
+    // paced, low-priority walk of every known video id; any input activity stops
+    // it immediately so a foreground press never queues behind it.
+    void setIdleFillActive(bool idle);
+    void noteKnownVideoIds(const QStringList &videoIds);
+    // Launch-instant truth for the Player's yt-sponsor state log: was the
+    // segment window already on file when the EDL was frozen?
+    Q_INVOKABLE bool hasSponsorSegments(const QString &videoId);
+    Q_INVOKABLE bool sponsorFetchInFlight(const QString &videoId) const;
     // Wrap the fresh cached URL pair in an edl:// virtual timeline honoring the
     // per-category actions ({category: "off"|"mark"|"skip"}). Returns {videoEdl,
     // audioEdl} (empty string = use plain URL); empty map = no fresh pair yet.
@@ -172,6 +190,10 @@ signals:
     // launched on a cold cache: instead of paying ytdl_hook's re-resolve, it
     // waits (bounded) for this signal and then launches mpv on the direct pair.
     void playbackUrlReady(const QString &videoId);
+    // A permanent negative-cache result suppresses the Player's timed mpv/
+    // ytdl_hook fallback as well as backend resolver work. Reason is the
+    // canonical LOGIN_REQUIRED or UNPLAYABLE class, never a token/response body.
+    void playbackResolveFailed(const QString &videoId, const QString &reason);
     // Plan D: pairing card surfaced to the view (user code + where to type it),
     // the flow's outcome, and signed-in account lists (row model = the module's).
     void devicePairRequested(const QString &userCode, const QString &verificationUrl);
@@ -186,17 +208,58 @@ signals:
     // the Player gates its EDL-bearing launch on this + playbackUrlReady.
     void sponsorReady(const QString &videoId);
 
+    // Resolve telemetry for the Pi state log: which resolver served the pair
+    // (innertube / ytdlp / cache) and how long it took. Wired to
+    // AppCore::note_state in main.cpp; note_state is compiled out of release
+    // builds, so this costs a signal emission and nothing else.
+    void resolveTelemetry(const QString &videoId, const QString &source, qint64 ms);
+
 private:
     // SponsorBlock state: normalized segments per videoId (an empty entry is a
-    // confirmed "no segments" and suppresses re-fetch; transient failures stay
-    // out of the map so the next play retries), in-flight set, lazy file cache.
+    // confirmed "no segments" and suppresses re-fetch; transient failures live
+    // in m_sponsorFailedAt with a short TTL so the next play retries after it,
+    // in-flight set, lazy file cache.
     QHash<QString, QVector<yt::Segment>> m_sponsorCache;
+    QHash<QString, qint64> m_sponsorFailedAt;   // videoId -> transient-failure stamp (ms)
     QSet<QString> m_sponsorFetching;
     QHash<QString, qint64> m_sponsorStartMs;
+    // Recency index for the sponsor pair (MRU front). ONE index co-evicts
+    // m_sponsorCache + m_sponsorFetchedAt so their key sets stay identical;
+    // touched on cache hit as well as insert (bounded eviction).
+    QStringList m_sponsorLru;
     bool m_sponsorCacheLoaded = false;
+    // Debounced persistence: an idle-fill burst lands one answer per pace tick,
+    // and rewriting the (bounded) array per answer is redundant SD-card wear.
+    // A dirty flag + restarting single-shot timer coalesces the burst into one
+    // write; the destructor flushes so app exit never loses a confirmed window.
+    QTimer *m_sponsorSaveTimer = nullptr;
+    bool m_sponsorSaveDirty = false;
     QString sponsorCacheFilePath() const;
     void ensureSponsorCacheLoaded();
     void saveSponsorCache();
+    void markSponsorCacheDirty();
+
+    // Idle SponsorBlock fill. The Pi is on all day; while nobody is pressing
+    // keys we walk every video id we have ever seen and confirm its segment
+    // window, so a later play finds the EDL already on disk and never waits.
+    // Strictly lower priority than live navigation: the pump yields whenever a
+    // foreground warm queue or resolve is busy, and aborts on input activity.
+    QHash<QString, qint64> m_sponsorFetchedAt;  // videoId -> confirm stamp (ms)
+    QSet<QString>          m_knownVideoIds;     // every id the UI has surfaced
+    // Independent recency index for the known pool (MRU front); bounded
+    // separately from the sponsor pool, sized <= it.
+    QStringList            m_knownLru;
+    QStringList            m_idleQueue;
+    QTimer                *m_idleTimer = nullptr;
+    bool                   m_idleFilling = false;
+    QString knownIdsFilePath() const;
+    void ensureKnownIdsLoaded();
+    void saveKnownIds();
+    bool m_knownIdsLoaded = false;
+    void pumpIdleFill();
+    // Pure selection: which of `candidates` still need a window, newest-first
+    // input order preserved, capped. Split out so it is unit-testable.
+    QStringList idleCandidates(const QStringList &candidates, qint64 nowMs) const;
 
     struct ChannelEntry {
         QString      channelId;
@@ -231,6 +294,14 @@ private:
     // youtube_url_cache.json: { "videoId|formatSpec": { url, expire } }.
     QString      urlCacheFilePath() const;
     void         ensureUrlCacheLoaded();   // lazy one-time load + expiry prune
+    // Permanent resolve failures live beside the URL cache and share no key
+    // namespace with signed stream pairs.
+    QString      negativeCacheFilePath() const;
+    void         ensureNegativeCacheLoaded();
+    void         saveNegativeCache();
+    QString      storeNegativeCacheEntry(const QString &videoId, const QString &reason);
+    void         clearNegativeCacheEntry(const QString &videoId);
+    bool         negativeCacheBlocks(const QString &videoId);
     // Shared lookup for the video/audio pair a resolve stored under one key.
     QString      cachedUrlField(const QString &videoId, const QString &resolution,
                                 const QString &field);
@@ -281,6 +352,11 @@ private:
     QJsonObject m_urlCache;
     bool        m_urlCacheLoaded = false;
 
+    // youtube_resolve_failures.json: videoId -> {failedAt, reason}. Permanent
+    // failures cover every resolution and persist across app restarts.
+    QJsonObject m_negativeCache;
+    bool        m_negativeCacheLoaded = false;
+
     // Speculative warm-up state (issue #28 plan A round 4). m_resolveKeys
     // tracks every cache key with a live yt-dlp process (press-initiated or
     // warm), so warm passes and a Player never duplicate work on one video.
@@ -295,8 +371,17 @@ private:
     bool                hasFreshUrlPair(const QString &key) const;
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form
+    // One in-process Innertube resolver (overnight torture t_7ffb1fd1). Cheap
+    // enough to warm a whole list; the yt-dlp spawn stays as the fallback.
+    YtInnertubeResolver *m_itResolver = nullptr;
+    // Keys with a spent in-process attempt. A key gets exactly one Innertube
+    // try; after that the yt-dlp fallback owns it, so a failed resolve never
+    // loops and never runs two resolvers at once.
+    QSet<QString> m_itTried;
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
-                                         const QString &fmt, const QString &key);
+                                          const QString &key);
+    void                launchYtdlpResolve(const QString &videoId, const QString &resolution,
+                                            const QString &key);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
@@ -333,9 +418,29 @@ private:
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
     static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
     static constexpr int    kUrlCacheMaxEntries = 80;
-    static constexpr int    kYtdlResolveTimeoutMs = 30000;
-    static constexpr int    kWarmListMax  = 12;  // front entries warmed per list view
-    static constexpr int    kWarmQueueMax = 24;  // backlog cap across rapid browsing
+    static constexpr int    kYtdlResolveTimeoutMs = 30000; // outer bound on the fallback spawn
+    // The in-process resolver is ~20x cheaper than a yt-dlp spawn, so one warm
+    // pass can cover a whole list page instead of the front dozen rows.
+    static constexpr int    kWarmListMax  = 50;  // entries warmed per list view
+    static constexpr int    kWarmQueueMax = 64;  // backlog cap across rapid browsing
+    // Segment prefetch is cheaper than a URL resolve and covers the whole list
+    // page, not just the warmed front; the cap only bounds pathological lists —
+    // the view's focused-row prefetch covers anything past it while scrolling.
+    static constexpr int    kWarmSponsorPrefetchMax = 50;
+    // Idle fill: one request per tick, paced so the community SponsorBlock
+    // service is never hammered, and capped per idle window so a long idle
+    // spell cannot turn into an unbounded crawl.
+    static constexpr int    kIdleFillMax    = 400;
+    static constexpr int    kIdleFillPaceMs = 300;
+    // Longer than the idle pace so a whole burst coalesces into one bounded
+    // rewrite; a lone foreground answer still persists within half a second.
+    static constexpr int    kSponsorSaveDebounceMs = 500;
+    // Bounded eviction: hard LRU caps on the ID-keyed state, layered on
+    // top of the existing success/failure TTLs (which are unchanged). Known is
+    // sized <= sponsor so idle fill reaches quiescence instead of churning.
+    static constexpr int    kSponsorCacheMaxEntries    = 512;
+    static constexpr int    kKnownVideoIdMaxEntries    = 512;
+    static constexpr int    kSponsorFailedAtMaxEntries = 512;
 
     // Wave-capped RSS refresh queue: the signed-in feed union touches every
     // subscribed channel (~311 RSS GETs); issuing them all at once blows up

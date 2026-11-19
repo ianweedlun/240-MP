@@ -99,8 +99,11 @@ FocusScope {
     }
 
     function warmUpItems() {
+        // Whole list: the backend warms URL pairs for a whole page (bounded)
+        // and prefetches segment windows for every id (bounded). Picking any
+        // row then finds both its pair and its EDL already on file.
         var ids = []
-        for (var i = 0; i < items.length && ids.length < 12; ++i) {
+        for (var i = 0; i < items.length; ++i) {
             var it = items[i]
             if (it && it.videoId)
                 ids.push(it.videoId)
@@ -310,6 +313,22 @@ FocusScope {
         height: root.sh * 0.525
         clip: true
         focus: true
+
+        // Focused-row segment prefetch: the highlighted row is the one about to
+        // be played, so ask for its window even when the bulk prefetch cap left
+        // it out (long playlists, fast scrolling).
+        onCurrentIndexChanged: {
+            var it = itemsRoot.items[itemList.currentIndex]
+            if (it && it.videoId) {
+                youtubeBackend.requestSponsorSegments(it.videoId)
+                // The highlighted row is the one about to be played: warm its
+                // URL pair too, so a cold pick can still take the direct path.
+                // Idempotent — resolvePlayback no-ops when a pair is fresh or
+                // the row is already queued/in flight.
+                var res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+                youtubeBackend.resolvePlayback(it.videoId, res)
+            }
+        }
 
         delegate: Item {
             width: itemList.width

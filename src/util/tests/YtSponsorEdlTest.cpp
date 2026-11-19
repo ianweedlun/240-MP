@@ -43,6 +43,7 @@ private slots:
     void buildEdlMarkBoundariesCarryTitles();
     void buildEdlSkipAndMarkMix();
     void buildEdlEmptyWhenNothingActive();
+    void downvotedSegmentsRejectedLockedKept();
 };
 
 void YtSponsorEdlTest::collisionFilterKeepsExactVideoUidOnly()
@@ -146,6 +147,45 @@ void YtSponsorEdlTest::buildEdlEmptyWhenNothingActive()
 {
     const QString edl = yt::buildEdl(QStringLiteral("https://x/a"), {}, {});
     QVERIFY(edl.isEmpty());
+}
+
+// The hash-prefix endpoint returns the bucket UNFILTERED: the OpenAPI schema
+// gives `votes` a minimum of -2, so community-downvoted submissions arrive
+// alongside good ones. The direct videoID endpoint applies a vote threshold
+// server-side; the prefix endpoint does not, so the client must. Honoring a
+// downvoted segment cuts video at boundaries the community rejected.
+void YtSponsorEdlTest::downvotedSegmentsRejectedLockedKept()
+{
+    auto row = [](double a, double b, int votes, int locked) {
+        QJsonObject o;
+        QJsonArray r; r.append(a); r.append(b);
+        o.insert(QStringLiteral("segment"), r);
+        o.insert(QStringLiteral("category"), QStringLiteral("sponsor"));
+        o.insert(QStringLiteral("actionType"), QStringLiteral("skip"));
+        o.insert(QStringLiteral("votes"), votes);
+        o.insert(QStringLiteral("locked"), locked);
+        return o;
+    };
+    QJsonArray segs;
+    segs.append(row(10.0, 20.0, -2, 0));   // rejected by the community
+    segs.append(row(25.0, 28.0, -1, 0));   // net-negative: also rejected
+    segs.append(row(30.0, 40.0,  0, 1));   // locked: authoritative, keep
+    segs.append(row(50.0, 60.0,  3, 0));   // upvoted, keep
+    segs.append(row(70.0, 80.0, -1, 1));   // locked outranks a negative score
+
+    QJsonObject group;
+    group.insert(QStringLiteral("videoID"), QStringLiteral("vid"));
+    group.insert(QStringLiteral("segments"), segs);
+    QJsonArray payload; payload.append(group);
+
+    const QVector<yt::Segment> got =
+        yt::sponsorSegmentsFromJson(payload, QStringLiteral("vid"));
+
+    QCOMPARE(got.size(), 3);
+    QCOMPARE(got.at(0).start, 30.0);
+    QCOMPARE(got.at(1).start, 50.0);
+    QCOMPARE(got.at(2).start, 70.0);
+    QVERIFY(got.at(2).locked);
 }
 
 QTEST_MAIN(YtSponsorEdlTest)

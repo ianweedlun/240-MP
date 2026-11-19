@@ -82,13 +82,17 @@ bool IdleTracker::eventFilter(QObject *obj, QEvent *event)
 
 void IdleTracker::tick()
 {
-    if (m_active || !m_enabled || blocked())
+    if (m_active || blocked())
         return;
 
+    // Count idle time even when the screensaver is switched OFF. `enabled`
+    // gates only the screensaver's `active` flag; background work (the YouTube
+    // idle SponsorBlock fill) needs to know the box is idle regardless of
+    // whether the owner wants a screensaver. Nothing else reads idleSeconds.
     ++m_idleSeconds;
     emit idleSecondsChanged();
 
-    if (m_idleSeconds >= m_threshold) {
+    if (m_enabled && m_idleSeconds >= m_threshold) {
         m_active = true;
         emit activeChanged();
     }
