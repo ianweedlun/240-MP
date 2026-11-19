@@ -227,6 +227,28 @@ if(APPLE)
         DESTINATION "240mp.app/Contents/Resources"
         COMPONENT Runtime)
 
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "240mp.app/Contents/Resources"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "240mp.app/Contents/Resources/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
+
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"
         "${CMAKE_SOURCE_DIR}/modules"
@@ -253,6 +275,28 @@ else()
     install(FILES "${CMAKE_SOURCE_DIR}/Main.qml"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
         COMPONENT Runtime)
+
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
 
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"
@@ -417,6 +461,36 @@ if(BUILD_TESTS)
         target_compile_options(appcore-reregistration-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
+
+    # Raw keyboard/remote taps must be visible in the TELEMETRY state log too.
+    # Uses the real InputManager event filter and AppCore log sink; no QML,
+    # network, audio hardware, or physical input device is driven.
+    add_executable(input-manager-telemetry-tests
+        src/input/InputManager.cpp
+        src/AppCore.cpp
+        src/audio/VolumeManager.cpp
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/InputManagerTelemetryTest.cpp)
+    set_target_properties(input-manager-telemetry-tests PROPERTIES AUTOMOC ON)
+    target_compile_definitions(input-manager-telemetry-tests PRIVATE
+        APP_TELEMETRY MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(input-manager-telemetry-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test SDL2::SDL2
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(input-manager-telemetry-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(input-manager-telemetry-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(input-manager-telemetry-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME input-manager-telemetry COMMAND input-manager-telemetry-tests)
 
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
@@ -760,6 +834,17 @@ if(BUILD_TESTS)
     target_compile_definitions(local-files-empty-path-smoke PRIVATE
         MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME local-files-empty-path-smoke COMMAND local-files-empty-path-smoke)
+
+    # YouTube primary lists: a real Down key must emit a named select line.
+    # Runs on the x86/macOS QML lanes; arm64 excludes it with the other Effects
+    # smokes because distro Qt 6.4 has no QtQuick.Effects module.
+    add_executable(youtube-telemetry-smoke src/tests/youtube-telemetry-smoke-test.cpp)
+    set_target_properties(youtube-telemetry-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-telemetry-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-telemetry-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-telemetry-smoke COMMAND youtube-telemetry-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
