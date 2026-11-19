@@ -1,4 +1,5 @@
 #include "JellyfinBackend.h"
+#include "../../util/ConfigFile.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -124,23 +125,13 @@ void JellyfinBackend::clearAuthState() {
 // ---------------------------------------------------------------------------
 
 QJsonObject JellyfinBackend::loadConfig() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    return {};
+    // CFG-01: shared policy reader (missing != corrupt; loud on damage).
+    return cfgfile::load(m_dataRoot).doc;
 }
 
-void JellyfinBackend::saveConfig(const QJsonObject &cfg) const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[JellyfinBackend] Could not write config.json: %s", qPrintable(f.errorString()));
-        return;
-    }
-    f.write(QJsonDocument(cfg).toJson(QJsonDocument::Indented));
+bool JellyfinBackend::saveConfig(const QJsonObject &cfg) const {
+    // CFG-01: guarded atomic write (was: silent open failure + unchecked write).
+    return cfgfile::save(m_dataRoot, cfg);
 }
 
 QJsonObject JellyfinBackend::moduleConfig() const {
