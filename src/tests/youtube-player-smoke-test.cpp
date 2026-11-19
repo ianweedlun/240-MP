@@ -433,7 +433,14 @@ int main(int argc, char **argv) {
                                       QStringLiteral("VID6"), repoRoot, &loadError);
         check(!loadError && reentry != nullptr, "case6: re-entry Player.qml loads");
         if (!reentry) return 1;
-        QTest::qWait(100);
+        // Poll for the async re-entry fresh play instead of a fixed wait: on
+        // slower runners (macOS intel) the auto-start lands after 100 ms, which
+        // flaked the plays[1] assertion. Same idiom as the fresh-launch poll.
+        int reentryWaitMs = 0;
+        while (mpv.plays.size() < 2 && reentryWaitMs < 1000) {
+            QTest::qWait(20);
+            reentryWaitMs += 20;
+        }
         check(!QQmlProperty::read(reentry, "overlayVisible").toBool(),
               "case6: re-entry does not re-offer the stale marker");
         check(mpv.plays.size() == 2 && mpv.plays[1].startSeconds == 0.0f,
