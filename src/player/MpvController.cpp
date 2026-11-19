@@ -431,6 +431,35 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         if (!out.isEmpty())
             qWarning("[mpv] %s", out.trimmed().constData());
     });
+    // FailedToStart is the one process error Qt does NOT follow with finished():
+    // locate() succeeded but the spawn itself failed (exec-format error, missing
+    // libs, ENOENT race, non-executable file). Without this handler the Player
+    // view waits for a playbackEnded that never comes (issue #110). Mirror the
+    // missing-bin / handoff-refusal bail-outs above: tear down, then a deferred
+    // synthetic end with reason "failed" — the views already branch on it.
+    // Other error kinds (Crashed, ...) still deliver finished() and stay on the
+    // normal onProcessFinished path.
+    connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError err) {
+        if (err != QProcess::FailedToStart) return;
+        qWarning("[MpvController] mpv failed to start: %s — synthetic playbackEnded(failed)",
+                 qPrintable(m_process->errorString()));
+        m_connectTimer->stop();
+        m_watchdogTimer->stop();
+        m_ipc->abort();
+        QFile::remove(m_socketPath);
+        if (m_headlessMode) {
+            // acquire() may have handed us the display before start() failed.
+            // mpv never ran, so there is no pending KMS commit to defer for —
+            // releaseNow is a no-op when we don't hold the screen.
+            if (m_handoff) m_handoff->releaseNow(QLatin1String(kHandoffOwner));
+            m_headlessMode = false;
+        }
+        m_process->deleteLater();
+        m_process = nullptr;
+        QTimer::singleShot(0, this, [this]() {
+            emit playbackEnded(0, 0, QStringLiteral("failed"));
+        });
+    });
 
     m_headlessMode = DisplayHandoff::isHeadless();
     if (m_headlessMode) {

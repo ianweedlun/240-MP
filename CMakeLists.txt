@@ -891,6 +891,38 @@ if(BUILD_TESTS)
     # qputenv it in main; this one cannot). Headless CI lanes have no display.
     set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+    # R2 follow-up (issue #110): FailedToStart after a successful locate() must
+    # emit a synthetic playbackEnded("failed") instead of leaving the Player
+    # view waiting forever. Forces the spawn failure through the REAL locator
+    # (private PATH dir holding an executable-but-invalid "mpv" -> ENOEXEC).
+    # The core cases need no mpv installed, so every CI lane runs the gate for
+    # real; only the relaunch-after-failure case QSKIPs without mpv/ffmpeg.
+    add_executable(mpv-failedtostart-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvFailedToStartTest.cpp)
+    set_target_properties(mpv-failedtostart-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-failedtostart-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-failedtostart-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-failedtostart-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-failedtostart-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-failedtostart-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-failedtostart COMMAND mpv-failedtostart-tests)
+    # Same QTEST_MAIN/offscreen constraint as mpv-quit-intent above.
+    set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 endif()
 
 include(CPack)

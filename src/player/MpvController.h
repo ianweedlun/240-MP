@@ -96,7 +96,8 @@ signals:
     //   "stopped" — user quit/stopped before the end (also the safe default for a
     //               crash/kill with no end-file event).
     //   "failed"  — mpv exited with an error (code 2 — file could not be played;
-    //               Up to the module as to when/how to use; for example Plex retries when transcoding).
+    //               or the process failed to start at all). Up to the module as to
+    //               when/how to use; for example Plex retries when transcoding.
     // A single signal (rather than one per reason) is deliberate: a Player view
     // connects one handler and branches on `reason`, so it can never silently drop
     // a case the way an unhandled per-reason signal would.
