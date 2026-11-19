@@ -4,6 +4,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: Innertube URLs now actually play (VISIONOS + page-derived visitorData)
+- The resolver used the IOS client. Its googlevideo URLs answer a **bounded** `Range` (`bytes=0-1000` → 206) but **403** the open-ended `Range: bytes=0-` that ffmpeg/mpv actually sends, so every real playback failed with `No video or audio streams selected` while the spike's curl probe passed. The client is now **VISIONOS** (yt-dlp's JS-less default, client id 101), whose URLs return 200 bare and 206 open-ended. Client fields are copied from yt-dlp's `youtube/_base.py`, not guessed.
+- VISIONOS is bot-walled (`LOGIN_REQUIRED`) unless `visitorData` came from a real YouTube page. The vendored `generateVisitorData()` is synthetic and rejected, so the resolver fetches it once per process from youtube.com, asynchronously, inside the existing 4 s timeout.
+- A cached URL that fails to **play** now marks that key's in-process attempt spent, so the retry falls back to yt-dlp instead of looping resolve → 403 → evict → resolve on the same client.
+- New lab gate `build-test/yt-resolver-probe <videoId>`: resolves through the real `YtInnertubeResolver` and requires **mpv to decode both streams** (`Starting playback`, h264 **and** aac). Verified two-sided — VISIONOS passes, IOS fails with 403/exit 2. A curl range probe is a screen, never the gate.
+- Pi RC measurement: press → first frame **1407 ms**, `VO: [drm] 854x480`, `AO: [alsa] 44100Hz stereo`, **zero 403s** across the session.
+
+### Added — YouTube: idle SponsorBlock cache fill
+- The Pi is on all day, so segment windows are confirmed while nobody is pressing keys. `IdleTracker::activeChanged` starts a paced walk of every video id the UI has surfaced (`youtube_known_ids.json`) plus watch history; any input activity stops it immediately.
+- Strictly lower priority than live navigation: the pump yields whenever a foreground warm queue or resolve is busy. Foreground sponsor fetches measured 594–705 ms against 310–400 ms for a bare request purely because of connection contention, so a background filler that competed would make presses slower.
+- Paced at one request per 300 ms and capped at 400 per idle window — `sponsor.ajay.app` is a free community service, not a crawl target.
+- Confirmed windows now carry a `fetchedAt` stamp and a **14-day success TTL**. Previously any cached entry was served forever, so a durable cache would keep skipping to boundaries submitted months ago. A refresh keeps serving the old segments until the new answer lands. Entries predating the stamp are stamped at load, so an upgraded cache ages out gradually instead of refetching everything on first boot.
+- Selection is a pure, unit-tested function (`ytsb::idleSelect`): dedupe, input order, cap, and skip rules for fresh/in-flight/recently-failed. `yt-sponsor-ttl` grows 7 → 11 tests.
+- Intent: a play finds its EDL already on disk, so SponsorBlock skipping works on the **first** play with no launch wait and no runtime seeking — keeping the seamless `edl://` cut rather than adopting SmartTube/Red's visible seek.
+
 ### Added — build(youtube): vendor innertube-qt, verdigris and expected-lite (no-network)
 - `third_party/innertube-qt` (innertube-qt @ 7252590) with verdigris @ 8abfb8d and expected-lite v0.8.0/182165b vendored into `third_party/` for offline builds; `third_party/README.md` documents upstream SHAs, licences and patches.
 - The vendored tree guarantees a no-network CMake configure; `FetchContent_Declare` is removed and no `_deps/` is created.

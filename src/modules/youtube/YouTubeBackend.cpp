@@ -885,6 +885,13 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
                     continue;
                 m_sponsorCache.insert(vid, yt::segmentsFromRows(
                     o.value(QStringLiteral("segments")).toArray()));
+                // Entries written before the stamp existed are stamped NOW, so
+                // an upgraded cache ages out gradually rather than refetching
+                // every video on first boot.
+                const qint64 stamp = static_cast<qint64>(
+                    o.value(QStringLiteral("fetchedAt")).toDouble(0));
+                m_sponsorFetchedAt.insert(vid, stamp > 0
+                    ? stamp : QDateTime::currentMSecsSinceEpoch());
             }
         }
     }
@@ -908,11 +915,123 @@ void YouTubeBackend::saveSponsorCache()
         QJsonObject e;
         e.insert(QStringLiteral("videoId"), it.key());
         e.insert(QStringLiteral("segments"), rows);
+        e.insert(QStringLiteral("fetchedAt"), double(m_sponsorFetchedAt.value(it.key())));
         arr.append(e);
     }
     QFile f(sponsorCacheFilePath());
     if (f.open(QIODevice::WriteOnly))
         f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+// ---------------------------------------------------------------------------
+// Idle SponsorBlock fill
+// ---------------------------------------------------------------------------
+
+QString YouTubeBackend::knownIdsFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_known_ids.json");
+}
+
+void YouTubeBackend::ensureKnownIdsLoaded()
+{
+    if (m_knownIdsLoaded)
+        return;
+    m_knownIdsLoaded = true;
+    QFile f(knownIdsFilePath());
+    if (f.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+        for (const QJsonValue &v : doc.array()) {
+            const QString id = v.toString();
+            if (!id.isEmpty())
+                m_knownVideoIds.insert(id);
+        }
+    }
+    // Watch history is a second source: rewatches are the most likely plays.
+    QFile h(m_dataRoot + QStringLiteral("/youtube_history.json"));
+    if (h.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(h.readAll());
+        const QJsonObject o = doc.object();
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it)
+            if (!it.key().isEmpty())
+                m_knownVideoIds.insert(it.key());
+    }
+}
+
+void YouTubeBackend::saveKnownIds()
+{
+    QJsonArray arr;
+    for (const QString &id : m_knownVideoIds)
+        arr.append(id);
+    QFile f(knownIdsFilePath());
+    if (f.open(QIODevice::WriteOnly))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+void YouTubeBackend::noteKnownVideoIds(const QStringList &videoIds)
+{
+    ensureKnownIdsLoaded();
+    bool changed = false;
+    for (const QString &id : videoIds) {
+        if (id.isEmpty() || m_knownVideoIds.contains(id))
+            continue;
+        m_knownVideoIds.insert(id);
+        changed = true;
+    }
+    if (changed)
+        saveKnownIds();
+}
+
+QStringList YouTubeBackend::idleCandidates(const QStringList &candidates,
+                                           qint64 nowMs) const
+{
+    QSet<QString> cached;
+    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it)
+        cached.insert(it.key());
+    return ytsb::idleSelect(candidates, m_sponsorFetchedAt, cached,
+                            m_sponsorFetching, m_sponsorFailedAt,
+                            nowMs, kIdleFillMax);
+}
+
+void YouTubeBackend::setIdleFillActive(bool idle)
+{
+    if (!idle) {
+        m_idleFilling = false;
+        m_idleQueue.clear();
+        if (m_idleTimer)
+            m_idleTimer->stop();
+        return;
+    }
+    if (m_idleFilling)
+        return;
+    ensureSponsorCacheLoaded();
+    ensureKnownIdsLoaded();
+    m_idleQueue = idleCandidates(m_knownVideoIds.values(),
+                                 QDateTime::currentMSecsSinceEpoch());
+    if (m_idleQueue.isEmpty())
+        return;
+    m_idleFilling = true;
+    if (!m_idleTimer) {
+        m_idleTimer = new QTimer(this);
+        m_idleTimer->setInterval(kIdleFillPaceMs);
+        connect(m_idleTimer, &QTimer::timeout, this, &YouTubeBackend::pumpIdleFill);
+    }
+    m_idleTimer->start();
+    qWarning("[Youtube] idle-fill start queued=%d", int(m_idleQueue.size()));
+}
+
+void YouTubeBackend::pumpIdleFill()
+{
+    if (!m_idleFilling || m_idleQueue.isEmpty()) {
+        setIdleFillActive(false);
+        return;
+    }
+    // Yield to the foreground. A live warm queue or an in-flight resolve owns
+    // the connection pool; competing with it is what made foreground sponsor
+    // fetches ~2x slower than a bare request. Re-check on the next tick.
+    if (!m_warmQueue.isEmpty() || (m_itResolver && m_itResolver->inFlight()))
+        return;
+    const QString id = m_idleQueue.takeFirst();
+    requestSponsorSegments(id);
 }
 
 // k-anonymous window fetch (Red doctrine): only the first 4 hex chars of the
@@ -930,7 +1049,12 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     ytsb::pruneFailures(m_sponsorFailedAt, now);
     const bool failureBlocks = ytsb::failureActive(m_sponsorFailedAt.value(videoId), now);
-    switch (ytsb::decideFetch(m_sponsorCache.contains(videoId),
+    // A stale window is refetched, but the old segments stay in the cache and
+    // keep serving playback until the new answer lands — a refresh never
+    // removes skipping from a video that already had it.
+    const bool fresh = m_sponsorCache.contains(videoId)
+                       && !ytsb::successStale(m_sponsorFetchedAt.value(videoId), now);
+    switch (ytsb::decideFetch(fresh,
                               m_sponsorFetching.contains(videoId),
                               failureBlocks)) {
     case ytsb::FetchDecision::ServeCache:
@@ -977,6 +1101,7 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
             doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
                           : QVector<yt::Segment>{};
         m_sponsorCache.insert(videoId, segs);
+        m_sponsorFetchedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
         m_sponsorFailedAt.remove(videoId); // a real answer clears any stale stamp
         saveSponsorCache();
         m_sponsorFetching.remove(videoId);
@@ -1351,6 +1476,7 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
     // list cannot fan out without limit — the view's focused-row prefetch
     // covers anything past the cap as the user scrolls.
     int sponsorQueued = 0;
+    noteKnownVideoIds(videoIds);
     for (const QString &id : videoIds) {
         if (sponsorQueued >= kWarmSponsorPrefetchMax)
             break;

@@ -259,6 +259,20 @@ int main(int argc, char *argv[]) {
                                                 .arg(videoId, source).arg(ms));
                      });
 
+    // Idle SponsorBlock fill: the Pi is on all day, so confirm segment windows
+    // while nobody is pressing keys. Driven by idleSeconds, NOT by the
+    // screensaver's `active`/`enabled` — the owner may run with the screensaver
+    // OFF and still want the cache filled. Any input activity stops it at once,
+    // so a foreground press never queues behind a background fetch.
+    constexpr int kIdleFillAfterSec = 60;
+    QObject::connect(&idleTracker, &IdleTracker::idleSecondsChanged, &youtubeBackend,
+                     [&idleTracker, &youtubeBackend]() {
+                         if (idleTracker.idleSeconds() >= kIdleFillAfterSec)
+                             youtubeBackend.setIdleFillActive(true);
+                     });
+    QObject::connect(&idleTracker, &IdleTracker::activityDetected, &youtubeBackend,
+                     [&youtubeBackend]() { youtubeBackend.setIdleFillActive(false); });
+
     ctx->setContextProperty("idleTracker",   &idleTracker);
     ctx->setContextProperty("appCore",       &appCore);
     ctx->setContextProperty("mpvController", &mpvController);

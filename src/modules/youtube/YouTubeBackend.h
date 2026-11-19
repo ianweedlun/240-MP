@@ -10,6 +10,7 @@
 #include <QVariantMap>
 #include <QJsonObject>
 #include <QQueue>
+#include <QTimer>
 #include <QNetworkAccessManager>
 #include "../../util/YtSponsorEdl.h"
 #include "../../util/YtSponsorTtl.h"
@@ -107,6 +108,11 @@ public:
     // one request per video per window. Also fired for every prefetched row so
     // list pages arrive with segments pre-cached before the first pick.
     Q_INVOKABLE void requestSponsorSegments(const QString &videoId);
+    // Idle fill driver — wired to IdleTracker in main.cpp. `idle` true starts a
+    // paced, low-priority walk of every known video id; any input activity stops
+    // it immediately so a foreground press never queues behind it.
+    void setIdleFillActive(bool idle);
+    void noteKnownVideoIds(const QStringList &videoIds);
     // Launch-instant truth for the Player's yt-sponsor state log: was the
     // segment window already on file when the EDL was frozen?
     Q_INVOKABLE bool hasSponsorSegments(const QString &videoId);
@@ -214,6 +220,25 @@ private:
     QString sponsorCacheFilePath() const;
     void ensureSponsorCacheLoaded();
     void saveSponsorCache();
+
+    // Idle SponsorBlock fill. The Pi is on all day; while nobody is pressing
+    // keys we walk every video id we have ever seen and confirm its segment
+    // window, so a later play finds the EDL already on disk and never waits.
+    // Strictly lower priority than live navigation: the pump yields whenever a
+    // foreground warm queue or resolve is busy, and aborts on input activity.
+    QHash<QString, qint64> m_sponsorFetchedAt;  // videoId -> confirm stamp (ms)
+    QSet<QString>          m_knownVideoIds;     // every id the UI has surfaced
+    QStringList            m_idleQueue;
+    QTimer                *m_idleTimer = nullptr;
+    bool                   m_idleFilling = false;
+    QString knownIdsFilePath() const;
+    void ensureKnownIdsLoaded();
+    void saveKnownIds();
+    bool m_knownIdsLoaded = false;
+    void pumpIdleFill();
+    // Pure selection: which of `candidates` still need a window, newest-first
+    // input order preserved, capped. Split out so it is unit-testable.
+    QStringList idleCandidates(const QStringList &candidates, qint64 nowMs) const;
 
     struct ChannelEntry {
         QString      channelId;
@@ -368,6 +393,11 @@ private:
     // page, not just the warmed front; the cap only bounds pathological lists —
     // the view's focused-row prefetch covers anything past it while scrolling.
     static constexpr int    kWarmSponsorPrefetchMax = 50;
+    // Idle fill: one request per tick, paced so the community SponsorBlock
+    // service is never hammered, and capped per idle window so a long idle
+    // spell cannot turn into an unbounded crawl.
+    static constexpr int    kIdleFillMax    = 400;
+    static constexpr int    kIdleFillPaceMs = 300;
 
     // Wave-capped RSS refresh queue: the signed-in feed union touches every
     // subscribed channel (~311 RSS GETs); issuing them all at once blows up

@@ -12,7 +12,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <QHash>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QtGlobal>
 
 namespace ytsb {
@@ -21,6 +23,23 @@ namespace ytsb {
 // single failure; short enough that a real outage does not pin a video's
 // segments away for the rest of the session.
 inline constexpr qint64 kFailureTtlMs = 10 * 60 * 1000;
+
+// A confirmed window is durable, but not eternal: new segments get submitted
+// to SponsorBlock after a video has been cached. Without a success TTL an
+// idle-filled cache would keep skipping to boundaries submitted months ago.
+// Two weeks is long enough that a normal viewing habit never refetches, short
+// enough that a durable cache self-heals.
+inline constexpr qint64 kSuccessTtlMs = 14LL * 24 * 60 * 60 * 1000;
+
+// True when a window fetched at `fetchedAtMs` should be refreshed. A stamp of
+// 0 (entry predates the stamp, or was never fetched) is NOT stale: stamping
+// happens at load, so an upgraded cache ages out gradually instead of
+// triggering a refetch storm on first boot.
+inline bool successStale(qint64 fetchedAtMs, qint64 nowMs,
+                         qint64 ttlMs = kSuccessTtlMs)
+{
+    return fetchedAtMs > 0 && (nowMs - fetchedAtMs) >= ttlMs;
+}
 
 // True while a failure stamped at `failedAtMs` is still inside its window.
 // A stamp of 0 (absent / default-constructed) never blocks.
@@ -65,6 +84,37 @@ inline FetchDecision decideFetch(bool cached, bool inFlight, bool failureBlocks)
     if (failureBlocks)
         return FetchDecision::Suppressed;
     return FetchDecision::Fetch;
+}
+
+// Idle-fill selection: which candidate ids still need a window confirmed.
+// Pure so the ordering, dedupe, cap and skip rules are unit-testable without a
+// backend or a network. Input order is preserved (callers pass newest-first).
+inline QStringList idleSelect(const QStringList &candidates,
+                              const QHash<QString, qint64> &fetchedAt,
+                              const QSet<QString> &cached,
+                              const QSet<QString> &fetching,
+                              const QHash<QString, qint64> &failedAt,
+                              qint64 nowMs, int cap,
+                              qint64 successTtlMs = kSuccessTtlMs,
+                              qint64 failureTtlMs = kFailureTtlMs)
+{
+    QStringList out;
+    QSet<QString> seen;
+    for (const QString &id : candidates) {
+        if (id.isEmpty() || seen.contains(id))
+            continue;
+        seen.insert(id);
+        if (fetching.contains(id))
+            continue;
+        if (cached.contains(id) && !successStale(fetchedAt.value(id), nowMs, successTtlMs))
+            continue;
+        if (failureActive(failedAt.value(id), nowMs, failureTtlMs))
+            continue;
+        out.append(id);
+        if (out.size() >= cap)
+            break;
+    }
+    return out;
 }
 
 } // namespace ytsb
