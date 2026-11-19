@@ -127,6 +127,22 @@ FocusScope {
     }
 
     Text {
+        id: attribution
+        text: 'Uses SponsorBlock data from <a href="https://sponsor.ajay.app/">sponsor.ajay.app</a><br><a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>'
+        textFormat: Text.RichText
+        color: root.tertiaryColor
+        linkColor: root.accentColor
+        onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+        anchors.bottom: footer.top
+        anchors.bottomMargin: root.sh * 0.0125
+        anchors.left: parent.left
+        anchors.leftMargin: root.sw * 0.125
+        width: root.sw * 0.75
+        font.family: root.globalFont
+        font.pixelSize: root.sh * 0.0333333
+    }
+
+    Text {
         id: footer
         text: root.hints.back + ":BACK " + (root.hints.left || "LEFT") + "/" + (root.hints.right || "RIGHT") + ":SET"
         color: root.tertiaryColor

@@ -225,6 +225,28 @@ if(APPLE)
         DESTINATION "240mp.app/Contents/Resources"
         COMPONENT Runtime)
 
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "240mp.app/Contents/Resources"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "240mp.app/Contents/Resources/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
+
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"
         "${CMAKE_SOURCE_DIR}/modules"
@@ -251,6 +273,28 @@ else()
     install(FILES "${CMAKE_SOURCE_DIR}/Main.qml"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
         COMPONENT Runtime)
+
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
 
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"

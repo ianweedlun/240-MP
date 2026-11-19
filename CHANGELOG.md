@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — SponsorBlock attribution and licence texts in packaged artifacts
+- Added the SponsorBlock attribution and CC BY-NC-SA 4.0 licence link to `THANKS.md`, the README credits, and the YouTube SponsorBlock settings screen.
+- Linux and macOS install rules now ship the root `LICENSE` and `THANKS.md`. Guarded install rules also ship the innertube-qt, verdigris, and expected-lite licence texts whenever those vendored sources are present, preserving their separate paths so same-named files cannot overwrite each other.
+
 ### Added — CI: burst-branch RC lane for overnight validation
 - `pi-rc.yml` now has a `workflow_dispatch` `mode` input: `build-only` (default), `rc`, and `restore`. `rc` builds a `burst/**` ref, deploys it to the Pi as an RC, and writes a `burst:` owner marker plus a saved beta restore rev. `restore` rebuilds that saved rev and clears the RC markers, or no-ops safely if beta has advanced since the RC went on.
 - The PR lane and burst lane share a `pi-rc-deploy` concurrency group, so only one RC deploy can run at a time — the Pi never sees two RCs. A burst RC cannot overwrite another burst RC, and a PR close/restore will not mistake a burst marker for its own (`pr-N`).
