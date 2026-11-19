@@ -16,6 +16,7 @@
 #include <QProcessEnvironment>
 #include <QTest>
 #include <QDir>
+#include <QFileInfo>
 #include "AppCore.h"
 #include "player/MpvController.h"
 
@@ -122,7 +123,10 @@ private Q_SLOTS:
             MpvController over(QString::fromUtf8(MP240_REPO_ROOT), overDir, &core3, nullptr);
             QVERIFY(over.socketPath().isEmpty());
             QVERIFY(!over.logFilePath().isEmpty());
-            QVERIFY(over.logFilePath().startsWith(overDir));
+            // macOS QDir::tempPath() resolves /tmp -> /private/tmp: compare
+            // against the canonical effective temp dir, not the raw env string.
+            QCOMPARE(QDir::tempPath(), QFileInfo(overDir).canonicalFilePath());
+            QVERIFY(over.logFilePath().startsWith(QDir::tempPath()));
         }
         // The guard restores the original TMPDIR at function exit. Prove the
         // disabled state is per-instance, not sticky: a fresh controller under
@@ -152,7 +156,8 @@ private Q_SLOTS:
             MpvController mpv(QString::fromUtf8(MP240_REPO_ROOT), data.path(), &core, nullptr);
             QVERIFY(mpv.socketPath().isEmpty());
             QVERIFY(!mpv.logFilePath().isEmpty());
-            QVERIFY(mpv.logFilePath().startsWith(padded));
+            QCOMPARE(QDir::tempPath(), QFileInfo(padded).canonicalFilePath());
+            QVERIFY(mpv.logFilePath().startsWith(QDir::tempPath()));
         }
     }
 };
