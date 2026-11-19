@@ -392,23 +392,66 @@ void AppCore::invoke_module_action(const QString &moduleId, const QString &slotN
                  qPrintable(slotName), qPrintable(moduleId));
 }
 
+// Sever exactly the three introspected pairs registerModule() wires between a
+// backend and its receiver. Targeted index-based disconnect on purpose: a
+// blanket QObject::disconnect(backend, nullptr, receiver, nullptr) would also
+// cut connections made elsewhere (e.g. the YouTube telemetry lambda in
+// main.cpp). Also removes every stacked copy of a pair, so a replace cleans
+// up duplicates accumulated by pre-idempotent registrations.
+static void disconnectRegistrationSignals(QObject *backend, QObject *receiver)
+{
+    const QMetaObject *bmo = backend->metaObject();
+    const QMetaObject *rmo = receiver->metaObject();
+    int sig = bmo->indexOfSignal(
+        QMetaObject::normalizedSignature("dynamicOptionsReady(QString,QVariant)"));
+    if (sig >= 0) {
+        int slot = rmo->indexOfSlot(
+            QMetaObject::normalizedSignature("onBackendDynamicOptions(QString,QVariant)"));
+        if (slot >= 0)
+            QMetaObject::disconnect(backend, sig, receiver, slot);
+    }
+    sig = bmo->indexOfSignal(QMetaObject::normalizedSignature("authStateChanged()"));
+    if (sig >= 0) {
+        int slot = rmo->indexOfSlot(
+            QMetaObject::normalizedSignature("onBackendAuthStateChanged()"));
+        if (slot >= 0)
+            QMetaObject::disconnect(backend, sig, receiver, slot);
+    }
+    sig = bmo->indexOfSignal(QMetaObject::normalizedSignature("actionStatus(QString)"));
+    if (sig >= 0) {
+        int slot = rmo->indexOfSlot(
+            QMetaObject::normalizedSignature("onBackendActionStatus(QString)"));
+        if (slot >= 0)
+            QMetaObject::disconnect(backend, sig, receiver, slot);
+    }
+}
+
 void AppCore::registerModule(const QString &moduleId, const QString &contextProperty,
                              QObject *backend, QQmlContext *ctx) {
+    // Capture the previous registrant BEFORE the map overwrite: a replace (or
+    // a null registration acting as unregister) must sever its connections,
+    // otherwise the old backend keeps firing into the re-emission slots.
+    QObject *previous = m_backends.value(moduleId);
     m_backends[moduleId] = backend;
     if (ctx)
         ctx->setContextProperty(contextProperty, backend);
+    if (previous && previous != backend)
+        disconnectRegistrationSignals(previous, this);
     if (!backend) return;
 
     const QMetaObject *bmo = backend->metaObject();
     const QMetaObject *amo = this->metaObject();
 
+    // Qt::UniqueConnection makes re-registering the same backend/id a no-op at
+    // the connect layer (M-3): the index-based QMetaObject::connect form
+    // supports it, so N registrations still yield one emission per trigger.
     // dynamicOptionsReady(key, options) -> onBackendDynamicOptions (re-emit with moduleId)
     int sig = bmo->indexOfSignal(
         QMetaObject::normalizedSignature("dynamicOptionsReady(QString,QVariant)"));
     if (sig >= 0) {
         int slot = amo->indexOfSlot(
             QMetaObject::normalizedSignature("onBackendDynamicOptions(QString,QVariant)"));
-        QMetaObject::connect(backend, sig, this, slot);
+        QMetaObject::connect(backend, sig, this, slot, Qt::UniqueConnection);
     }
 
     // authStateChanged() -> onBackendAuthStateChanged (re-emit with moduleId)
@@ -416,14 +459,14 @@ void AppCore::registerModule(const QString &moduleId, const QString &contextProp
     if (sig >= 0) {
         int slot = amo->indexOfSlot(
             QMetaObject::normalizedSignature("onBackendAuthStateChanged()"));
-        QMetaObject::connect(backend, sig, this, slot);
+        QMetaObject::connect(backend, sig, this, slot, Qt::UniqueConnection);
     }
 
     sig = bmo->indexOfSignal(QMetaObject::normalizedSignature("actionStatus(QString)"));
     if (sig >= 0) {
         int slot = amo->indexOfSlot(
             QMetaObject::normalizedSignature("onBackendActionStatus(QString)"));
-        QMetaObject::connect(backend, sig, this, slot);
+        QMetaObject::connect(backend, sig, this, slot, Qt::UniqueConnection);
     }
 
     // Backends are updated synchronously by AppCore::save_setting before
