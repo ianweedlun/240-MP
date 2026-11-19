@@ -9,9 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Contract: fire-and-forget requests with latest-wins coalescing (at most one child in flight + one queued trailing request, so held volume keys cannot pile up subprocesses); a bounded per-request timeout (default 1000 ms, the historical budget) enforced off the UI thread; nonzero exit, spawn failure, timeout and unparseable output all leave the last known good cached state intact, log a diagnosable warning via `audio.mixer.runner`, and never wedge the queue. Results and state updates are marshalled back to the owner thread; shutdown kills any in-flight child and joins the worker with no leaks.
 - Focused unit suite (`mixer-process-runner`, CTest) drives a fake delayed child executable through slow success, timeout, nonzero exit, garbage output, missing binary, rapid-fire coalescing, caller-thread timing and busy-shutdown cases — clean under ASan/UBSan with `detect_leaks=1`. No audio hardware needed.
 - Backend behavior is unchanged in this step: the existing synchronous `amixer`/`wpctl` paths stay as they are until the follow-up cards convert them onto the seam.
+
 ### Fixed — Debug telemetry: restored key taps and YouTube row selections
 - Ordinary keyboard/remote navigation now writes `key … delivered` lines even though it reaches QML directly rather than through the synthesized-input path. Key releases re-arm the dedup gate for remapped keys, auto-repeat stays quiet, and repeated debug-channel taps each leave evidence.
 - YouTube's primary item, video, playlist, channel, and SponsorBlock lists now use the shared row-tracking list primitive. String rows report their actual label, so a driven walk can prove both the key decision and the highlighted row.
+
 ### Fixed — SponsorBlock attribution and licence texts in packaged artifacts
 - Added the SponsorBlock attribution and CC BY-NC-SA 4.0 licence link to `THANKS.md`, the README credits, and the YouTube SponsorBlock settings screen.
 - Linux and macOS install rules now ship the root `LICENSE` and `THANKS.md`. Guarded install rules also ship the innertube-qt, verdigris, and expected-lite licence texts whenever those vendored sources are present, preserving their separate paths so same-named files cannot overwrite each other.
