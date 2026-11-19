@@ -28,9 +28,12 @@
 #include <QTimer>
 #include <QMetaType>
 #include <QString>
+#include <QByteArray>
 #include <QElapsedTimer>
 
 #include "innertube.h"
+
+class QNetworkReply;
 
 // One completed (or failed) in-process Innertube resolve.
 struct YtResolveResult {
@@ -41,7 +44,7 @@ struct YtResolveResult {
     QString audioUrl;      // empty for a muxed single stream
     bool    single = false;
     bool    ok = false;
-    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / exception:...
+    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / visitordata-size-cap / exception:...
     qint64  expireEpoch = 0;
     qint64  elapsedMs = 0;
 };
@@ -67,12 +70,18 @@ public:
     // key to the yt-dlp fallback, which owns the tail risk.
     static constexpr int kTimeoutMs = 4000;
 
+    // Bound on the visitorData homepage scan: inclusive maximum of cumulative
+    // post-decode body bytes. 4 MiB = 4.80x headroom over the fresh live
+    // measurement of 873,632 bytes (torture-t0/mem02-policy.md, 2026-11-19).
+    static constexpr qint64 kMaxHomepageBytes = 4 * 1024 * 1024;
+
 signals:
     void finished(const YtResolveResult &result);
 
 private:
     void ensureClient();
     void fetchVisitorData();
+    void drainVisitorData(QNetworkReply *reply);
     void startPlayer();
     void emitResult(const YtResolveResult &result);
 
@@ -94,4 +103,8 @@ private:
     bool    m_vdStarted = false;
     bool    m_vdDone = false;
     bool    m_pendingStart = false;
+    // Bounded streaming scan state, live only while the one-shot fetch runs;
+    // freed on every terminal path (token found, cap exceeded, EOF/error).
+    QByteArray m_vdBuf;         // rolling scan window: carry + newest chunk
+    qint64  m_vdBytes = 0;      // cumulative delivered body bytes (cap counter)
 };

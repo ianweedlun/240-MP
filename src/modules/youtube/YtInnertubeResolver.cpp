@@ -23,6 +23,14 @@ using PlayerReply    = InnertubeReply<InnertubeEndpoints::Player>;
 const QString kVisionOsUserAgent = QStringLiteral(
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/26.0 Safari/605.1.15");
+
+// visitorData streaming scan (MEM-02 policy, torture-t0/mem02-policy.md):
+// bounded reads + a carry window so a token straddling a chunk boundary is
+// still found. Carry >= longest token + 2x literal key + quote slack:
+// observed token 450 chars, key literal 15 bytes -> 4096 leaves ~9x headroom.
+constexpr int kVdChunkBytes = 65536;
+constexpr int kVdCarryBytes = 4096;
+const QRegularExpression kVisitorDataRe(QStringLiteral("\"visitorData\":\"([^\"]+)\""));
 }
 
 YtInnertubeResolver::YtInnertubeResolver(QObject *parent)
@@ -104,23 +112,86 @@ void YtInnertubeResolver::fetchVisitorData()
     if (m_vdStarted)
         return;
     m_vdStarted = true;
+    m_vdBuf = QByteArray();
+    m_vdBytes = 0;
     auto *nam = new QNetworkAccessManager(this);
     QNetworkRequest req(QUrl(QStringLiteral("https://www.youtube.com/")));
     req.setHeader(QNetworkRequest::UserAgentHeader, kVisionOsUserAgent);
     QNetworkReply *reply = nam->get(req);
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply]() {
+        drainVisitorData(reply);
+    });
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        const QByteArray body = reply->readAll();
         reply->deleteLater();
-        static const QRegularExpression re(QStringLiteral("\"visitorData\":\"([^\"]+)\""));
-        const auto m = re.match(QString::fromUtf8(body));
-        if (m.hasMatch())
-            m_visitorData = m.captured(1);
-        m_vdDone = true;   // even on failure: don't retry per resolve
+        if (m_vdDone)
+            return;                 // token/cap already terminal in drain
+        drainVisitorData(reply);    // final burst, if any (also on error)
+        if (m_vdDone)
+            return;
+        m_vdDone = true;            // EOF-no-token or error: don't retry per resolve
         if (m_pendingStart) {
             m_pendingStart = false;
             startPlayer();
         }
     });
+}
+
+// Bounded streaming scan of the homepage reply. Consumes at most
+// kVdChunkBytes per read into a rolling window (carry + chunk, bounded by
+// kVdChunkBytes + kVdCarryBytes), enforcing the inclusive kMaxHomepageBytes
+// cap on cumulative delivered bytes BEFORE any QString conversion. Never
+// materializes the whole page. Terminal paths: token found (early exit),
+// cap exceeded (clean failure into the backend's yt-dlp ladder), or return
+// with m_vdDone unset so finished() applies EOF/error semantics.
+void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
+{
+    if (m_vdDone)
+        return;
+    while (reply->bytesAvailable() > 0) {
+        const QByteArray chunk = reply->read(kVdChunkBytes);
+        if (chunk.isEmpty())
+            break;
+        m_vdBytes += chunk.size();
+        if (m_vdBytes > kMaxHomepageBytes) {
+            m_vdDone = true;   // sticky: an oversized page is a server-side condition
+            qWarning("[Youtube] visitorData homepage exceeded size cap (bytes=%lld cap=%lld)",
+                     static_cast<long long>(m_vdBytes),
+                     static_cast<long long>(kMaxHomepageBytes));
+            m_vdBuf = QByteArray();
+            m_vdBytes = 0;
+            if (reply->isRunning())
+                reply->abort();   // frees QNAM buffers; finished() is guarded by m_vdDone
+            if (m_pendingStart) {
+                m_pendingStart = false;
+                YtResolveResult r;
+                r.videoId = m_videoId;
+                r.resolution = m_resolution;
+                r.key = m_key;
+                r.ok = false;
+                r.reason = QStringLiteral("visitordata-size-cap");
+                r.elapsedMs = m_timer.elapsed();
+                emitResult(r);
+            }
+            return;
+        }
+        m_vdBuf.append(chunk);
+        const auto m = kVisitorDataRe.match(QString::fromUtf8(m_vdBuf));
+        if (m.hasMatch()) {
+            m_visitorData = m.captured(1);
+            m_vdDone = true;
+            m_vdBuf = QByteArray();
+            m_vdBytes = 0;
+            if (reply->isRunning())
+                reply->abort();   // early exit: stop downloading the homepage
+            if (m_pendingStart) {
+                m_pendingStart = false;
+                startPlayer();
+            }
+            return;
+        }
+        if (m_vdBuf.size() > kVdCarryBytes)
+            m_vdBuf = m_vdBuf.right(kVdCarryBytes);
+    }
 }
 
 void YtInnertubeResolver::startPlayer()
