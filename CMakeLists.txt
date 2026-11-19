@@ -773,7 +773,7 @@ if(BUILD_TESTS)
         ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
         ${CMAKE_SOURCE_DIR}/src/util)
 
-    # ROB-07 one-terminal-result contract (YtInnertubeResolver.h): exactly one
+# ROB-07 one-terminal-result contract (YtInnertubeResolver.h): exactly one
     # finished() per accepted resolve(), and an attempt abandoned by the timeout
     # must never emit again nor chain a Player request. Two-sided regression:
     # delayed-abandoned (visitorData replies AFTER the 4 s timeout), near-deadline
@@ -809,6 +809,45 @@ if(BUILD_TESTS)
                 --probe $<TARGET_FILE:yt-resolver-contract-probe>
                 --fixture ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/fixture_proxy.py)
         set_tests_properties(yt-resolver-contract-${contract_case} PROPERTIES
+            TIMEOUT 120
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
+    # MEM-02 visitorData size-cap regression (two-sided, loopback TLS fixture,
+    # no live network): healthy controls (small page, real 450-char token,
+    # chunk-boundary straddles) must resolve ok=1 with the EXACT token chained
+    # into the Player request; oversize pages must fail cleanly with
+    # reason=visitordata-size-cap into the backend's unconditional yt-dlp
+    # ladder, with bounded bytes-consumed/HWM accounting. On the pre-fix
+    # snapshot cap-plus-one / oversize-* / real-size-early-exit FAIL; the
+    # healthy controls pass on both sides. See src/modules/youtube/tests/README.md.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target yt-visitordata-cap-probe
+    #   ctest --test-dir build-test -R yt-visitordata-cap --output-on-failure
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(yt-visitordata-cap-probe
+        src/modules/youtube/tests/YtVdCapProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-visitordata-cap-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-visitordata-cap-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-visitordata-cap-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+    if(NOT MSVC)
+        target_compile_options(yt-visitordata-cap-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(vd_cap_case
+            healthy-control realistic-token straddle-key-64k straddle-value-64k
+            straddle-value-256k exact-cap cap-plus-one oversize-no-token
+            oversize-token no-token-under-cap real-size-early-exit)
+        add_test(NAME yt-visitordata-cap-${vd_cap_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_vd_cap_case.py
+                --case ${vd_cap_case}
+                --probe $<TARGET_FILE:yt-visitordata-cap-probe>
+                --fixture ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/vd_cap_fixture_proxy.py)
+        set_tests_properties(yt-visitordata-cap-${vd_cap_case} PROPERTIES
             TIMEOUT 120
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endforeach()

@@ -28,9 +28,12 @@
 #include <QTimer>
 #include <QMetaType>
 #include <QString>
+#include <QByteArray>
 #include <QElapsedTimer>
 
 #include "innertube.h"
+
+class QNetworkReply;
 
 // One completed (or failed) in-process Innertube resolve.
 struct YtResolveResult {
@@ -41,7 +44,7 @@ struct YtResolveResult {
     QString audioUrl;      // empty for a muxed single stream
     bool    single = false;
     bool    ok = false;
-    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / exception:...
+    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / visitordata-size-cap / exception:...
     qint64  expireEpoch = 0;
     qint64  elapsedMs = 0;
 };
@@ -82,6 +85,11 @@ public:
     // key to the yt-dlp fallback, which owns the tail risk.
     static constexpr int kTimeoutMs = 4000;
 
+    // Bound on the visitorData homepage scan: inclusive maximum of cumulative
+    // post-decode body bytes. 4 MiB = 4.80x headroom over the fresh live
+    // measurement of 873,632 bytes (torture-t0/mem02-policy.md, 2026-11-19).
+    static constexpr qint64 kMaxHomepageBytes = 4 * 1024 * 1024;
+
 signals:
     void finished(const YtResolveResult &result);
 
@@ -92,6 +100,14 @@ private:
     // carried through every continuation — never re-read m_generation at call
     // time (ROB-07: a late reply must stay bound to the attempt that issued it).
     void startPlayer(qint64 generation);
+    // Bounded streaming scan of the homepage reply. Consumes at most
+    // kVdChunkBytes per read into a rolling window (carry + chunk, bounded by
+    // kVdChunkBytes + kVdCarryBytes), enforcing the inclusive kMaxHomepageBytes
+    // cap on cumulative delivered bytes BEFORE any QString conversion. Never
+    // materializes the whole page. Terminal paths: token found (early exit),
+    // cap exceeded (clean failure into the backend's yt-dlp ladder), or return
+    // with m_vdDone unset so finished() applies EOF/error semantics.
+    void drainVisitorData(QNetworkReply *reply);
     void emitResult(const YtResolveResult &result);
 
     InnerTube *m_it = nullptr;
@@ -129,4 +145,8 @@ private:
     // one-shot per process, so a re-resolve while it is in flight re-arms the
     // wait with its own generation; the completion chains only the live one.
     qint64  m_pendingGeneration = 0;
+    // Bounded streaming scan state, live only while the one-shot fetch runs;
+    // freed on every terminal path (token found, cap exceeded, EOF/error).
+    QByteArray m_vdBuf;         // rolling scan window: carry + newest chunk
+    qint64  m_vdBytes = 0;      // cumulative delivered body bytes (cap counter)
 };
