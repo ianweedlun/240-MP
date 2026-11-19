@@ -415,7 +415,11 @@ int main(int argc, char **argv) {
         const bool invoked = QMetaObject::invokeMethod(
             view, "playAt", Qt::DirectConnection, Q_ARG(QVariant, QVariant(0.0)));
         check(invoked, "case6: START FROM THE BEGINNING invokes playAt(0)");
-        QTest::qWait(100);
+        int freshLaunchWaitMs = 0;
+        while (mpv.plays.isEmpty() && freshLaunchWaitMs < 1000) {
+            QTest::qWait(20);
+            freshLaunchWaitMs += 20;
+        }
         check(mpv.plays.size() == 1 && mpv.plays[0].startSeconds == 0.0f,
               "case6: fresh playback starts at zero");
         emit mpv.positionChanged(0);
