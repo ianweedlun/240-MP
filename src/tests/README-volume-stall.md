@@ -57,8 +57,9 @@ signal to switch the gate to the normal cases, which must then be green.
 - `VolumeStallProbe.cpp` — the instrument. Real `AppCore` + `InputManager` +
   `VolumeManager` + mixer classes, `QQuickWindow` offscreen. Scenarios:
   `volume-alsa`, `volume-pipewire`, `volume-noop`, `fault-alsa`,
-  `fault-pipewire`. Always exits 0 when it ran; prints one `RESULT` JSON
-  line. Assertions live in the orchestrator (ROB-07 convention).
+  `fault-pipewire`, `edge-alsa`, `edge-pipewire`. Always exits 0 when it ran;
+  prints one `RESULT` JSON line. Assertions live in the orchestrator (ROB-07
+  convention).
 - `run_volume_stall_case.py` — the orchestrator (stdlib-only python3). Owns
   scratch dirs, stub lifecycle, env, timeouts, evidence, and the verdict.
 - `mixer-stubs/mixer_stub.cpp` — one compiled binary, copied into the
@@ -90,6 +91,8 @@ is a clamp no-op that never reaches the mixer.
 | `volume-stall-noop-control` | PASS (rig self-check) | PASS |
 | `volume-stall-alsa-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
 | `volume-stall-pipewire-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
+| `volume-stall-alsa-edge` | — (added post-fix) | PASS |
+| `volume-stall-pipewire-edge` | — (added post-fix) | PASS |
 
 Registration scope (CMakeLists, BUILD_TESTS block):
 
@@ -109,6 +112,27 @@ Registration scope (CMakeLists, BUILD_TESTS block):
 Fault cases run three sub-runs each: `exit1` (nonzero exit, no output),
 `garbage` (unparseable output), `missing` (no executable on PATH → factory
 falls back to the no-op mixer). All at 200 ms delay except `missing`.
+
+Edge cases (`alsa-edge` / `pipewire-edge`, added by the t_7621e31a
+verification card) exercise the semantics the timing ladder does not reach,
+through the same real input path at 200 ms stub delay:
+
+1. **Repeat burst** — 25 direct Volume Down presses (held-key shape). ALSA
+   starts at hardware 50, PipeWire at cached 100; step 5 reaches the 0 clamp
+   in 10 / 20 effective presses. Latest-wins coalescing must collapse the
+   burst to 1..6 mixer children total.
+2. **Clamp at 0** — 3 more presses at the clamp: the no-op guards
+   (`submitLevel`/`submitMuted`) must emit **zero** signals and spawn
+   **zero** children; level stays 0.
+3. **Mute via the real file channel** — a `volmute` line injected into
+   `/tmp/240mp_key.in` must mute (one coherent `volumeChanged`), then a
+   direct `toggleMute()` unmutes.
+
+A 5 ms heartbeat gates the whole phase (constructor, direct max, edge
+heartbeat peak all <16 ms), including the debounced-persist flush window.
+The orchestrator asserts the **exact** OSD signal count — one per effective
+press plus the two mute events (ALSA 12, PipeWire 22): no double paints, no
+dropped updates — and `persisted == final` (0 / unmuted).
 
 If `noop-control` ever fails, the host is too noisy for a 16 ms wall-clock
 gate (or the rig broke) — re-run on a quieter machine before trusting a red
@@ -199,7 +223,13 @@ Verdicts are named invariants: `probe-ran`, `no-hang`, `sanitizer-clean`,
 `baseline-amplification` in `--baseline` mode and `semantic-ladder` /
 `persist-matches` with `--strict-semantics` (for the post-fix verification
 card: exact ladder + persistence, opt-in so a legitimate cache redesign is
-adjudicated there, not stranded here).
+adjudicated there, not stranded here). Edge cases add `clamp-at-zero`,
+`clamp-no-op`, `burst-reached/amplification`, `mute-injection-delivered`,
+`mute-toggle` and `osd-coherence` (exact signal count); their RESULT carries
+`edge_peak_heartbeat_gap_ms`, `post_burst_level`, `clamp_level`,
+`clamp_signals`, `clamp_calls_delta`, `mute_injected_delivered`,
+`mute_toggle_ms/result` and `mixer_calls_burst_total` in place of the
+timing-run injection fields.
 
 Evidence per run: `<build-dir>/volume-stall-evidence/<case>/<run>/` —
 probe stdout/stderr, `mixer.log` (exact argv), `result.json`, `env.txt`

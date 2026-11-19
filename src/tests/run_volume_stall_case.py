@@ -12,6 +12,8 @@ Cases (one per ctest entry):
   alsa-delay0 / pipewire-delay0       zero-delay controls
   noop-control                        instant-mixer green control (rig self-check)
   alsa-faults / pipewire-faults       exit1 + garbage + missing executable
+  alsa-edge / pipewire-edge           repeat burst → clamp at 0 → file-channel
+                                      mute → unmute, under 200 ms delay
   baseline                            all four timing runs with the recorded
                                       red-baseline shape asserted (--baseline)
 
@@ -66,6 +68,15 @@ FAULT_MODES = [
     ("garbage", "garbage", True, 200),
     ("missing", "normal", False, 0),
 ]
+# Edge cases (t_7621e31a): repeat burst to the 0 clamp + file-channel mute,
+# under the worst-case stub delay. Expected OSD signal count = effective
+# Down presses (ALSA hardware 50 → 0 in 10 steps of 5; PipeWire cached
+# 100 → 0 in 20) + 1 injected mute + 1 direct unmute. Clamp no-ops emit
+# nothing (VolumeManager submitLevel/submitMuted no-op guards).
+EDGE_CASES = {
+    "alsa-edge": {"backend": "alsa", "delay": 200, "signals": 12},
+    "pipewire-edge": {"backend": "pipewire", "delay": 200, "signals": 22},
+}
 # Recorded 3970174 red baseline (lab torture-t1, ASan/UBSan, 200 ms stub,
 # quiet host):
 #   ALSA     delay200: mean 1466.33 / max 1470 / heartbeat 1505, 7 calls/press
@@ -339,13 +350,74 @@ def check_fault(run, violations, backend, mode, present):
                           % (label, persisted))
 
 
+def check_edge(run, violations, backend, expected_signals):
+    label = run["label"]
+    res = run["result"]
+    if res is None:
+        return
+    if res.get("stub_mode") != "normal":
+        violations.append("INVARIANT stub-mode VIOLATED [%s]: %r" % (label, res.get("stub_mode")))
+    if not res.get("backend_ready", False):
+        violations.append("INVARIANT backend-ready VIOLATED [%s]: mixer never reported "
+                          "a hardware observation (ready_wait_ms=%s)"
+                          % (label, res.get("ready_wait_ms")))
+    ctor = res.get("constructor_ms", 0)
+    dmax = res.get("direct_key_max_ms", 0)
+    peak = res.get("edge_peak_heartbeat_gap_ms", 0)
+    stall_details = []
+    if ctor >= TARGET_MS:
+        stall_details.append("constructor %sms" % ctor)
+    if dmax >= TARGET_MS:
+        stall_details.append("direct max %sms" % dmax)
+    if peak >= TARGET_MS:
+        stall_details.append("edge heartbeat peak %sms" % peak)
+    if stall_details:
+        violations.append("INVARIANT ui-stall VIOLATED [%s]: %s (target <%dms)"
+                          % (label, ", ".join(stall_details), TARGET_MS))
+    burst_total = res.get("mixer_calls_burst_total", 0)
+    if not (1 <= burst_total <= 6):
+        violations.append("INVARIANT burst-reached/amplification VIOLATED [%s]: "
+                          "25-press burst spawned %s children (want 1..6 under "
+                          "latest-wins coalescing)" % (label, burst_total))
+    if res.get("post_burst_level") != 0 or res.get("clamp_level") != 0 \
+            or res.get("final_level") != 0:
+        violations.append("INVARIANT clamp-at-zero VIOLATED [%s]: post_burst=%s "
+                          "clamp=%s final=%s (want 0/0/0)"
+                          % (label, res.get("post_burst_level"),
+                             res.get("clamp_level"), res.get("final_level")))
+    if res.get("clamp_calls_delta") != 0 or res.get("clamp_signals") != 0:
+        violations.append("INVARIANT clamp-no-op VIOLATED [%s]: presses at 0 spawned "
+                          "%s children and emitted %s signals (want 0/0)"
+                          % (label, res.get("clamp_calls_delta"), res.get("clamp_signals")))
+    if not res.get("mute_injected_delivered"):
+        violations.append("INVARIANT mute-injection-delivered VIOLATED [%s]: "
+                          "file-channel volmute never muted (signals=%s)"
+                          % (label, res.get("volume_changed_signals")))
+    if res.get("mute_toggle_result") is not True or res.get("final_muted") is not False:
+        violations.append("INVARIANT mute-toggle VIOLATED [%s]: toggle result=%s "
+                          "final_muted=%s (want True/False)"
+                          % (label, res.get("mute_toggle_result"), res.get("final_muted")))
+    if res.get("volume_changed_signals") != expected_signals:
+        violations.append("INVARIANT osd-coherence VIOLATED [%s]: %s volumeChanged "
+                          "signals, expected exactly %s (one per effective press + "
+                          "injected mute + direct unmute; no double paints, no drops)"
+                          % (label, res.get("volume_changed_signals"), expected_signals))
+    if res.get("persisted_level") != res.get("final_level") or \
+            res.get("persisted_muted") != res.get("final_muted"):
+        violations.append("INVARIANT persist-matches VIOLATED [%s]: persisted=%s/%s "
+                          "final=%s/%s" % (label, res.get("persisted_level"),
+                                           res.get("persisted_muted"),
+                                           res.get("final_level"), res.get("final_muted")))
+
+
 def summarize(run, backend, delay, mode):
     res = run["result"] or {}
     return ("%-22s backend=%-8s delay=%3sms mode=%-7s direct mean=%8.2fms max=%6sms "
             "hb peak=%6sms calls/press=%s/%s final=%s/%s"
             % (run["label"], res.get("backend_selected", "?"), delay, mode,
                res.get("direct_key_mean_ms", -1), res.get("direct_key_max_ms", "?"),
-               res.get("injection_peak_heartbeat_gap_ms", "-"),
+               res.get("injection_peak_heartbeat_gap_ms",
+                       res.get("edge_peak_heartbeat_gap_ms", "-")),
                res.get("per_press_direct", "?"),
                res.get("per_press_extra", res.get("mixer_calls_total", "?")),
                res.get("final_level", "?"), res.get("final_muted", "?")))
@@ -354,8 +426,9 @@ def summarize(run, backend, delay, mode):
 def main() -> int:
     ap = argparse.ArgumentParser(description="P-5A volume-stall case orchestrator (torture T1)")
     ap.add_argument("--case", required=True,
-                    choices=sorted(list(TIMING_CASES) + ["noop-control", "alsa-faults",
-                                                         "pipewire-faults", "baseline"]))
+                    choices=sorted(list(TIMING_CASES) + list(EDGE_CASES) +
+                                   ["noop-control", "alsa-faults",
+                                    "pipewire-faults", "baseline"]))
     ap.add_argument("--probe", required=True, help="volume-stall-probe binary")
     ap.add_argument("--stub-bin", required=True, help="compiled mixer-stub binary")
     ap.add_argument("--repo-root", required=True, help="source tree under test (git sha)")
@@ -408,6 +481,15 @@ def main() -> int:
         print(summarize(run, "none", 0, "normal"))
         check_common(run, violations, "none")
         check_timing(run, violations, "noop-control", "none", False, args.strict_semantics)
+    elif args.case in EDGE_CASES:
+        cfg = EDGE_CASES[args.case]
+        run = run_probe(args.case, "edge-" + cfg["backend"], args.probe, args.stub_bin,
+                        cfg["backend"], True, "normal", cfg["delay"], False,
+                        snapshot, evidence_root)
+        runs.append(run)
+        print(summarize(run, cfg["backend"], cfg["delay"], "normal"))
+        check_common(run, violations, cfg["backend"])
+        check_edge(run, violations, cfg["backend"], cfg["signals"])
     else:
         backend = args.case.split("-")[0]
         for mode_label, stub_mode, present, delay in FAULT_MODES:
