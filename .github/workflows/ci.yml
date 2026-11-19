@@ -33,7 +33,7 @@ jobs:
         with:
           apt-packages: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite"
           app-version: ${{ github.sha }}
-          test-exclude-regex: 'recent-view-smoke|plex-player-smoke|local-files-player-smoke|local-files-empty-path-smoke|weather-current-smoke|youtube-player-smoke|youtube-quit-intent-smoke'
+          test-exclude-regex: 'recent-view-smoke|plex-player-smoke|local-files-player-smoke|local-files-empty-path-smoke|weather-current-smoke|youtube-player-smoke|youtube-quit-intent-smoke|youtube-seek-smoke'
 
       - name: Install to staging prefix
         run: |

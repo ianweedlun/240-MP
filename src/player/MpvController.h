@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QStringList>
+#include "player/SeekHoldPolicy.h"
 
 class AppCore;
 class DisplayHandoff;
@@ -60,8 +61,12 @@ public:
     // post-connect they are sent as a byte-identical "keypress" (preserving the lua
     // menu-esc/screensaver dismiss semantics); pre-connect they call forceStop()
     // instead of being dropped, so an early Back can never orphan the spawned mpv
-    // (R-2). All other keys are best-effort and dropped before the IPC connects.
-    Q_INVOKABLE void sendKey(const QString &key);
+    // (R-2). Directional keys are shaped by SeekHoldPolicy (taps -> exact seeks,
+    // holds -> speed ramp / coalesced rewind); other keys pass through as keypress.
+    Q_INVOKABLE void sendKey(const QString &key, bool autoRepeat = false);
+    // Key-up for the direct-IPC path and QML alike: ends a held-key speed ramp
+    // or flushes the coalesced rewind accumulator (see SeekHoldPolicy).
+    Q_INVOKABLE void sendKeyUp(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system
     // mixer stays the single loudness authority (#34). There is deliberately
@@ -78,6 +83,10 @@ public:
     // (#34). Safe to call with no child running — it is dropped.
     Q_INVOKABLE void showVolumeOsd(int level, bool muted);
     Q_INVOKABLE void clearOsdPrompt();
+    // Open the OSC nav menu via the explicit lua menu-show message. Independent
+    // of key shaping (UP/DOWN are seek-shaped on the app key path), so callers
+    // and tests can surface the menu without issuing a seek. Dropped pre-connect.
+    Q_INVOKABLE void showOscMenu();
 
     // True only on devices whose smooth-playback decode path can't crop/zoom (the
     // Pi 3 DRM-overlay path). Settings uses this to show the "Smooth Playback"
@@ -125,6 +134,7 @@ private slots:
     void onProcessFinished();
     void tryConnectIpc();
     void onIpcReadyRead();
+    void onSeekFlush();
 
 private:
     // Hardware video-decode profile, detected once from /proc/device-tree/model.
@@ -132,6 +142,10 @@ private:
 
     void sendCommand(const QJsonArray &args);
     void sendCommand(const QJsonArray &args, int requestId);
+    void executePolicyCommand(const SeekHoldPolicy::Command &cmd);
+    void setPlaybackSpeed(double speed);
+    void syncSeekFlushTimer();
+    void resetSeekHold();
     VideoProfile detectVideoProfile() const;
     // Appends the profile-specific --vo/--gpu-context/--hwdec flags (honouring the
     // app-level "mpv_video_args" override) to a forming mpv argument list.
@@ -171,6 +185,8 @@ private:
     QLocalSocket *m_ipc            = nullptr;
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
+    QTimer       *m_seekFlushTimer = nullptr;
+    SeekHoldPolicy m_seekPolicy;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
     QString       m_appRoot;
