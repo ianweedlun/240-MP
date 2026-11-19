@@ -4,6 +4,12 @@
 // published via socketPath(). This test verifies the contract without spawning
 // mpv (CI lanes without a media stack still run it). It runs offscreen only so
 // QGuiApplication exists and detectVideoProfile() can query screens.
+//
+// Boundary arms use a SHORT base dir (/tmp/240mp-t2-XXXXXX): the default
+// QTemporaryDir location on macOS (/var/folders/.../T/<test>-XXXXXX) is already
+// ~84 bytes — near/over the 103-byte macOS sun_path limit — so a probe
+// controller there can have IPC disabled, and boundary padding must not be
+// derived from an empty probe socket.
 #include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QCoreApplication>
@@ -16,6 +22,19 @@
 #ifndef Q_OS_WIN
 #include <sys/un.h>
 #endif
+
+namespace {
+// Restore TMPDIR even when an assertion aborts the slot mid-test: a leaked
+// padded TMPDIR poisons every later QTemporaryDir in the process (the padded
+// dir may also be auto-removed with its parent, leaving TMPDIR dangling).
+struct TmpdirGuard {
+    QByteArray old = qgetenv("TMPDIR");
+    ~TmpdirGuard() {
+        if (!old.isEmpty()) qputenv("TMPDIR", old);
+        else                qunsetenv("TMPDIR");
+    }
+};
+} // namespace
 
 class MpvInstanceSocketTest : public QObject {
     Q_OBJECT
@@ -63,8 +82,11 @@ private Q_SLOTS:
     // TMPDIR by one byte and IPC must be disabled (empty socket), while the mpv
     // log file remains assigned.
     void longTmpdirDisablesIpc() {
-        const QByteArray oldTmpdir = qgetenv("TMPDIR");
-        QTemporaryDir shortDir; QVERIFY(shortDir.isValid());
+        TmpdirGuard guard;
+        // Short, platform-independent base: the default temp location on macOS
+        // is too long for the probe controller to have IPC enabled at all.
+        QTemporaryDir shortDir(QStringLiteral("/tmp/240mp-t2-XXXXXX"));
+        QVERIFY(shortDir.isValid());
         qputenv("TMPDIR", shortDir.path().toUtf8());
         {
             // First, measure the suffix length with a short TMPDIR for THIS
@@ -73,12 +95,16 @@ private Q_SLOTS:
             AppCore core(QString::fromUtf8(MP240_REPO_ROOT), shortDir.path());
             MpvController probe(QString::fromUtf8(MP240_REPO_ROOT), shortDir.path(), &core, nullptr);
             const QString probeSocket = probe.socketPath();
+            // Guard the measurement: an empty probe socket (base already over
+            // the limit) would yield a negative suffix and bogus padding.
+            QVERIFY(!probeSocket.isEmpty());
             const int suffixLen = probeSocket.toUtf8().size() - shortDir.path().toUtf8().size();
 
             const int limit = static_cast<int>(sizeof(sockaddr_un::sun_path)) - 1;
-            const int padding = limit - suffixLen - 4 - shortDir.path().size(); // -4 for "/fit"
+            const int padding = limit - suffixLen - 4 - shortDir.path().toUtf8().size(); // -4 for "/fit"
+            QVERIFY(padding >= 0);
             const QString fitDir = shortDir.path() + QStringLiteral("/fit")
-                                   + QString(qMax(0, padding), QLatin1Char('p'));
+                                   + QString(padding, QLatin1Char('p'));
             QDir().mkpath(fitDir);
             QVERIFY(fitDir.toUtf8().size() + suffixLen == limit);
 
@@ -98,10 +124,10 @@ private Q_SLOTS:
             QVERIFY(!over.logFilePath().isEmpty());
             QVERIFY(over.logFilePath().startsWith(overDir));
         }
-        if (!oldTmpdir.isEmpty()) qputenv("TMPDIR", oldTmpdir);
-        else                      qunsetenv("TMPDIR");
-
-        // After restoration a fresh controller gets a usable socket again.
+        // The guard restores the original TMPDIR at function exit. Prove the
+        // disabled state is per-instance, not sticky: a fresh controller under
+        // the known-short base gets a usable socket again.
+        qputenv("TMPDIR", shortDir.path().toUtf8());
         AppCore core4(QString::fromUtf8(MP240_REPO_ROOT), shortDir.path());
         MpvController restored(QString::fromUtf8(MP240_REPO_ROOT), shortDir.path(), &core4, nullptr);
         QVERIFY(!restored.socketPath().isEmpty());
@@ -111,8 +137,11 @@ private Q_SLOTS:
     // to >100 chars yields an unusable socket. Pre-fix the controller used the
     // fixed path unguarded; post-fix it disables IPC cleanly.
     void knownBadPaddedTmpdirDisablesIpc() {
-        const QByteArray oldTmpdir = qgetenv("TMPDIR");
-        QTemporaryDir base; QVERIFY(base.isValid());
+        TmpdirGuard guard;
+        // Short base keeps the padded length deterministic across platforms
+        // (macOS' default temp base alone is ~84 bytes).
+        QTemporaryDir base(QStringLiteral("/tmp/240mp-t2-XXXXXX"));
+        QVERIFY(base.isValid());
         const QString padded = base.path() + QStringLiteral("/private-tmp-")
                              + QString(60, QLatin1Char('p'));
         QDir().mkpath(padded);
@@ -125,8 +154,6 @@ private Q_SLOTS:
             QVERIFY(!mpv.logFilePath().isEmpty());
             QVERIFY(mpv.logFilePath().startsWith(padded));
         }
-        if (!oldTmpdir.isEmpty()) qputenv("TMPDIR", oldTmpdir);
-        else                      qunsetenv("TMPDIR");
     }
 };
 
