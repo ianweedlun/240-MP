@@ -2,6 +2,7 @@
 #include "YtInnertubeResolver.h"
 #include "../../util/YtStreamSelect.h"
 #include "../../util/YtUrlFresh.h"
+#include "../../util/YtNegativeCache.h"
 #include "../../util/YtAuthGate.h"
 #include "../../util/YtBrowseRows.h"
 #include "../../util/YtDlpLocator.h"
@@ -48,6 +49,7 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
     connect(m_itResolver, &YtInnertubeResolver::finished, this,
             [this](const YtResolveResult &r) {
         if (r.ok) {
+            clearNegativeCacheEntry(r.videoId); // a post-TTL success retires the old failure
             emit resolveTelemetry(r.videoId, QStringLiteral("innertube"), r.elapsedMs);
             if (r.expireEpoch > QDateTime::currentSecsSinceEpoch()) {
                 storeUrlCacheEntry(r.key, r.videoUrl, r.audioUrl, r.single,
@@ -62,6 +64,14 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
                  static_cast<long long>(r.elapsedMs));
         emit resolveTelemetry(r.videoId,
                               QStringLiteral("innertube-fail:") + r.reason, r.elapsedMs);
+        const QString failureClass = storeNegativeCacheEntry(r.videoId, r.reason);
+        if (!failureClass.isEmpty()) {
+            // The response itself proved this video cannot resolve. Do not pay
+            // a yt-dlp spawn now or on any warm/focus/press path for 24 h.
+            emit playbackResolveFailed(r.videoId, failureClass);
+            finishUrlResolve(r.key);
+            return;
+        }
         m_resolveStartMs.insert(r.key,
                                 QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
         launchYtdlpResolve(r.videoId, r.resolution, r.key);
@@ -863,6 +873,65 @@ void YouTubeBackend::ensureUrlCacheLoaded()
                         kUrlCacheMaxEntries);
 }
 
+QString YouTubeBackend::negativeCacheFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_resolve_failures.json");
+}
+
+void YouTubeBackend::ensureNegativeCacheLoaded()
+{
+    if (m_negativeCacheLoaded)
+        return;
+    m_negativeCacheLoaded = true;
+    m_negativeCache = ytneg::readNegativeCache(
+        negativeCacheFilePath(), QDateTime::currentSecsSinceEpoch());
+}
+
+void YouTubeBackend::saveNegativeCache()
+{
+    ytneg::pruneNegativeCache(m_negativeCache, QDateTime::currentSecsSinceEpoch());
+    if (!ytneg::writeNegativeCache(negativeCacheFilePath(), m_negativeCache))
+        qWarning("[Youtube] could not persist negative resolve cache");
+}
+
+QString YouTubeBackend::storeNegativeCacheEntry(const QString &videoId, const QString &reason)
+{
+    ensureNegativeCacheLoaded();
+    const QString failureClass = ytneg::recordFailure(
+        m_negativeCache, videoId, reason, QDateTime::currentSecsSinceEpoch());
+    if (!failureClass.isEmpty())
+        saveNegativeCache();
+    return failureClass;
+}
+
+void YouTubeBackend::clearNegativeCacheEntry(const QString &videoId)
+{
+    ensureNegativeCacheLoaded();
+    if (!m_negativeCache.contains(videoId))
+        return;
+    m_negativeCache.remove(videoId);
+    saveNegativeCache();
+}
+
+bool YouTubeBackend::negativeCacheBlocks(const QString &videoId)
+{
+    ensureNegativeCacheLoaded();
+    const QString failureClass = ytneg::freshFailureClass(
+        m_negativeCache, videoId, QDateTime::currentSecsSinceEpoch());
+    if (failureClass.isEmpty())
+        return false;
+
+    emit resolveTelemetry(videoId, QStringLiteral("negative-cache"), 0);
+    // resolvePlayback() runs synchronously inside Player.preparePlayback(),
+    // before playAt() sets waitingForResolve. Deliver cached failures on the
+    // next event-loop turn so the Player cannot miss the signal and fall into
+    // its timed mpv/ytdl_hook fallback.
+    QTimer::singleShot(0, this, [this, videoId, failureClass]() {
+        emit playbackResolveFailed(videoId, failureClass);
+    });
+    return true;
+}
+
 QString YouTubeBackend::sponsorCacheFilePath() const
 {
     return m_dataRoot + QStringLiteral("/youtube_sponsor.json");
@@ -1327,6 +1396,10 @@ QString YouTubeBackend::warmToken(const QString &videoId,
 void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &resolution,
                                          const QString &key)
 {
+    if (negativeCacheBlocks(videoId)) {
+        finishUrlResolve(key);
+        return;
+    }
     // One Innertube attempt per key: a spent key belongs to the fallback, so a
     // failed resolve never retries in-process and never runs two resolvers.
     if (m_itTried.contains(key)) {
@@ -1436,6 +1509,8 @@ void YouTubeBackend::pumpWarmQueue()
         const int sep = token.indexOf(QChar(0x1F));
         const QString videoId    = token.left(sep);
         const QString resolution = token.mid(sep + 1);
+        if (negativeCacheBlocks(videoId))
+            continue;
         const QString fmt = ytdlFormatForResolution(resolution);
         const QString key = yturl::cacheKeyFor(videoId, fmt);
         if (hasFreshUrlPair(key) || m_resolveKeys.contains(key))
@@ -1462,6 +1537,8 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
     for (const QString &videoId : videoIds) {
         if (videoId.isEmpty() || queued >= kWarmListMax || m_warmQueue.size() >= kWarmQueueMax)
             break;
+        if (negativeCacheBlocks(videoId))
+            continue;
         const QString key = yturl::cacheKeyFor(videoId, fmt);
         if (hasFreshUrlPair(key) || m_resolveKeys.contains(key))
             continue;
@@ -1497,6 +1574,8 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
     if (videoId.isEmpty())
         return;
     ensureUrlCacheLoaded();
+    if (negativeCacheBlocks(videoId))
+        return;
     const QString fmt = ytdlFormatForResolution(resolution);
     const QString key = yturl::cacheKeyFor(videoId, fmt);
     if (hasFreshUrlPair(key)) {

@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: permanent resolve failures no longer respawn yt-dlp (#103)
+- Age/login-gated (`LOGIN_REQUIRED`) and unavailable/claimed (`UNPLAYABLE`) videos now use a durable negative cache keyed by video id. Entries persist beside the URL cache and expire after a named 24-hour TTL; transient timeouts, network failures and other resolve errors are never cached.
+- List warming, focused-row warming and playback presses skip cached failures before either Innertube or yt-dlp, emitting `yt-resolve … source=negative-cache ms=0`. The Player also cancels its four-second mpv/ytdl-hook fallback on a permanent resolve failure and reports the video unavailable.
+- Behavior tests cover both permanent classes, transient classification, exact TTL expiry, persistence across backend restart, all three resolve entry points and the cancelled Player fallback.
+
 ### Fixed — YouTube: playback starts with the video's default audio language (#103)
 - VISIONOS `adaptiveFormats` now expose `audioTrack.audioIsDefault`, `displayName`, and `id` to the picker. The explicitly default track wins; with no default marker, an `original` track is the fallback, then stable track identity makes the choice independent of response ordering. Indexed itag-140 AAC remains preferred within each group.
 - The warm URL cache key is versioned so pre-fix pairs cannot keep serving the first-listed dub after the RC upgrade.
@@ -35,7 +40,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The yt-dlp path is kept as a fallback for one release: a key gets exactly one Innertube attempt, then the spawn owns it — no retry loop, never two resolvers at once. The fallback's elapsed figure is backdated to the original launch, so the state log shows the whole ladder.
 - The warm pass now covers a whole list page (was the front 12 rows; queue cap 24 → 64), and the highlighted row warms its URL pair on every focus change, so a cold pick can still take the direct path. Both are idempotent: already-fresh, in-flight, or queued rows are skipped.
 - The Player's bounded resolve wait drops from 15 s to 4 s — the in-process resolve answers in well under a second, so a dead network reaches mpv's ytdl hook sooner.
-- New `yt-resolve vid=… source=… ms=…` state-log lines (source = `innertube`, `ytdlp`, `cache`, or a failure class) make the win measurable on the Pi from `/tmp/240mp_state.log`.
+- New `yt-resolve vid=… source=… ms=…` state-log lines (source = `innertube`, `ytdlp`, `cache`, `negative-cache`, or a failure class) make the win measurable on the Pi from `/tmp/240mp_state.log`.
 - Gates: `yt-stream-select` unit suite, `youtube-player-smoke` (23 assertions over the real `Player.qml`), full `ctest` 27/27 green locally, and the real app starts offscreen and shuts down cleanly. No owner CRT yet — implemented, unvalidated.
 
 ### Changed — YouTube: SponsorBlock no longer gates playback launch

@@ -249,7 +249,8 @@ int main(int argc, char *argv[]) {
     appCore.registerModule("com.240mp.virtual_channels", "virtualChannelsBackend", &virtualChannels, ctx);
 
     // YouTube resolve telemetry: which resolver served a pair (innertube /
-    // ytdlp / cache) and how long it took. Lands in the Pi state log as
+    // ytdlp / cache / negative-cache) and how long it took. Lands in the Pi
+    // state log as
     // `yt-resolve vid=… source=… ms=…`; AppCore::note_state is compiled out of
     // release builds, so the cost is one signal emission.
     QObject::connect(&youtubeBackend, &YouTubeBackend::resolveTelemetry, &appCore,

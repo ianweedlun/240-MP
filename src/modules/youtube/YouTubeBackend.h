@@ -187,6 +187,10 @@ signals:
     // launched on a cold cache: instead of paying ytdl_hook's re-resolve, it
     // waits (bounded) for this signal and then launches mpv on the direct pair.
     void playbackUrlReady(const QString &videoId);
+    // A permanent negative-cache result suppresses the Player's timed mpv/
+    // ytdl_hook fallback as well as backend resolver work. Reason is the
+    // canonical LOGIN_REQUIRED or UNPLAYABLE class, never a token/response body.
+    void playbackResolveFailed(const QString &videoId, const QString &reason);
     // Plan D: pairing card surfaced to the view (user code + where to type it),
     // the flow's outcome, and signed-in account lists (row model = the module's).
     void devicePairRequested(const QString &userCode, const QString &verificationUrl);
@@ -273,6 +277,14 @@ private:
     // youtube_url_cache.json: { "videoId|formatSpec": { url, expire } }.
     QString      urlCacheFilePath() const;
     void         ensureUrlCacheLoaded();   // lazy one-time load + expiry prune
+    // Permanent resolve failures live beside the URL cache and share no key
+    // namespace with signed stream pairs.
+    QString      negativeCacheFilePath() const;
+    void         ensureNegativeCacheLoaded();
+    void         saveNegativeCache();
+    QString      storeNegativeCacheEntry(const QString &videoId, const QString &reason);
+    void         clearNegativeCacheEntry(const QString &videoId);
+    bool         negativeCacheBlocks(const QString &videoId);
     // Shared lookup for the video/audio pair a resolve stored under one key.
     QString      cachedUrlField(const QString &videoId, const QString &resolution,
                                 const QString &field);
@@ -322,6 +334,11 @@ private:
     // Direct-playback URL cache state (issue #28 plan A)
     QJsonObject m_urlCache;
     bool        m_urlCacheLoaded = false;
+
+    // youtube_resolve_failures.json: videoId -> {failedAt, reason}. Permanent
+    // failures cover every resolution and persist across app restarts.
+    QJsonObject m_negativeCache;
+    bool        m_negativeCacheLoaded = false;
 
     // Speculative warm-up state (issue #28 plan A round 4). m_resolveKeys
     // tracks every cache key with a live yt-dlp process (press-initiated or

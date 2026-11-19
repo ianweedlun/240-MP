@@ -206,6 +206,16 @@ FocusScope {
             // If the pair somehow isn't there, let the wait timer's ytdl
             // fallback handle it rather than racing a second resolve.
         }
+        function onPlaybackResolveFailed(failedVideoId, reason) {
+            if (!playerRoot.waitingForResolve || failedVideoId !== playerRoot.videoId)
+                return
+            playerRoot.waitingForResolve = false
+            resolveWaitTimer.stop()
+            playerRoot.directPlayUrl = ""
+            playerRoot.directAudioUrl = ""
+            playerRoot.ytdlArgs = []
+            playerRoot.errorMessage = "PLAYBACK FAILED\n\nTHIS VIDEO IS UNAVAILABLE"
+        }
     }
 
     Connections {

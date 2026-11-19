@@ -659,6 +659,34 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-url-invalidate COMMAND yt-url-invalidate-tests)
 
+    # Durable negative cache for permanent YouTube resolve failures. Exercises
+    # classification, the 24 h TTL and the real on-disk persistence helpers.
+    add_executable(yt-negative-cache-tests
+        src/util/tests/YtNegativeCacheTest.cpp)
+    set_target_properties(yt-negative-cache-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-negative-cache-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-negative-cache-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-negative-cache COMMAND yt-negative-cache-tests)
+
+    # Backend wiring gate for the same cache: list warm, focus warm and press
+    # must not reach either resolver, including after a backend restart.
+    add_executable(yt-negative-cache-backend-tests
+        src/modules/youtube/tests/YouTubeNegativeCacheIntegrationTest.cpp
+        src/modules/youtube/YouTubeBackend.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp
+        src/util/YtDlpLocator.cpp)
+    set_target_properties(yt-negative-cache-backend-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-negative-cache-backend-tests PRIVATE src)
+    target_link_libraries(yt-negative-cache-backend-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test innertube-qt)
+    if(NOT MSVC)
+        target_compile_options(yt-negative-cache-backend-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-negative-cache-backend COMMAND yt-negative-cache-backend-tests)
+
     # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
     # before-expiry semantics. No processes, no network.
     add_executable(yt-auth-gate-tests

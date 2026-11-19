@@ -131,6 +131,7 @@ public:
     Q_INVOKABLE bool sponsorFetchInFlight(const QString &) const { return false; }
 signals:
     void playbackUrlReady(const QString &videoId);
+    void playbackResolveFailed(const QString &videoId, const QString &reason);
     void sponsorReady(const QString &videoId);
 };
 
@@ -355,6 +356,28 @@ int main(int argc, char **argv) {
             check(mpv.plays[0].url == QStringLiteral("http://yt/video.mp4"),
                   "case4: plain URL when no window is cached");
         check(t.elapsed() < 1000, "case4: warm launch not gated on sponsor");
+        delete view;
+    }
+
+    // --- Case 5: permanent resolve failure cancels the timed mpv fallback ----
+    {
+        StubYoutube yt;
+        StubMpv mpv;
+        yt.warmPair = false;
+        bool loadError = false;
+        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                   QStringLiteral("VID5"), repoRoot, &loadError);
+        check(!loadError && view != nullptr, "case5: Player.qml loads offscreen");
+        if (!view) return 1;
+        check(mpv.plays.isEmpty(), "case5: permanent failure starts cold");
+        emit yt.playbackResolveFailed(QStringLiteral("VID5"), QStringLiteral("LOGIN_REQUIRED"));
+        QTest::qWait(4200); // outlive the old uncancelled 4 s fallback
+        check(QQmlProperty::read(view, "waitingForResolve").toBool() == false,
+              "case5: permanent failure cancels resolve wait");
+        check(QQmlProperty::read(view, "errorMessage").toString()
+                  .contains(QStringLiteral("UNAVAILABLE")),
+              "case5: permanent failure surfaces unavailable message");
+        check(mpv.plays.isEmpty(), "case5: permanent failure never spawns mpv fallback");
         delete view;
     }
 
