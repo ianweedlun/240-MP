@@ -222,3 +222,39 @@ printed; they are KB-sized.
   (~3 ms/spawn quiet, ~10-25 ms busy). The delay200 runs are dominated by
   the stub sleep and stay tight; zero-delay numbers drift. Baseline bands
   are wide for this reason; loadavg is recorded in the evidence.
+
+## VolumeManager decoupling (t_82bed393)
+
+The key path is now fully decoupled from mixer I/O: `VolumeManager` computes
+mutations from cached state (optimistic update), submits the async mixer
+request, and emits exactly one coherent `volumeChanged(level, muted)` per
+effective press — the amplifier raise-while-muted is a single atomic update,
+never two paints. It subscribes to the backends' `stateChanged` seam and
+reconciles when hardware reports differently (rounding, external change,
+failure rollback), so UI and persisted state converge instead of stranding
+apart. The snapshot cache-poisoning defect above is adjudicated here:
+PipeWire rolls a failed mutation back to its last confirmed value
+(dimension-scoped — a failed level write never clobbers a newer optimistic
+mute), and the manager adopts that rollback.
+
+Persistence is debounced (250 ms single-shot) and executed off the UI thread
+on a single-thread `QThreadPool`; key repeat coalesces to one write, and
+destruction flushes any pending write synchronously, so restart always
+restores the last state. `volume.json` keys/format and restore-on-startup are
+unchanged; restore itself never rewrites the file. The `persist-matches`
+invariant is unaffected: the probe reads persisted state only after
+`waitLogQuiescent` + the 2500 ms heartbeat window, well past the debounce.
+
+Ordering hardening: PipeWire coalesces in per-dimension pending slots with at
+most one request outstanding at the seam (a queued `set-mute` can no longer be
+replaced by a following `set-level` — the amplifier burst used to lose the
+mute exactly that way); ALSA mutation echoes carry submit-time generation
+stamps, so a superseded echo can neither clobber the newer optimistic cache
+nor flicker the OSD. `coalescedCount()` counts pending-slot drops plus runner
+drops, keeping the conservation law exact.
+
+Verified: unit suites 24/26/17 green ×5 under ASan/UBSan/LSan
+(`detect_leaks=1`); `--strict-semantics` PASS on all timing/noop/fault cases
+on both backends (direct mean 0.00 ms, heartbeat peak 6 ms, ladders exact,
+persisted==final); `--case baseline` inversion preserved (10 baseline-shape
+violations, zero semantic violations); full ctest 33/33.

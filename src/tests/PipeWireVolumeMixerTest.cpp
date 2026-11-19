@@ -367,6 +367,53 @@ private Q_SLOTS:
         QCOMPARE(m.level(), 70);
         QCOMPARE(stubState(rig.state).first, 70);
     }
+
+    // The amplifier burst (raise while muted) must never lose the mute to
+    // coalescing (t_82bed393): pre-fix, a set-mute queued behind an in-flight
+    // child was replaced in the runner's trailing slot by the following
+    // set-level, so hardware stayed muted while the cache claimed unmuted.
+    void amplifierBurstKeepsMute()
+    {
+        Rig rig(200);
+        QVERIFY(rig.ok);
+        PipeWireVolumeMixer m(QStringLiteral("@DEFAULT_AUDIO_SINK@"));
+        QVERIFY(m.setMuted(true));
+        QVERIFY(waitSettle(m));
+        QCOMPARE(stubState(rig.state).second, true);
+        QVERIFY(m.setLevel(80));      // 200 ms child in flight
+        // Amplifier raise-while-muted: both dimensions back-to-back with no
+        // event pumping between them — exactly the held-key burst shape.
+        QVERIFY(m.setMuted(false));
+        QVERIFY(m.setLevel(75));
+        QVERIFY(waitSettle(m));
+        QCOMPARE(m.level(), 75);
+        QCOMPARE(m.isMuted(), false);
+        // Hardware must agree: the mute change was NOT coalesced away.
+        QCOMPARE(stubState(rig.state), qMakePair(75, false));
+        // Conservation: 4 mutation accepts + 1 refresh; every request either
+        // ran or was superseded in a pending slot — nothing lost.
+        QCOMPARE(m.startedCount() + m.coalescedCount(), quint64(5));
+    }
+
+    // Rapid mute toggles during a level child: latest wins per dimension, no
+    // pileup, and the level confirmation still lands after the mute drains.
+    void rapidMuteTogglesLatestWins()
+    {
+        Rig rig(100);
+        QVERIFY(rig.ok);
+        PipeWireVolumeMixer m(QStringLiteral("@DEFAULT_AUDIO_SINK@"));
+        QVERIFY(m.setLevel(80));       // child in flight
+        QVERIFY(m.setMuted(true));
+        QVERIFY(m.setMuted(false));
+        QVERIFY(m.setMuted(true));     // newest wins
+        QVERIFY(waitSettle(m));
+        QCOMPARE(m.level(), 80);
+        QCOMPARE(m.isMuted(), true);
+        QCOMPARE(stubState(rig.state), qMakePair(80, true));
+        // 4 mutation accepts + 1 refresh = 5; two intermediate toggles dropped.
+        QCOMPARE(m.startedCount() + m.coalescedCount(), quint64(5));
+        QCOMPARE(m.coalescedCount(), quint64(2));
+    }
 };
 
 QTEST_MAIN(PipeWireVolumeMixerTest)

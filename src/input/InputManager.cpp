@@ -1112,6 +1112,12 @@ bool InputManager::eventFilter(QObject *obj, QEvent *event) {
     // audio/VolumeKeyMap.h so a unit test can hold it still.
     const audio::VolumeKey volKey = audio::volumeKeyFor(ke->key());
     if (volKey != audio::VolumeKey::None && m_volume) {
+        // Non-blocking by contract (t_82bed393): VolumeManager computes the new
+        // state from its cache, submits the async mixer request and returns —
+        // no process spawn, no I/O wait on this event-filter path. Key repeat,
+        // ordering and propagation are unchanged; the volume-stall harness
+        // gates the heartbeat gap this call can produce (<16 ms with a 200 ms
+        // mixer stub on both backends).
         if (type == QEvent::KeyPress)
             audio::applyVolumeKey(*m_volume, volKey);
         return true;   // swallow the release too: the manager already moved
