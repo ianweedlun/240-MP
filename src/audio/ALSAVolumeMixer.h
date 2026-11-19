@@ -41,9 +41,11 @@ namespace audio {
 //    so a persisted level/mute is never applied to a guessed control name.
 //  * Rapid repeats coalesce latest-wins in the runner: a burst of presses costs
 //    at most two children, and the last requested value always reaches hardware.
-//  * Reads carry a generation stamp: a read that was in flight when a newer
-//    mutation was requested is discarded, so a late hardware answer can never
-//    resurrect a level the user already moved past.
+//  * Reads AND mutation echoes carry a generation stamp (stamped at submit
+//    time): an answer that was in flight when a newer mutation was requested
+//    is discarded, so a late hardware answer — read or superseded echo — can
+//    never resurrect a level the user already moved past or flicker the OSD
+//    back to an intermediate burst value.
 class ALSAVolumeMixer : public QObject, public VolumeMixer {
     Q_OBJECT
 public:
