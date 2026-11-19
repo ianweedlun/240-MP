@@ -100,7 +100,14 @@ OVERHEAD = {FIXTURE_TOKEN: 56, LIVE_TOKEN_450: 496}
 MIB = 1024 * 1024
 # HWM tolerance (KiB) vs the zero-filler control — see module docstring.
 HWM_DELTA_BOUND_KB = 1024
+# Reset-class connection errors are expected abort evidence (the resolver
+# closing the socket mid-body on early exit / cap). The proxy logs the CONCRETE
+# exception class name (type(e).__name__), so the SSL base name "SSLError" alone
+# never matches its reset subclasses — enumerate them, or an arm64 TLS EOF is
+# falsely flagged as a hygiene violation. Cert-verification and want-read/write
+# are NOT connection resets and still fail proxy-hygiene.
 RESET_KINDS = {"BrokenPipeError", "ConnectionResetError", "SSLError",
+               "SSLEOFError", "SSLZeroReturnError", "SSLSyscallError",
                "ConnectionAbortedError", "TimeoutError"}
 
 # expect: success | size-cap | bot-wall
