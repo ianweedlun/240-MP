@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Local Files: an empty file path no longer strands the player view
+- Opening the Local Files player with an empty `filePath` (the defensive edge at `Player.qml`'s launch entry) now emits `goBack()` immediately and returns to the menu, mirroring YouTube's existing empty-URL guard. Previously the view stayed open with nothing playing: no mpv child was ever spawned, so Back/ESC — which only sends a key to mpv — had nothing to stop and the view was stuck (R10, issue #112).
+- New two-sided offscreen smoke (`local-files-empty-path-smoke`, real `Player.qml` + stub backends): an empty or missing `filePath` emits `goBack` exactly once with zero mpv spawns, and a valid path still launches without going back. It fails on the pre-fix snapshot by design; the existing `local-files-player-smoke` is untouched and stays green.
+
 ### Added — audio: non-blocking mixer process seam (T1 P-5A infrastructure)
 - New `audio::MixerProcessRunner` (`src/audio/MixerProcessRunner.*`): the shared asynchronous subprocess + state-cache seam the ALSA and PipeWire volume backends will use. All `QProcess`/timer activity lives on a dedicated worker thread; `submit()` and the cached `level`/`mute` accessors are thread-safe, never spawn on the caller thread, and return in well under a frame budget (unit-tested < 16 ms with a 200 ms child in flight; measured ≤ 1.5 ms).
 - Contract: fire-and-forget requests with latest-wins coalescing (at most one child in flight + one queued trailing request, so held volume keys cannot pile up subprocesses); a bounded per-request timeout (default 1000 ms, the historical budget) enforced off the UI thread; nonzero exit, spawn failure, timeout and unparseable output all leave the last known good cached state intact, log a diagnosable warning via `audio.mixer.runner`, and never wedge the queue. Results and state updates are marshalled back to the owner thread; shutdown kills any in-flight child and joins the worker with no leaks.
