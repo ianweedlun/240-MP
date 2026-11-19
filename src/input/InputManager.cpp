@@ -739,7 +739,12 @@ void InputManager::releaseAction(Action a) {
 void InputManager::startDebugKeyChannel()
 {
 #ifdef APP_TELEMETRY
-    m_debugKeyFile = QStringLiteral("/tmp/240mp_key.in");
+    // T2/T4 (issue #111): per-instance override for concurrent lab instances.
+    // The poll below keeps a per-instance read offset, so two apps sharing one
+    // file both consume every key — isolated channels need distinct files.
+    // Default unchanged: /tmp/240mp_key.in.
+    m_debugKeyFile = qEnvironmentVariable("240MP_KEY_FILE",
+                                          QStringLiteral("/tmp/240mp_key.in"));
     m_debugKeyTimer.setInterval(200);
     m_debugKeyTimer.start();
 #endif
