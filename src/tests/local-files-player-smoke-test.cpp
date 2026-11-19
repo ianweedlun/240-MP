@@ -23,6 +23,7 @@
 #include <QVariantMap>
 #include <QColor>
 #include <cstdio>
+#include <memory>
 
 static int failures = 0;
 static void check(bool ok, const char *what) {
@@ -128,6 +129,11 @@ struct Fixture {
     StubLocalFiles localFiles;
     StubMpv mpv;
     QObject *view = nullptr;
+    // Fixture owns both heap objects makeFixture() creates. ~Fixture() deletes
+    // view first; reverse member order then destroys childCtx before the stubs
+    // and the engine. Callers only ever `delete f`.
+    std::unique_ptr<QQmlContext> childCtx;
+    ~Fixture() { delete view; }
 };
 
 static Fixture *makeFixture(const QString &filePath, const QVariantMap &settings,
@@ -156,8 +162,8 @@ static Fixture *makeFixture(const QString &filePath, const QVariantMap &settings
     nav["title"] = QStringLiteral("Test Playlist");
     // Qt 6 removed QQmlComponent::create(initialProperties); wrap the real view
     // in a tiny inline component so navParams is set before onCompleted runs.
-    auto *childCtx = new QQmlContext(&f->engine);
-    childCtx->setContextProperty("initialNavParams", nav);
+    f->childCtx = std::make_unique<QQmlContext>(&f->engine);
+    f->childCtx->setContextProperty("initialNavParams", nav);
     const QString viewsUrl = QUrl::fromLocalFile(rootDir + "/modules/local_files/views").toString();
     QQmlComponent wrapper(&f->engine);
     wrapper.setData(("import QtQuick\nimport \"" + viewsUrl +
@@ -167,7 +173,7 @@ static Fixture *makeFixture(const QString &filePath, const QVariantMap &settings
         for (const auto &e : wrapper.errors())
             std::printf("  ERR  %s: %s\n", qPrintable(tag), e.description().toLocal8Bit().constData());
     }
-    f->view = wrapper.create(childCtx);
+    f->view = wrapper.create(f->childCtx.get());
     if (!f->view) check(false, qPrintable(tag + ": Player.qml instantiates"));
     return f;
 }
@@ -196,7 +202,6 @@ int main(int argc, char **argv) {
         if (f->view) {
             check(f->mpv.calls == 1, "loop OFF (legacy string) still starts playback");
             check(!f->mpv.loop, "loop OFF (legacy string) does not enable mpv loop");
-            delete f->view;
         }
         delete f;
     }
@@ -204,12 +209,12 @@ int main(int argc, char **argv) {
         QVariantMap s = base; s["loop_playback"] = QStringLiteral("ON");
         auto *f = makeFixture(list, s, {}, "loop-on-string");
         if (f->view) check(f->mpv.loop, "loop ON (legacy string) enables mpv loop");
-        delete f->view; delete f;
+        delete f;
     }
     {
         auto *f = makeFixture(list, base, {}, "loop-off-bool");
         if (f->view) check(!f->mpv.loop, "loop OFF (bool) does not enable mpv loop");
-        delete f->view; delete f;
+        delete f;
     }
 
     // 2. Playlist resume with zero elapsed time but a saved item index.
@@ -229,7 +234,6 @@ int main(int argc, char **argv) {
             sendKey(f->view, Qt::Key_Return);
             check(f->mpv.calls == 1 && f->mpv.playlistStart == 2,
                   "pos=0 plPos=2 resumes playlist at item 2");
-            delete f->view;
         }
         delete f;
     }
@@ -240,7 +244,6 @@ int main(int argc, char **argv) {
             check(f->mpv.calls == 1 && f->mpv.playlistStart == 2 &&
                   f->mpv.startSeconds == 0.0f,
                   "Resume=Always with pos=0 plPos=2 starts item 2 from 0s");
-            delete f->view;
         }
         delete f;
     }
@@ -255,7 +258,6 @@ int main(int argc, char **argv) {
             check(f->mpv.calls == 1 && f->mpv.playlistStart == 3 &&
                   f->mpv.startSeconds > 64.0f && f->mpv.startSeconds < 66.0f,
                   "pos>0 plPos=3 resumes at 65s on item 3");
-            delete f->view;
         }
         delete f;
     }
@@ -266,7 +268,6 @@ int main(int argc, char **argv) {
         if (f->view) {
             check(f->mpv.calls == 1 && f->mpv.playlistStart == -1,
                   "resume=Never restarts the playlist");
-            delete f->view;
         }
         delete f;
     }
