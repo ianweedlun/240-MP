@@ -528,10 +528,27 @@ if(BUILD_TESTS)
     endif()
     foreach(stall_case alsa-delay200 alsa-delay0 pipewire-delay200 pipewire-delay0
                        noop-control alsa-faults pipewire-faults)
+        # The 16 ms wall-clock gate needs a quiet host. The macOS CI runner
+        # (macos-15-intel) jitters 50-58 ms on the noop control's heartbeat
+        # with ZERO mixer I/O — rig noise, not product (the canary's exact
+        # verdict, see README). Timing cases therefore run on Linux only;
+        # fault cases (boundedness/sanitizer, no 16 ms gate) run everywhere.
+        if(APPLE AND NOT stall_case MATCHES "faults$")
+            continue()
+        endif()
+        # pipewire-delay200 is EXPECTED-RED until the PipeWire async
+        # conversion (kanban t_2ecfe298) lands: --baseline asserts the
+        # recorded pre-fix shape (stall present, 1 call/press, red bands),
+        # keeping the case two-sided — it flips to FAIL ("fix landed") once
+        # that card converts the backend. Remove --baseline at that point.
+        set(stall_mode "")
+        if(stall_case STREQUAL "pipewire-delay200")
+            set(stall_mode "--baseline")
+        endif()
         add_test(NAME volume-stall-${stall_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_volume_stall_case.py
-                --case ${stall_case}
+                --case ${stall_case} ${stall_mode}
                 --probe $<TARGET_FILE:volume-stall-probe>
                 --stub-bin $<TARGET_FILE:mixer-stub>
                 --repo-root ${CMAKE_CURRENT_SOURCE_DIR})

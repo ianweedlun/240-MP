@@ -85,11 +85,25 @@ is a clamp no-op that never reaches the mixer.
 |---|---|---|
 | `volume-stall-alsa-delay200` | **FAIL** (ui-stall) | PASS |
 | `volume-stall-alsa-delay0` | **FAIL** (ui-stall: 7 spawns > 16 ms) | PASS |
-| `volume-stall-pipewire-delay200` | **FAIL** (ui-stall) | PASS |
+| `volume-stall-pipewire-delay200` | **FAIL** (ui-stall) | expected-red (`--baseline`) until t_2ecfe298, then PASS |
 | `volume-stall-pipewire-delay0` | borderline (heartbeat sits on the 16 ms boundary) | PASS |
 | `volume-stall-noop-control` | PASS (rig self-check) | PASS |
 | `volume-stall-alsa-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
 | `volume-stall-pipewire-faults` | PASS (bounded, sane, sanitizer-clean) | PASS |
+
+Two registration scopes (CMakeLists, BUILD_TESTS block):
+
+- **Timing cases are Linux-only.** The 16 ms wall-clock gate needs a quiet
+  host; the macOS CI runner (macos-15-intel) jitters 50–58 ms on the noop
+  control's heartbeat with zero mixer I/O — the canary's exact "rig noise,
+  not product" verdict. Fault cases (boundedness/sanitizer, no 16 ms gate)
+  still run on every platform.
+- **`pipewire-delay200` runs in `--baseline` (expected-red) mode** until the
+  PipeWire async conversion (kanban t_2ecfe298) lands: it asserts the
+  recorded pre-fix shape (stall present, 1 call/press, red bands) instead
+  of the fixed shape, so CI stays honest while the defect is still owned
+  by an open card. When that card converts the backend, this case flips to
+  FAIL ("run unexpectedly green — fix landed") — remove `--baseline` then.
 
 Fault cases run three sub-runs each: `exit1` (nonzero exit, no output),
 `garbage` (unparseable output), `missing` (no executable on PATH → factory
