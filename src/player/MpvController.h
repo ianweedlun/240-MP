@@ -48,6 +48,11 @@ public:
     // which a process that has stopped servicing that socket never reads.
     Q_INVOKABLE void forceStop();
     Q_INVOKABLE void seekTo(int positionMs);
+    // Forward a key to mpv. Quit-intent keys (ESC/BS/STOP) are guaranteed-delivery:
+    // post-connect they are sent as a byte-identical "keypress" (preserving the lua
+    // menu-esc/screensaver dismiss semantics); pre-connect they call forceStop()
+    // instead of being dropped, so an early Back can never orphan the spawned mpv
+    // (R-2). All other keys are best-effort and dropped before the IPC connects.
     Q_INVOKABLE void sendKey(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system

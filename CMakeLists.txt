@@ -846,6 +846,51 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
 
+    # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
+    # with stub backends and asserts a Back in each launch phase routes to
+    # sendKey (post-launch) vs goBack (pre-launch) — the launchDone flag, not the
+    # first-position playbackStarted flag, gates the quit intent.
+    add_executable(youtube-quit-intent-smoke src/tests/youtube-quit-intent-smoke-test.cpp)
+    set_target_properties(youtube-quit-intent-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-quit-intent-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-quit-intent-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-quit-intent-smoke COMMAND youtube-quit-intent-smoke)
+
+    # R-2 (issue #109): quit-intent hybrid against the REAL MpvController + mpv.
+    # SPEC-1 pre-connect invariant x100 (ESC/BS/STOP), SPEC-2 post-connect lua
+    # preservation, SPEC-4 loop-on bounded exit. Real AppCore (config-driven
+    # mpv_video_args/screensaver_timeout); QSKIPs when mpv/ffmpeg are absent so
+    # CI lanes without a media stack stay green.
+    add_executable(mpv-quit-intent-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvQuitIntentTest.cpp)
+    set_target_properties(mpv-quit-intent-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-quit-intent-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-quit-intent-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-quit-intent-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-quit-intent-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-quit-intent-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-quit-intent COMMAND mpv-quit-intent-tests)
+    # QTEST_MAIN constructs a QGuiApplication before any main-body code runs, so
+    # the offscreen platform must come from the environment (the QML smokes can
+    # qputenv it in main; this one cannot). Headless CI lanes have no display.
+    set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 endif()
 
 include(CPack)
