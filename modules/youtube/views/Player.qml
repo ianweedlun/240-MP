@@ -20,6 +20,14 @@ FocusScope {
     property string directAudioUrl: ""   // its bestaudio pair, when the format split one
     property bool   overlayVisible:   false
     property bool   playbackStarted:  false
+    // R-2: true from the instant doPlay() spawns mpv (loadAndPlay) until the next
+    // preparePlayback()/playAt() resets it. Distinct from playbackStarted (first
+    // position event): the ESC/BS Back guard keys off THIS so a Back in the
+    // post-launch / pre-playbackStarted window routes through sendKey("ESC")
+    // (guaranteed-delivery → forceStop pre-connect) instead of goBack() orphaning
+    // the just-spawned mpv. Pre-launch windows (cold resolve, 50 ms startTimer,
+    // resume overlay) keep launchDone == false → direct goBack(), no child to orphan.
+    property bool   launchDone:       false
     property int    savedPositionMs:  0
     property int    choiceIndex:      0
     property string errorMessage:     ""
@@ -89,6 +97,10 @@ FocusScope {
         // OSC segment marks get their data out-of-band: raw source ranges the
         // script converts to the cut virtual timeline itself (empty clears).
         mpvController.setOscRanges(oscRanges)
+        // R-2: mark launch intent the instant mpv is spawned. From here a Back
+        // must route through sendKey (guaranteed-delivery), never goBack() which
+        // would orphan the child before its first position event.
+        launchDone = true
         mpvController.loadAndPlay(playUrl, startMs / 1000.0, 0, -2, [], [], false, -1, 0.0, "", false, "", false, [], 0.0, false, args)
     }
 
@@ -102,7 +114,7 @@ FocusScope {
     // backend's background resolve is the only route and playAt() will wait
     // for playbackUrlReady rather than pay ytdl_hook's re-resolve.
     function preparePlayback() {
-        launchDone = false
+        launchDone = false   // R-2: a fresh resolve/launch sequence clears prior intent
         var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
         // Segment windows: kick the fetch now so a cold resolve that lands a
         // moment later still finds them. This NEVER gates the launch — the EDL
@@ -158,9 +170,6 @@ FocusScope {
     // past it we take the ytdl path as the always-works fallback.
     property bool   waitingForResolve: false
     property int    pendingPlayStartMs: 0
-    // Set once doPlay has frozen this launch's EDL. A sponsorReady after that
-    // is a late arrival: cached for the next play, never for the current one.
-    property bool   launchDone: false
 
     // The in-process Innertube resolve answers in well under a second, so 4 s
     // covers its timeout with margin; past it we take the ytdl path (mpv's
@@ -232,6 +241,7 @@ FocusScope {
     }
 
     function playAt(startMs) {
+        launchDone = false   // R-2: every launch sequence starts pre-intent; doPlay sets it on spawn
         if (directPlayUrl !== "") {
             play(startMs)
             return
@@ -293,28 +303,32 @@ FocusScope {
             }
         } else {
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Back) {
-                if (!playerRoot.playbackStarted)
+                // R-2: key off launchDone (mpv spawned), not playbackStarted (first
+                // position). Post-launch/pre-playbackStarted Back must reach sendKey
+                // so the quit intent is guaranteed-delivery (forceStop pre-connect)
+                // instead of goBack() orphaning the child. Pre-launch → direct goBack.
+                if (!playerRoot.launchDone)
                     goBack()
                 else
                     mpvController.sendKey("ESC")
                 event.accepted = true
             } else if (event.key === Qt.Key_Backspace) {
-                if (!playerRoot.playbackStarted)
+                if (!playerRoot.launchDone)
                     goBack()
                 else
                     mpvController.sendKey("BS")
                 event.accepted = true
             } else if (event.key === Qt.Key_Up) {
-                mpvController.sendKey("UP")
+                mpvController.sendKey("UP", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Down) {
-                mpvController.sendKey("DOWN")
+                mpvController.sendKey("DOWN", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Left) {
-                mpvController.sendKey("LEFT")
+                mpvController.sendKey("LEFT", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Right) {
-                mpvController.sendKey("RIGHT")
+                mpvController.sendKey("RIGHT", event.isAutoRepeat)
                 event.accepted = true
             } else if (event.key === Qt.Key_Space) {
                 mpvController.sendKey("SPACE")
@@ -324,6 +338,26 @@ FocusScope {
                 event.accepted = true
             }
         }
+    }
+
+    // Held-direction shaping lives in MpvController (SeekHoldPolicy); the view
+    // only has to tell it about key-up so a speed ramp ends and a coalesced
+    // rewind flushes its remainder. The direct-IPC path gets the same release
+    // from InputManager.mpvKeyReleased.
+    Keys.onReleased: function(event) {
+        if (event.key === Qt.Key_Left) {
+            mpvController.sendKeyUp("LEFT")
+            event.accepted = true
+        } else if (event.key === Qt.Key_Right) {
+            mpvController.sendKeyUp("RIGHT")
+            event.accepted = true
+        }
+    }
+
+    // Leaving the view mid-hold must not strand a 4x speed or a pending flush.
+    Component.onDestruction: {
+        mpvController.sendKeyUp("RIGHT")
+        mpvController.sendKeyUp("LEFT")
     }
 
     Connections {

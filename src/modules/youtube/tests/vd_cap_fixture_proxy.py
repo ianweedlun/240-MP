@@ -160,6 +160,7 @@ class Handler(socketserver.BaseRequestHandler):
             host = authority.split(":", 1)[0]
             raw.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(args.cert, args.key)
             conn = context.wrap_socket(raw, server_side=True)
             request_head, body = recv_head(conn)

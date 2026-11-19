@@ -3,6 +3,7 @@
 #include "../util/YtDlpLocator.h"
 #include "../util/MpvLocator.h"
 #include "../util/MpvBasicOptions.h"
+#include "../util/MpvInstancePaths.h"
 #include "../util/AutoFit.h"
 #include "../util/DisplayHandoff.h"
 #include "../util/FontconfigOverride.h"
@@ -19,6 +20,12 @@
 #include <QDateTime>
 #include <QRegularExpression>
 #include <QDebug>
+#include <atomic>
+
+// Per-process construction sequence for the instance token (T2, issue #111):
+// the pid separates app processes; the sequence separates multiple controllers
+// inside one process (test rigs construct several). Starts at 1.
+static std::atomic_int g_mpvInstanceSeq{0};
 
 MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                              AppCore *appCore, DisplayHandoff *handoff,
@@ -28,11 +35,34 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     , m_handoff(handoff)
     , m_appRoot(appRoot)
     , m_dataRoot(dataRoot)
-    , m_socketPath(QDir::tempPath() + "/240mp-mpv.sock")
-    , m_inputConfPath(QDir::tempPath() + "/240mp-input.conf")
-    , m_logFilePath(QDir::tempPath() + "/240mp-mpv.log")
-    , m_subInfoPath(QDir::tempPath() + "/240mp-mpv-subinfo.json")
 {
+    // Per-instance temp paths — never the old fixed names: two concurrent
+    // instances (or lab harnesses) used to collide on the shared socket, and
+    // mpv unlinks+rebinds an existing path, stealing the other instance's IPC.
+    const mpvipc::InstancePaths paths = mpvipc::makeInstancePaths(
+        QDir::tempPath(), QCoreApplication::applicationPid(),
+        g_mpvInstanceSeq.fetch_add(1) + 1);
+    m_socketPath    = paths.socket;
+    m_inputConfPath = paths.inputConf;
+    m_logFilePath   = paths.log;
+    m_subInfoPath   = paths.subInfo;
+
+    // Discovery contract: one unconditional line per instance. Harnesses and
+    // tooling parse this instead of guessing a shared path.
+    qInfo("[MpvController] instance paths: socket=%s log=%s ipc=%s",
+          qPrintable(paths.ipcUsable ? m_socketPath : QStringLiteral("disabled")),
+          qPrintable(m_logFilePath),
+          paths.ipcUsable ? "enabled" : "disabled");
+    if (!paths.ipcUsable) {
+        // Fail safe, never relocate: a shorter-directory fallback would break
+        // discovery and silently change the padded-TMPDIR regression arm.
+        // Playback continues without IPC; quit goes through forceStop.
+        qWarning("[MpvController] IPC socket path exceeds sun_path limit "
+                 "(%d > %d bytes): %s — running without IPC",
+                 paths.rejectedLen, mpvipc::sunPathLimit(),
+                 qPrintable(paths.rejectedSocket));
+    }
+
     m_videoProfile = detectVideoProfile();
     qInfo("[MpvController] video profile: %s",
           m_videoProfile == VideoProfile::Pi4       ? "Pi 4 — drm + drm-copy,v4l2m2m-copy"
@@ -45,6 +75,13 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         f.write("ESC quit\n");
         f.write("BS quit\n");
         f.write("ENTER cycle pause\n");
+        // Seek steps for the native/physical-keyboard path. The app's own key
+        // paths (QML and direct IPC) shape seeks through SeekHoldPolicy with
+        // the same steps; held directions never reach mpv as repeated keypresses.
+        f.write("RIGHT seek 10 relative+exact\n");
+        f.write("LEFT seek -10 relative+exact\n");
+        f.write("UP seek 60 relative+exact\n");
+        f.write("DOWN seek -60 relative+exact\n");
         f.close();
     }
 
@@ -112,6 +149,10 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     });
     connect(m_ipc, &QLocalSocket::readyRead, this, &MpvController::onIpcReadyRead);
 
+    m_seekFlushTimer = new QTimer(this);
+    m_seekFlushTimer->setSingleShot(true);
+    m_seekFlushTimer->setInterval(SeekHoldPolicy::kCoalesceFlushMs);
+    connect(m_seekFlushTimer, &QTimer::timeout, this, &MpvController::onSeekFlush);
     m_connectTimer = new QTimer(this);
     m_connectTimer->setInterval(100);
     connect(m_connectTimer, &QTimer::timeout, this, &MpvController::tryConnectIpc);
@@ -171,6 +212,8 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // return can never leak it into the next, non-YouTube launch.
     const QString sbRanges = m_oscRanges;
     m_oscRanges.clear();
+    // A new launch starts at normal speed with no hold state carried over.
+    resetSeekHold();
     if (m_process) {
         m_process->disconnect();
         if (m_process->state() != QProcess::NotRunning) {
@@ -185,7 +228,8 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     }
     m_watchdogTimer->stop();
     m_ipc->abort();
-    QFile::remove(m_socketPath);
+    if (!m_socketPath.isEmpty())
+        QFile::remove(m_socketPath);
     m_position    = 0;
     m_duration    = 0;
     m_playlistPos = -1;
@@ -233,8 +277,11 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // playlist from every non-option argument. These must be absolute paths or URLs
     // (so they can't be mistaken for flags); pass mpv options via extraArgs instead.
     args << extraUrls;
-    args << QString("--input-ipc-server=%1").arg(m_socketPath)
-         << QString("--log-file=%1").arg(m_logFilePath)
+    // IPC is omitted entirely when the per-instance socket path exceeded
+    // sun_path (T2): mpv plays on without a socket, quit goes through forceStop.
+    if (!m_socketPath.isEmpty())
+        args << QString("--input-ipc-server=%1").arg(m_socketPath);
+    args << QString("--log-file=%1").arg(m_logFilePath)
          << (hasOscScript ? "--osc=no" : "--osc=yes")
          << "--osd-level=0"
          // mpv 0.40 renamed --stats to --load-stats-overlay and flipped its
@@ -431,6 +478,35 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
         if (!out.isEmpty())
             qWarning("[mpv] %s", out.trimmed().constData());
     });
+    // FailedToStart is the one process error Qt does NOT follow with finished():
+    // locate() succeeded but the spawn itself failed (exec-format error, missing
+    // libs, ENOENT race, non-executable file). Without this handler the Player
+    // view waits for a playbackEnded that never comes (issue #110). Mirror the
+    // missing-bin / handoff-refusal bail-outs above: tear down, then a deferred
+    // synthetic end with reason "failed" — the views already branch on it.
+    // Other error kinds (Crashed, ...) still deliver finished() and stay on the
+    // normal onProcessFinished path.
+    connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError err) {
+        if (err != QProcess::FailedToStart) return;
+        qWarning("[MpvController] mpv failed to start: %s — synthetic playbackEnded(failed)",
+                 qPrintable(m_process->errorString()));
+        m_connectTimer->stop();
+        m_watchdogTimer->stop();
+        m_ipc->abort();
+        QFile::remove(m_socketPath);
+        if (m_headlessMode) {
+            // acquire() may have handed us the display before start() failed.
+            // mpv never ran, so there is no pending KMS commit to defer for —
+            // releaseNow is a no-op when we don't hold the screen.
+            if (m_handoff) m_handoff->releaseNow(QLatin1String(kHandoffOwner));
+            m_headlessMode = false;
+        }
+        m_process->deleteLater();
+        m_process = nullptr;
+        QTimer::singleShot(0, this, [this]() {
+            emit playbackEnded(0, 0, QStringLiteral("failed"));
+        });
+    });
 
     m_headlessMode = DisplayHandoff::isHeadless();
     if (m_headlessMode) {
@@ -564,6 +640,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 
 void MpvController::stop() {
     m_pendingOsd.clear();
+    resetSeekHold();
 
     if (m_ipc->state() == QLocalSocket::ConnectedState) {
         sendCommand({"quit"});
@@ -574,6 +651,7 @@ void MpvController::stop() {
 
 void MpvController::forceStop() {
     m_pendingOsd.clear();
+    resetSeekHold();
     if (!m_process || m_process->state() == QProcess::NotRunning) return;
     m_process->terminate();
     QPointer<QProcess> proc = m_process;
@@ -586,8 +664,81 @@ void MpvController::seekTo(int positionMs) {
     sendCommand({"seek", positionMs / 1000.0, "absolute+exact"});
 }
 
-void MpvController::sendKey(const QString &key) {
-    sendCommand({"keypress", key});
+void MpvController::sendKey(const QString &key, bool autoRepeat) {
+    // R-2 quit-intent keys are guaranteed-delivery: before the IPC socket reaches
+    // ConnectedState, ESC/BS/STOP route straight to forceStop() (terminate +
+    // QPointer-guarded SIGKILL escalation), reaping the child and emitting
+    // playbackEnded("stopped") so an early Back never orphans the spawned mpv
+    // (forever under --loop-playlist=inf). Post-connect they fall through to the
+    // policy below, which passes non-directional keys as a byte-identical
+    // "keypress", preserving the lua menu-esc/screensaver dismiss semantics.
+    if (key == QLatin1String("ESC") || key == QLatin1String("BS")
+        || key == QLatin1String("STOP")) {
+        if (m_ipc->state() != QLocalSocket::ConnectedState) {
+            forceStop();
+            return;
+        }
+    }
+    // Both key paths converge here: QML (window active) and the direct-IPC
+    // connect in main.cpp (mpv owns the screen). SeekHoldPolicy shapes taps
+    // into single exact seeks and holds into a speed ramp / coalesced rewind,
+    // so a 10 presses/s held key can never backlog the demuxer again.
+    executePolicyCommand(m_seekPolicy.press(key, autoRepeat));
+    syncSeekFlushTimer();
+}
+
+void MpvController::sendKeyUp(const QString &key) {
+    executePolicyCommand(m_seekPolicy.release(key));
+    syncSeekFlushTimer();
+}
+
+void MpvController::onSeekFlush() {
+    executePolicyCommand(m_seekPolicy.flush());
+    syncSeekFlushTimer();
+}
+
+void MpvController::syncSeekFlushTimer() {
+    if (m_seekPolicy.flushTimerWanted()) {
+        if (!m_seekFlushTimer->isActive())
+            m_seekFlushTimer->start();
+    } else {
+        m_seekFlushTimer->stop();
+    }
+}
+
+void MpvController::resetSeekHold() {
+    m_seekPolicy.reset();
+    m_seekFlushTimer->stop();
+}
+
+void MpvController::executePolicyCommand(const SeekHoldPolicy::Command &cmd) {
+    switch (cmd.kind) {
+    case SeekHoldPolicy::Command::Seek:
+        sendCommand({"seek", cmd.value, "relative+exact"});
+        break;
+    case SeekHoldPolicy::Command::Speed:
+        setPlaybackSpeed(cmd.value);
+        break;
+    case SeekHoldPolicy::Command::Key:
+        sendCommand({"keypress", cmd.key});
+        break;
+    case SeekHoldPolicy::Command::None:
+        break;
+    }
+}
+
+void MpvController::setPlaybackSpeed(double speed) {
+    if (m_ipc->state() != QLocalSocket::ConnectedState)
+        return;   // no child owns the screen; nothing to ramp
+    sendCommand({"set_property", "speed", speed});
+    if (m_hasMediaKeysScript)
+        sendCommand({"script-message", "240mp-speed-osd", QString::number(speed)});
+}
+
+void MpvController::showOscMenu() {
+    if (m_ipc->state() != QLocalSocket::ConnectedState)
+        return;   // no child owns the screen; nothing to surface
+    sendCommand({"script-message", "240mp-osd-menu-show"});
 }
 
 void MpvController::showOsdSkipPrompt() {
@@ -625,6 +776,8 @@ void MpvController::clearOsdPrompt() {
 }
 
 void MpvController::tryConnectIpc() {
+    if (m_socketPath.isEmpty())   // IPC disabled: over-limit sun_path (T2)
+        return;
     if (m_ipc->state() == QLocalSocket::ConnectedState
         || m_ipc->state() == QLocalSocket::ConnectingState) {
         return;
@@ -769,6 +922,7 @@ void MpvController::onIpcReadyRead() {
 }
 
 void MpvController::onProcessFinished() {
+    resetSeekHold();
     int exitCode = m_process ? m_process->exitCode() : -1;
     if (m_process) {
         const QByteArray remaining = m_process->readAll();
@@ -787,7 +941,8 @@ void MpvController::onProcessFinished() {
     if (m_ipc->state() == QLocalSocket::ConnectedState)
         onIpcReadyRead();
     m_ipc->abort();
-    QFile::remove(m_socketPath);
+    if (!m_socketPath.isEmpty())
+        QFile::remove(m_socketPath);
     const int pos = m_position;
     const int dur = m_duration;
     m_position = 0;

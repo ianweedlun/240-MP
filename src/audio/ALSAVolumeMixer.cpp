@@ -207,9 +207,16 @@ void ALSAVolumeMixer::pump() {
         req.arguments = {QStringLiteral("sset"), m_control,
                          QString::number(v) + QStringLiteral("%")};
         req.tag = QStringLiteral("sset");
-        req.parser = [guard = QPointer<ALSAVolumeMixer>(this)](const QString &out)
+        // Generation stamp at SUBMIT time (held mutations flush after later
+        // accepts already bumped the counter). An echo superseded by a newer
+        // request must not clobber the newer optimistic cache or emit a stale
+        // value over it — the newer request's own echo reports the truth.
+        const quint64 generation = m_generation;
+        req.parser = [guard = QPointer<ALSAVolumeMixer>(this), generation](const QString &out)
             -> std::optional<MixerState> {
-            return guard ? guard->parseVolumeEcho(out) : std::nullopt;
+            if (!guard || generation != guard->m_generation)
+                return std::nullopt;
+            return guard->parseVolumeEcho(out);
         };
         m_outstanding = true;
         m_runner->submit(req);
@@ -223,9 +230,13 @@ void ALSAVolumeMixer::pump() {
         req.arguments = {QStringLiteral("set"), muteTarget(),
                          muted ? QStringLiteral("mute") : QStringLiteral("unmute")};
         req.tag = QStringLiteral("set-mute");
-        req.parser = [guard = QPointer<ALSAVolumeMixer>(this)](const QString &out)
+        // Same submit-time generation guard as the level echo above.
+        const quint64 generation = m_generation;
+        req.parser = [guard = QPointer<ALSAVolumeMixer>(this), generation](const QString &out)
             -> std::optional<MixerState> {
-            return guard ? guard->parseSwitchEcho(out) : std::nullopt;
+            if (!guard || generation != guard->m_generation)
+                return std::nullopt;
+            return guard->parseSwitchEcho(out);
         };
         m_outstanding = true;
         m_runner->submit(req);

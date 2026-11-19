@@ -20,6 +20,8 @@ ListView {
         if (!model)
             return ""
         var row = model[index]
+        if (typeof row === "string")
+            return row
         if (!row || typeof row !== "object")
             return ""
         return row.name || row.label || row.text || row.title || ""

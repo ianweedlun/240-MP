@@ -131,7 +131,10 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        if (filePath === "") return
+        if (filePath === "") {
+            goBack()
+            return
+        }
         var loopRaw   = appCore.get_setting(moduleRoot.moduleId, "loop_playback")
         // Old configs stored toggles as the strings "ON"/"OFF"; !!() in JS would
         // turn "OFF" into true and loop every file forever. Match the Settings

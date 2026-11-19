@@ -20,6 +20,7 @@
 #include <QUrl>
 #include <QTest>
 #include <cstdio>
+#include <memory>
 
 class StubAppCore : public QObject {
     Q_OBJECT
@@ -190,9 +191,11 @@ int main(int argc, char **argv) {
     }
     // Player.qml declares its own navParams, so a context property of that
     // name is shadowed. Inject it as an initial property before onCompleted.
-    QObject *view = comp.beginCreate(engine.rootContext());
+    // Own the created view: the early-return failure paths below must not
+    // leak it (LSan reports on every exit, including behavioral failures).
+    std::unique_ptr<QObject> view(comp.beginCreate(engine.rootContext()));
     if (!view) return 1;
-    comp.setInitialProperties(view, {{QStringLiteral("navParams"), params}});
+    comp.setInitialProperties(view.get(), {{QStringLiteral("navParams"), params}});
     comp.completeCreate();
     if (!view) return 1;
     // The deferred 50 ms startTimer can be delayed by font discovery and other
@@ -224,7 +227,7 @@ int main(int argc, char **argv) {
                                    Q_ARG(QString, QStringLiteral("TOK")));
     QCoreApplication::processEvents();
     check(ok && mpv.plays.size() == 2, "transcode URL relaunches mpv");
-    check(QQmlProperty::read(view, "isTranscoding").toBool(), "player switches to transcode mode");
+    check(QQmlProperty::read(view.get(), "isTranscoding").toBool(), "player switches to transcode mode");
     if (mpv.plays.size() < 2) return failures ? 1 : 0;
 
     const StubMpv::Play &retry = mpv.plays.at(1);
@@ -240,7 +243,7 @@ int main(int argc, char **argv) {
     check(retry.subTrack == -1, "transcode retry disables mpv subtitle tracks");
     check(retry.subFiles.isEmpty(), "transcode retry carries no external subtitle files");
 
-    delete view;
+    view.reset();   // teardown order stays view -> context -> engine
     std::printf("%s (%d failure(s))\n", failures == 0 ? "PLEX PLAYER OK" : "PLEX PLAYER FAILED", failures);
     return failures == 0 ? 0 : 1;
 }
