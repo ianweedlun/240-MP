@@ -910,6 +910,9 @@ void YouTubeBackend::saveSponsorCache()
             o.insert(QStringLiteral("category"), s.category);
             o.insert(QStringLiteral("segmentType"), s.action);
             o.insert(QStringLiteral("segment"), range);
+            o.insert(QStringLiteral("votes"), s.votes);
+            o.insert(QStringLiteral("locked"), s.locked ? 1 : 0);
+            o.insert(QStringLiteral("videoDuration"), s.videoDuration);
             rows.append(o);
         }
         QJsonObject e;
