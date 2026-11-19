@@ -712,6 +712,17 @@ if(BUILD_TESTS)
     target_compile_definitions(local-files-player-smoke PRIVATE
         MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
+
+    # R10: an empty filePath must goBack() at the launch entry instead of
+    # stranding the view (no mpv child ever spawns, so Back/ESC cannot exit).
+    # Two-sided: fails on the pre-fix snapshot by design.
+    add_executable(local-files-empty-path-smoke src/tests/local-files-empty-path-smoke-test.cpp)
+    set_target_properties(local-files-empty-path-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-empty-path-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-empty-path-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-empty-path-smoke COMMAND local-files-empty-path-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
