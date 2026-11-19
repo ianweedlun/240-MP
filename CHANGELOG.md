@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: playback starts with the video's default audio language (#103)
+- VISIONOS `adaptiveFormats` now expose `audioTrack.audioIsDefault`, `displayName`, and `id` to the picker. The explicitly default track wins; with no default marker, an `original` track is the fallback, then stable track identity makes the choice independent of response ordering. Indexed itag-140 AAC remains preferred within each group.
+- The warm URL cache key is versioned so pre-fix pairs cannot keep serving the first-listed dub after the RC upgrade.
+- A live multi-audio probe reproduced the defect: the old picker chose Spanish (`es.3`) instead of English original/default (`en.4`). Behavior tests cover that fixture, default-versus-original precedence, both no-default fallbacks, and the unchanged muxed path. The yt-dlp fallback was probed too and already selects English original/default, so it is unchanged.
+
 ### Fixed — YouTube: Innertube URLs now actually play (VISIONOS + page-derived visitorData)
 - The resolver used the IOS client. Its googlevideo URLs answer a **bounded** `Range` (`bytes=0-1000` → 206) but **403** the open-ended `Range: bytes=0-` that ffmpeg/mpv actually sends, so every real playback failed with `No video or audio streams selected` while the spike's curl probe passed. The client is now **VISIONOS** (yt-dlp's JS-less default, client id 101), whose URLs return 200 bare and 206 open-ended. Client fields are copied from yt-dlp's `youtube/_base.py`, not guessed.
 - VISIONOS is bot-walled (`LOGIN_REQUIRED`) unless `visitorData` came from a real YouTube page. The vendored `generateVisitorData()` is synthetic and rejected, so the resolver fetches it once per process from youtube.com, asynchronously, inside the existing 4 s timeout.

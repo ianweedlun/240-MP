@@ -23,6 +23,9 @@ namespace InnertubeObjects
         QString qualityLabel;
         QString url;
         int width;
+        QString audioTrackDisplayName;
+        QString audioTrackId;
+        bool audioIsDefault = false;
 
         explicit StreamingFormat(const QJsonValue& format)
             : approxDurationMs(format["approxDurationMs"].toString()),
@@ -42,6 +45,9 @@ namespace InnertubeObjects
               quality(format["quality"].toString()),
               qualityLabel(format["qualityLabel"].toString()),
               url(format["url"].toString()),
-              width(format["width"].toInt()) {}
+              width(format["width"].toInt()),
+              audioTrackDisplayName(format["audioTrack"]["displayName"].toString()),
+              audioTrackId(format["audioTrack"]["id"].toString()),
+              audioIsDefault(format["audioTrack"]["audioIsDefault"].toBool()) {}
     };
 }

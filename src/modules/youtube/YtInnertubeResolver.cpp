@@ -153,9 +153,11 @@ void YtInnertubeResolver::startPlayer()
         QVector<ytstream::Format> formats;
         formats.reserve(sd.formats.size() + sd.adaptiveFormats.size());
         for (const InnertubeObjects::StreamingFormat &f : sd.formats)
-            formats.append({f.itag, f.height, f.mimeType, f.url});
+            formats.append({f.itag, f.height, f.mimeType, f.url, f.audioTrackId,
+                            f.audioTrackDisplayName, f.audioIsDefault});
         for (const InnertubeObjects::StreamingFormat &f : sd.adaptiveFormats)
-            formats.append({f.itag, f.height, f.mimeType, f.url});
+            formats.append({f.itag, f.height, f.mimeType, f.url, f.audioTrackId,
+                            f.audioTrackDisplayName, f.audioIsDefault});
 
         const ytstream::Pair pair = ytstream::selectPair(formats, m_maxHeight);
 

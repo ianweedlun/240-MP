@@ -10,7 +10,11 @@
 //   * video — the tallest H.264 (avc1) track at or below the cap. H.264 first
 //     because the Pi 4 decodes it in hardware; a non-avc1 track is only used
 //     when no avc1 track fits the cap.
-//   * audio — itag 140 (m4a) is preferred: it is the indexed AAC track, so
+//   * audio — YouTube's audioTrack.audioIsDefault track wins, so a dub that
+//     happens to be serialized first cannot replace the video's default
+//     language. With no default marker, an "original" display name is the
+//     next-best signal; otherwise the stable audioTrack.id breaks ties. Within
+//     those groups itag 140 (m4a) is preferred: it is the indexed AAC track, so
 //     seeking does not re-read the file (see the fast-forward fix). Any other
 //     audio track is a fallback.
 //   * muxed — when the list carries no audio-only track (live broadcasts,
@@ -35,6 +39,9 @@ struct Format {
     int     height = 0;      // 0 = unknown (audio-only tracks report none)
     QString mimeType;
     QString url;
+    QString audioTrackId;           // e.g. "en.4"; stable language/track identity
+    QString audioTrackDisplayName;  // e.g. "English original"
+    bool    audioIsDefault = false;
 };
 
 struct Pair {
@@ -84,19 +91,36 @@ inline Pair selectPair(const QVector<Format> &formats, int maxHeight)
 
     const Format *audio = nullptr;
     bool audioMp4a = false;
+    int audioTrackRank = -1;
     for (const Format &f : formats) {
         if (f.url.isEmpty() || !f.mimeType.contains(QLatin1String("audio")))
             continue;
-        if (f.itag == 140) {       // indexed m4a — the locked audio pick
-            audio = &f;
-            break;
-        }
+
+        // The explicit default flag is authoritative. If a response omits it,
+        // "original" is the useful language fallback; stable track identity
+        // makes the final tie-break independent of adaptiveFormats ordering.
+        const int trackRank = f.audioIsDefault ? 2
+            : f.audioTrackDisplayName.contains(QStringLiteral("original"),
+                                               Qt::CaseInsensitive) ? 1 : 0;
         const bool mp4a = f.mimeType.contains(QLatin1String("mp4a"));
+        bool replace = false;
         if (!audio) {
+            replace = true;
+        } else if (trackRank != audioTrackRank) {
+            replace = trackRank > audioTrackRank;
+        } else if ((f.itag == 140) != (audio->itag == 140)) {
+            replace = f.itag == 140; // indexed m4a — preferred within a track group
+        } else if (mp4a != audioMp4a) {
+            replace = mp4a;
+        } else if (!f.audioTrackId.isEmpty()
+                   && (audio->audioTrackId.isEmpty()
+                       || f.audioTrackId < audio->audioTrackId)) {
+            replace = true;
+        }
+        if (replace) {
             audio = &f;
             audioMp4a = mp4a;
-        } else if (mp4a && !audioMp4a) {
-            audio = &f;
+            audioTrackRank = trackRank;
         }
     }
 

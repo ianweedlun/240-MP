@@ -19,12 +19,20 @@ ytstream::Format video(int itag, int height, const QString &codec, bool withUrl 
     return f;
 }
 
-ytstream::Format audio(int itag, const QString &codec)
+ytstream::Format audio(int itag, const QString &codec, const QString &trackId = {},
+                       const QString &displayName = {}, bool isDefault = false)
 {
     ytstream::Format f;
     f.itag = itag;
-    f.mimeType = QStringLiteral("audio/mp4; codecs=\"%1\"").arg(codec);
+    const QString container = codec.startsWith(QStringLiteral("opus"))
+                                  ? QStringLiteral("audio/webm") : QStringLiteral("audio/mp4");
+    f.mimeType = QStringLiteral("%1; codecs=\"%2\"").arg(container, codec);
     f.url = QStringLiteral("https://a/%1").arg(itag);
+    f.audioTrackId = trackId;
+    f.audioTrackDisplayName = displayName;
+    f.audioIsDefault = isDefault;
+    if (!trackId.isEmpty())
+        f.url += QLatin1Char('/') + trackId;
     return f;
 }
 
@@ -39,6 +47,10 @@ private slots:
     void fallsBackToNonAvc1WhenNothingFits();
     void rejectsEverythingAboveTheCap();
     void prefersItag140Audio();
+    void prefersDefaultAudioTrackOverFirstDub();
+    void defaultFlagOutranksOriginalFallback();
+    void fallsBackToOriginalTrackWhenNoDefaultIsMarked();
+    void unmarkedMultiAudioFallbackIsOrderIndependent();
     void muxedSingleWhenNoAudioTrack();
     void muxedIsNotInventedFromVideoOnly();
     void emptyInputIsNotOk();
@@ -109,6 +121,72 @@ void YtStreamSelectTest::prefersItag140Audio()
     const ytstream::Pair p = ytstream::selectPair(formats, 480);
     QVERIFY(p.ok);
     QCOMPARE(p.audioUrl, QStringLiteral("https://a/140"));
+}
+
+void YtStreamSelectTest::prefersDefaultAudioTrackOverFirstDub()
+{
+    // Live VISIONOS probe fixture: the first itag-140 is Spanish, while the
+    // English original track is marked default. The old picker selects es.3;
+    // the fixed picker must select en.4 regardless of response order.
+    const QVector<ytstream::Format> formats{
+        video(135, 480, QStringLiteral("avc1.4d401f")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("es.3"),
+              QStringLiteral("Spanish")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("pt.3"),
+              QStringLiteral("Portuguese")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("en.4"),
+              QStringLiteral("English original"), true),
+    };
+    const ytstream::Pair p = ytstream::selectPair(formats, 480);
+    QVERIFY(p.ok);
+    QCOMPARE(p.audioUrl, QStringLiteral("https://a/140/en.4"));
+}
+
+void YtStreamSelectTest::defaultFlagOutranksOriginalFallback()
+{
+    const QVector<ytstream::Format> formats{
+        video(135, 480, QStringLiteral("avc1.4d401f")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("en.4"),
+              QStringLiteral("English original")),
+        audio(251, QStringLiteral("opus"), QStringLiteral("es.3"),
+              QStringLiteral("Spanish"), true),
+    };
+    // Default-track identity outranks both the original fallback and the
+    // non-default itag-140 codec preference.
+    QCOMPARE(ytstream::selectPair(formats, 480).audioUrl,
+             QStringLiteral("https://a/251/es.3"));
+}
+
+void YtStreamSelectTest::fallsBackToOriginalTrackWhenNoDefaultIsMarked()
+{
+    const QVector<ytstream::Format> formats{
+        video(135, 480, QStringLiteral("avc1.4d401f")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("es.3"),
+              QStringLiteral("Spanish")),
+        audio(140, QStringLiteral("mp4a.40.2"), QStringLiteral("en.4"),
+              QStringLiteral("English original")),
+    };
+    QCOMPARE(ytstream::selectPair(formats, 480).audioUrl,
+             QStringLiteral("https://a/140/en.4"));
+}
+
+void YtStreamSelectTest::unmarkedMultiAudioFallbackIsOrderIndependent()
+{
+    const auto spanish = audio(140, QStringLiteral("mp4a.40.2"),
+                               QStringLiteral("es.3"), QStringLiteral("Spanish"));
+    const auto portuguese = audio(140, QStringLiteral("mp4a.40.2"),
+                                  QStringLiteral("pt.3"), QStringLiteral("Portuguese"));
+    const QVector<ytstream::Format> forward{
+        video(135, 480, QStringLiteral("avc1.4d401f")), spanish, portuguese};
+    const QVector<ytstream::Format> reversed{
+        video(135, 480, QStringLiteral("avc1.4d401f")), portuguese, spanish};
+
+    // No default/original signal exists: use stable track identity rather than
+    // whichever dub YouTube happened to serialize first.
+    QCOMPARE(ytstream::selectPair(forward, 480).audioUrl,
+             QStringLiteral("https://a/140/es.3"));
+    QCOMPARE(ytstream::selectPair(reversed, 480).audioUrl,
+             QStringLiteral("https://a/140/es.3"));
 }
 
 void YtStreamSelectTest::muxedSingleWhenNoAudioTrack()

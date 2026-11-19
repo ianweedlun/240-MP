@@ -21,6 +21,12 @@ Each entry records the upstream, the exact commit, the licence, and every local 
    with no GitHub reach still builds.
 4. **`probe/` is not vendored** — that directory was spike-only scaffolding.
 
+### Local source patches
+
+1. **`StreamingFormat` exposes `audioTrack.displayName`, `audioTrack.id`, and
+   `audioTrack.audioIsDefault`.** The resolver needs these fields to choose the
+   video's default-language audio instead of the first listed dub.
+
 ## verdigris
 
 - Upstream: https://github.com/woboq/verdigris
@@ -40,7 +46,7 @@ Each entry records the upstream, the exact commit, the licence, and every local 
 
 ## Updating
 
-Re-vendor by checking out the upstream commit, copying the tree, and re-applying the four
+Re-vendor by checking out the upstream commit, copying the tree, and re-applying the
 innertube-qt patches above. Verify with a clean build:
 
 ```bash
