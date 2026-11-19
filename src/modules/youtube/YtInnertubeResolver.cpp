@@ -92,10 +92,14 @@ bool YtInnertubeResolver::resolve(const QString &videoId, const QString &resolut
     // already covers that wait, so a slow page falls back to yt-dlp.
     if (m_visitorData.isEmpty() && !m_vdDone) {
         m_pendingStart = true;
+        // Carry this attempt's generation into the fetch continuation: the
+        // timeout abandons an attempt by bumping m_generation, and the late
+        // completion must not chain Player for an abandoned attempt (ROB-07).
+        m_pendingGeneration = generation;
         fetchVisitorData();
         return true;
     }
-    startPlayer();
+    startPlayer(generation);
     return true;
 }
 
@@ -118,20 +122,31 @@ void YtInnertubeResolver::fetchVisitorData()
         m_vdDone = true;   // even on failure: don't retry per resolve
         if (m_pendingStart) {
             m_pendingStart = false;
-            startPlayer();
+            // Generation invariant: only the still-live waiting attempt may
+            // chain into Player. A timeout bumped m_generation and already
+            // emitted the terminal result, so a stale completion is dropped
+            // silently — never emitResult, never issue a Player request.
+            if (m_pendingGeneration == m_generation)
+                startPlayer(m_pendingGeneration);
         }
     });
 }
 
-void YtInnertubeResolver::startPlayer()
+void YtInnertubeResolver::startPlayer(qint64 generation)
 {
     ensureClient();
-    const qint64 generation = m_generation;
+    // `generation` is the originating attempt's, passed in by the caller.
+    // Re-reading m_generation here would bind a late continuation to whatever
+    // attempt is current and defeat the timeout invalidation (ROB-07).
 
     PlayerReply *reply = nullptr;
     try {
         reply = m_it->get<PlayerEndpoint>(m_videoId);
     } catch (const InnertubeException &ex) {
+        // Same generation invariant as the async reply handlers: an attempt
+        // abandoned while get() ran already has its terminal result.
+        if (generation != m_generation)
+            return;
         YtResolveResult r;
         r.videoId = m_videoId;
         r.resolution = m_resolution;
@@ -145,8 +160,11 @@ void YtInnertubeResolver::startPlayer()
 
     connect(reply, &PlayerReply::finished, this,
             [this, generation](const PlayerEndpoint &player) {
+        // Generation invariant: this reply must belong to the live attempt.
+        // A timeout (or a superseding resolve) bumped m_generation, so a
+        // stale reply is dropped — the abandoned attempt already terminated.
         if (generation != m_generation)
-            return; // a timeout already reported this attempt
+            return;
         m_timeout->stop();
 
         const InnertubeObjects::StreamingData &sd = player.response.streamingData;
@@ -196,6 +214,8 @@ void YtInnertubeResolver::startPlayer()
 
     connect(reply, &PlayerReply::exception, this,
             [this, generation](const InnertubeException &ex) {
+        // Generation invariant: same as the finished handler above — a stale
+        // exception from an abandoned attempt must not emit a second result.
         if (generation != m_generation)
             return;
         m_timeout->stop();
@@ -212,6 +232,12 @@ void YtInnertubeResolver::startPlayer()
 
 void YtInnertubeResolver::emitResult(const YtResolveResult &result)
 {
+    // One-terminal-per-attempt latch: m_inFlight is true exactly between an
+    // accepted resolve() and its terminal result. Any stale continuation that
+    // still reaches here (e.g. a timeout event queued behind a Player result)
+    // is dropped, making emitResult idempotent per attempt.
+    if (!m_inFlight)
+        return;
     ++m_generation;    // invalidate any reply still in flight
     m_inFlight = false;
     m_timeout->stop();

@@ -73,7 +73,10 @@ signals:
 private:
     void ensureClient();
     void fetchVisitorData();
-    void startPlayer();
+    // `generation` is the originating attempt's, captured in resolve() and
+    // carried through every continuation — never re-read m_generation at call
+    // time (ROB-07: a late reply must stay bound to the attempt that issued it).
+    void startPlayer(qint64 generation);
     void emitResult(const YtResolveResult &result);
 
     InnerTube *m_it = nullptr;
@@ -94,4 +97,8 @@ private:
     bool    m_vdStarted = false;
     bool    m_vdDone = false;
     bool    m_pendingStart = false;
+    // Generation of the attempt waiting on the visitorData fetch. The fetch is
+    // one-shot per process, so a re-resolve while it is in flight re-arms the
+    // wait with its own generation; the completion chains only the live one.
+    qint64  m_pendingGeneration = 0;
 };
