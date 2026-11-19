@@ -5,6 +5,10 @@ production artwork must be human-made and libre (open source, fair use, CC), and
 attribution is always required. Any libre code of others used in this project
 deserves recognition and thanks. This file is that home for it.
 
+## SponsorBlock data
+
+Uses SponsorBlock data from [sponsor.ajay.app](https://sponsor.ajay.app/) — [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+
 ## Typefaces
 
 - **VCR OSD Mono** (`assets/fonts/VCR_OSD_MONO_1.001.ttf`), created by
