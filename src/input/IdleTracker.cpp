@@ -43,18 +43,28 @@ void IdleTracker::setMpvActive(bool active)
 {
     if (m_mpvActive == active)
         return;
+
+    const bool wasBlocked = blocked();
     m_mpvActive = active;
     emit mpvActiveChanged();
 
-    // If activation was blocked and nothing holds the screen any more, deactivate
-    // immediately so the screen saver doesn't flash on the menu afterwards.
-    if (!blocked() && m_active) {
-        m_active = false;
-        emit activeChanged();
+    if (wasBlocked && !blocked()) {
+        // Blocking -> unblocked edge: nothing owns the screen any more. Reset
+        // the frozen pre-playback idle count (and any active saver) so a
+        // keyless return — natural EOF, failed launch — starts a full idle
+        // period instead of firing the saver on the first tick (IDLE-01).
+        // Safe by construction: callers need no paired resetActivity().
+        resetIdleState();
     }
+    // Unblocked -> blocking: no reset — the count simply freezes while
+    // blocked() (tick() early-returns). No-op writes returned above.
 }
 
-void IdleTracker::resetActivity()
+// Shared mechanical reset: zero the idle count, clear any active saver, and
+// emit the count/activity signals. resetActivity() (explicit activity) and
+// the blocking->unblocked edges of both setters funnel through here so the
+// three paths cannot diverge.
+void IdleTracker::resetIdleState()
 {
     const bool wasActive = m_active;
     m_idleSeconds = 0;
@@ -64,6 +74,11 @@ void IdleTracker::resetActivity()
     if (wasActive)
         emit activeChanged();
     emit activityDetected();
+}
+
+void IdleTracker::resetActivity()
+{
+    resetIdleState();
 }
 
 bool IdleTracker::eventFilter(QObject *obj, QEvent *event)
@@ -102,13 +117,16 @@ void IdleTracker::setScriptActive(bool active)
 {
     if (m_scriptActive == active)
         return;
+
+    const bool wasBlocked = blocked();
     m_scriptActive = active;
     emit scriptActiveChanged();
 
-    // As in setMpvActive: only clear once nothing owns the screen, so ending one
-    // session can't unblock the saver while the other is still running.
-    if (!blocked() && m_active) {
-        m_active = false;
-        emit activeChanged();
+    if (wasBlocked && !blocked()) {
+        // Same contract as setMpvActive: only the session that ends LAST
+        // unblocks, and that blocking->unblocked edge resets the idle count
+        // (IDLE-01). Ending one session while the other still owns the screen
+        // changes nothing — no reset, no saver flash.
+        resetIdleState();
     }
 }

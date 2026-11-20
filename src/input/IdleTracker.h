@@ -21,11 +21,14 @@ class IdleTracker : public QObject {
     // Master switch — when false the timer never fires active.
     Q_PROPERTY(bool enabled READ isEnabled WRITE setEnabled NOTIFY enabledChanged)
     // Blocks activation while a media session is active (mpv playing).
-    // Prevents the screen saver from showing on top of playback.
+    // Prevents the screen saver from showing on top of playback. On the
+    // blocking->unblocked edge the idle count is reset, so a keyless return
+    // from playback starts a full idle period — no paired reset needed.
     Q_PROPERTY(bool mpvActive READ isMpvActive WRITE setMpvActive NOTIFY mpvActiveChanged)
     // Blocks activation while a user script is running (see the scripts module).
     // A separate flag rather than sharing mpvActive: two independent producers
     // sharing one flag means whichever session ends first unblocks the other.
+    // Same blocking->unblocked idle-count reset as mpvActive.
     Q_PROPERTY(bool scriptActive READ isScriptActive WRITE setScriptActive NOTIFY scriptActiveChanged)
 
 public:
@@ -54,7 +57,8 @@ signals:
     void enabledChanged();
     void mpvActiveChanged();
     void scriptActiveChanged();
-    // Emitted on every call to resetActivity (including from the event filter).
+    // Emitted on every resetActivity() call (including from the event filter)
+    // and on the blocking->unblocked edge of mpvActive/scriptActive.
     void activityDetected();
 
 protected:
@@ -66,6 +70,10 @@ private slots:
 private:
     // Any external session that owns the screen suppresses the saver.
     bool blocked() const { return m_mpvActive || m_scriptActive; }
+
+    // Shared count/activity reset behind resetActivity() and both setters'
+    // blocking->unblocked edge (IDLE-01), so the paths cannot diverge.
+    void resetIdleState();
 
     QTimer m_timer;
     int    m_threshold;
