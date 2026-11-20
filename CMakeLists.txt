@@ -688,6 +688,61 @@ if(BUILD_TESTS)
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endforeach()
 
+    # IDLE-01 stale idle-count regression gate (torture IDLE-01): a keyless
+    # return from playback/script must start a FULL idle period, not fire the
+    # saver on the first tick from the frozen pre-playback count. Drives the
+    # REAL IdleTracker offscreen (Qt Core+Gui only — no QML/mpv/audio, runs on
+    # every CI lane) with an accelerated 4 s threshold and real 1000 ms ticks.
+    # Two-sided: the mpv and script arms FAIL by design on the pre-fix class
+    # (first-tick fire ~0.5 s / 1 tick); keypress and fresh-idle controls PASS
+    # on both sides. Every arm asserts the freeze invariant (zero
+    # idleSecondsChanged emissions during a 3.5 s block). Needs python3
+    # (stdlib only). RUN_SERIAL: timing gate, keep the 1 s ticks quiet.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target idle-tracker-stale-count-probe
+    #   ctest --test-dir build-test -R idle-tracker-stale-count --output-on-failure
+    # Two-sided control build (pre-fix checkout, never edited):
+    #   cmake -B build-ctl -DBUILD_TESTS=ON -DIDLE01_SOURCE_ROOT=<pre-fix-tree>
+    #   cmake --build build-ctl --target idle-tracker-stale-count-probe
+    #   ctest --test-dir build-ctl -R idle-tracker-stale-count --output-on-failure
+    # See src/tests/README-idle-tracker-stale-count.md (env, bands, expectations).
+    set(IDLE01_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+        "Source tree whose src/input/IdleTracker.cpp the stale-count probe compiles (point at a pre-fix checkout for the two-sided control run)")
+    add_executable(idle-tracker-stale-count-probe
+        src/tests/IdleTrackerStaleCountProbe.cpp
+        ${IDLE01_SOURCE_ROOT}/src/input/IdleTracker.cpp)
+    set_target_properties(idle-tracker-stale-count-probe PROPERTIES AUTOMOC ON)
+    target_include_directories(idle-tracker-stale-count-probe PRIVATE
+        ${IDLE01_SOURCE_ROOT}/src/input)
+    target_link_libraries(idle-tracker-stale-count-probe PRIVATE Qt6::Core Qt6::Gui)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(idle-tracker-stale-count-probe PRIVATE -Wall -Wextra)
+    endif()
+    # Compiled-rev provenance: the JSON reports the tree the class came FROM
+    # (IDLE01_SOURCE_ROOT), not the configure tree — they differ in control
+    # builds. Same set()/\" pattern as the other root defs.
+    execute_process(COMMAND git -C "${IDLE01_SOURCE_ROOT}" rev-parse HEAD
+        OUTPUT_VARIABLE IDLE01_SOURCE_REV
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+        RESULT_VARIABLE IDLE01_REV_RC)
+    if(NOT IDLE01_REV_RC EQUAL 0)
+        set(IDLE01_SOURCE_REV "unknown")
+    endif()
+    set(IDLE01_REV_DEF "IDLE01_SOURCE_REV=\"${IDLE01_SOURCE_REV}\"")
+    target_compile_definitions(idle-tracker-stale-count-probe PRIVATE ${IDLE01_REV_DEF})
+    foreach(idle_case mpv script keypress fresh)
+        add_test(NAME idle-tracker-stale-count-${idle_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_idle_tracker_stale_count_case.py
+                --case ${idle_case}
+                --probe $<TARGET_FILE:idle-tracker-stale-count-probe>
+                --source-root ${IDLE01_SOURCE_ROOT})
+        set_tests_properties(idle-tracker-stale-count-${idle_case} PROPERTIES
+            TIMEOUT 300
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
         src/modules/plex/tests/PlaybackDecisionTest.cpp)
