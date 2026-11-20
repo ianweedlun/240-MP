@@ -202,8 +202,14 @@ int main(int argc, char **argv) {
     qi->setHeight(480);
     qi->setFocus(true);
     window.show();
-    QTest::qWait(150);
-
+    // The launch is a queued QML signal, so a fixed wait races on a loaded
+    // runner (the macOS CI flaked here: plays==0 at 150 ms). Poll for it the
+    // way plex-player-smoke and youtube-player-smoke do.
+    int launchWaitMs = 0;
+    while (mpv.plays == 0 && launchWaitMs < 2000) {
+        QTest::qWait(50);
+        launchWaitMs += 50;
+    }
     check(mpv.plays == 1, "warm direct path launches once on completion");
     check(QQmlProperty::read(obj, "errorMessage").toString().isEmpty(), "no error overlay");
     check(!QQmlProperty::read(obj, "overlayVisible").toBool(), "no resume overlay");
