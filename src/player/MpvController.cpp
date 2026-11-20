@@ -33,6 +33,7 @@ static std::atomic_int g_mpvInstanceSeq{0};
 // for (20 ticks @ 100 ms = 2 s per speed step).
 static constexpr int kHoldRepeatDelayMs    = 400;
 static constexpr int kHoldRepeatIntervalMs = 100;
+static constexpr int kHoldEndGraceMs       = 250;   // #133: max gap between a release and the next press
 
 MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                              AppCore *appCore, DisplayHandoff *handoff,
@@ -170,6 +171,17 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     m_leftHoldTimer = new QTimer(this);
     m_leftHoldTimer->setSingleShot(true);
     connect(m_leftHoldTimer, &QTimer::timeout, this, &MpvController::onHoldRepeatTick);
+    // #133: the owner's remote autorepeats as discrete press/release PAIRS,
+    // not one sustained keydown. A release between every repeat was ending the
+    // hold (sendKeyUp cleared m_*Held + stopped the timer), so each pair
+    // rebuilt it and the ramp reset to 1x -> the 1x<->2x flap, never 4x. A
+    // release now only arms a short grace window; a keydown arriving within it
+    // continues the hold instead of restarting it, and the grace fires the real
+    // release only after the pair stream has genuinely stopped.
+    m_holdEndGraceTimer = new QTimer(this);
+    m_holdEndGraceTimer->setSingleShot(true);
+    m_holdEndGraceTimer->setInterval(kHoldEndGraceMs);
+    connect(m_holdEndGraceTimer, &QTimer::timeout, this, &MpvController::onHoldEndGrace);
     m_connectTimer = new QTimer(this);
     m_connectTimer->setInterval(100);
     connect(m_connectTimer, &QTimer::timeout, this, &MpvController::tryConnectIpc);
@@ -711,12 +723,18 @@ void MpvController::sendKey(const QString &key, bool autoRepeat) {
     // InputManager cadence. Any further keydown for a key already held —
     // repeat-flagged or mislabeled as fresh — is ignored, so the tick stream
     // is deterministic on every key path. sendKeyUp ends the hold.
-    if (key == QLatin1String("RIGHT") || key == QLatin1String("LEFT")) {
-        const bool right = (key == QLatin1String("RIGHT"));
+    if (key ==QLatin1String("RIGHT") || key ==QLatin1String("LEFT")) {
+        const bool right = (key ==QLatin1String("RIGHT"));
         bool &held = right ? m_rightHeld : m_leftHeld;
         if (held)
             return;   // the internal timer is the sole repeat source
+        // #133: a keydown arriving within the grace window after a release is
+        // the next pair of the SAME hold — continue it, do not restart (a
+        // restart would reset the ramp to 1x and re-arm the 400 ms delay).
+        if (m_holdEndGraceTimer->isActive())
+            m_holdEndGraceTimer->stop();
         held = true;
+        m_lastHeldKey = key;
         executePolicyCommand(m_seekPolicy.press(key, autoRepeat));
         syncSeekFlushTimer();
         QTimer *t = right ? m_rightHoldTimer : m_leftHoldTimer;
@@ -731,14 +749,32 @@ void MpvController::sendKey(const QString &key, bool autoRepeat) {
 }
 
 void MpvController::sendKeyUp(const QString &key) {
-    if (key == QLatin1String("RIGHT")) {
+    // #133: the remote's autorepeat is press/release PAIRS, so a release is not
+    // proof the key is up — it may be the first half of the next pair. Defer the
+    // real release behind a short grace; a keydown within it continues the hold
+    // (sendKey stops the grace there), and the grace fires the release only
+    // after the pair stream has genuinely stopped. A release for a key that is
+    // not held is a spurious/stale event: ignore it rather than clearing state.
+    if (key ==QLatin1String("RIGHT")) {
+        if (!m_rightHeld) return;
         m_rightHeld = false;
         m_rightHoldTimer->stop();
-    } else if (key == QLatin1String("LEFT")) {
+        m_holdEndGraceTimer->start();
+        return;
+    } else if (key ==QLatin1String("LEFT")) {
+        if (!m_leftHeld) return;
         m_leftHeld = false;
         m_leftHoldTimer->stop();
+        m_holdEndGraceTimer->start();
+        return;
     }
     executePolicyCommand(m_seekPolicy.release(key));
+    syncSeekFlushTimer();
+}
+
+void MpvController::onHoldEndGrace() {
+    // The pair stream stopped; the key is genuinely up. End the hold for real.
+    executePolicyCommand(m_seekPolicy.release(m_lastHeldKey));
     syncSeekFlushTimer();
 }
 
@@ -779,6 +815,8 @@ void MpvController::resetSeekHold() {
     // exists (and a stranded timer would keep ticking into a dead session).
     m_rightHeld = false;
     m_leftHeld  = false;
+    m_lastHeldKey.clear();
+    m_holdEndGraceTimer->stop();
     m_rightHoldTimer->stop();
     m_leftHoldTimer->stop();
 }

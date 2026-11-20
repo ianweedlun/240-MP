@@ -310,13 +310,14 @@ signals:
 };
 
 // Raw-path trial modes — the three remote behaviors + the ideal canary.
-enum class Mode { Absent, Mislabeled, Variable, Clean };
+enum class Mode { Absent, Mislabeled, Variable, Clean, PairStream };
 const char *modeName(Mode m) {
     switch (m) {
     case Mode::Absent:     return "absent";
     case Mode::Mislabeled: return "mislabeled";
     case Mode::Variable:   return "variable";
     case Mode::Clean:      return "clean";
+    case Mode::PairStream: return "pairstream";
     }
     return "?";
 }
@@ -436,7 +437,8 @@ private Q_SLOTS:
 
     // Canary (both sides): a clean flagged-repeat hold ramps, key-up ends it,
     // and a fresh press re-arms (held state cleared). Also proves the fix did
-    // not break the synthesized-path contract the gamepad/remap lane uses.
+    // Rearm: a GENUINE release (gap > grace window) ends the hold; a later
+    // keydown re-arms it fresh. With #133's 250 ms grace, we need gaps > 250 ms.
     void keyUpEndsHoldAndRearms() {
         Rig rig;
         QVERIFY(rig.launch());
@@ -447,7 +449,7 @@ private Q_SLOTS:
                 rig.mpv->sendKey(QStringLiteral("RIGHT"), true);
             }
             rig.mpv->sendKeyUp(QStringLiteral("RIGHT"));
-            spinFor(200);
+            spinFor(300);   // > 250 ms grace: genuine release, hold ends
         }
         spinFor(200);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
@@ -458,6 +460,34 @@ private Q_SLOTS:
         QCOMPARE(tl.speeds.at(1).v, 1.0);
         QCOMPARE(tl.speeds.at(2).v, 2.0);
         QCOMPARE(tl.speeds.at(3).v, 1.0);
+    }
+
+    // PairStream (fixed expectation): the owner's remote autorepeats as
+    // discrete press/release pairs. A keyup between every repeat must NOT end
+    // the hold — the ramp still climbs 2x->4x deterministically and returns to
+    // 1x only after the pair stream stops. FAILS on pre-fix code (each keyup
+    // resets the ramp -> 1x<->2x flap, never 4x); PASSES with the hold-end grace.
+    void pairStreamHoldRampsDeterministically() {
+        Rig rig;
+        QVERIFY(rig.launch());
+        rig.mpv->sendKey(QStringLiteral("RIGHT"), false);
+        QElapsedTimer wall; wall.start();
+        while (wall.elapsed() < 4000) {
+            spinFor(120);
+            rig.mpv->sendKey(QStringLiteral("RIGHT"), true);
+            rig.mpv->sendKeyUp(QStringLiteral("RIGHT"));
+        }
+        spinFor(400);
+        const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
+        std::printf("  [pairstream-direct] %s\n", qPrintable(timelineBrief(tl)));
+        QCOMPARE(tl.seekTimes.size(), 1);
+        QCOMPARE(tl.speeds.size(), 3);
+        QCOMPARE(tl.speeds.at(0).v, 2.0);
+        QCOMPARE(tl.speeds.at(1).v, 4.0);
+        QCOMPARE(tl.speeds.at(2).v, 1.0);
+        const double dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
+        QVERIFY2(dwell >= 1.6 && dwell <= 3.4,
+                 qPrintable(QStringLiteral("pair-stream dwell %1 s outside the 2 s band").arg(dwell)));
     }
 
     // Canary (both sides): LEFT hold still coalesces into ~400 ms flushes of
@@ -603,8 +633,8 @@ private Q_SLOTS:
         const bool fixed = (expect == QLatin1String("fixed"));
         struct Arm { Mode mode; int trials; };
         const QList<Arm> arms = fixed
-            ? QList<Arm>{{Mode::Absent, 7}, {Mode::Mislabeled, 7}, {Mode::Variable, 7}, {Mode::Clean, 3}}
-            : QList<Arm>{{Mode::Absent, 3}, {Mode::Mislabeled, 3}, {Mode::Variable, 3}, {Mode::Clean, 1}};
+            ? QList<Arm>{{Mode::Absent, 7}, {Mode::Mislabeled, 7}, {Mode::Variable, 7}, {Mode::Clean, 3}, {Mode::PairStream, 7}}
+            : QList<Arm>{{Mode::Absent, 3}, {Mode::Mislabeled, 3}, {Mode::Variable, 3}, {Mode::Clean, 1}, {Mode::PairStream, 3}};
 
         QJsonArray evidence;
         int trialNo = 0;
@@ -681,15 +711,26 @@ private Q_SLOTS:
                 if (arm.mode == Mode::Mislabeled) nextDue = rng.next(80, 120);
                 else if (arm.mode == Mode::Variable) nextDue = rng.next(30, 60);
                 else if (arm.mode == Mode::Clean) nextDue = 100;
+                else if (arm.mode == Mode::PairStream) nextDue = rng.next(100, 140);
                 while (wall.elapsed() < holdMs) {
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
                     if (nextDue >= 0 && wall.elapsed() >= nextDue) {
-                        // Mislabeled remotes send FRESH presses; the others
-                        // send flagged repeats. Absent sends nothing at all.
-                        post(QEvent::KeyPress, arm.mode != Mode::Mislabeled);
-                        if (arm.mode == Mode::Mislabeled) nextDue = wall.elapsed() + rng.next(80, 120);
-                        else if (arm.mode == Mode::Variable) nextDue = wall.elapsed() + rng.next(30, 60);
-                        else nextDue = wall.elapsed() + 100;
+                        if (arm.mode == Mode::PairStream) {
+                            // The owner's remote autorepeats as discrete
+                            // press/release PAIRS (state log: ~7 right-delivered
+                            // transitions/s during a hold, each needing an
+                            // intervening release). A keyup between every repeat.
+                            post(QEvent::KeyPress, true);
+                            post(QEvent::KeyRelease, false);
+                            nextDue = wall.elapsed() + rng.next(100, 140);
+                        } else {
+                            // Mislabeled remotes send FRESH presses; the others
+                            // send flagged repeats. Absent sends nothing at all.
+                            post(QEvent::KeyPress, arm.mode != Mode::Mislabeled);
+                            if (arm.mode == Mode::Mislabeled) nextDue = wall.elapsed() + rng.next(80, 120);
+                            else if (arm.mode == Mode::Variable) nextDue = wall.elapsed() + rng.next(30, 60);
+                            else nextDue = wall.elapsed() + 100;
+                        }
                     }
                     QThread::msleep(2);
                 }
@@ -729,6 +770,16 @@ private Q_SLOTS:
                 } else if (arm.mode == Mode::Mislabeled) {
                     ok = tl.speeds.isEmpty() && tl.seekTimes.size() >= 3;
                     why = QStringLiteral("expected the defect: mislabeled presses -> seek machine-gun, no ramp");
+                } else if (arm.mode == Mode::PairStream) {
+                    bool only12 = true, has4 = false;
+                    for (const auto &e : tl.speeds) {
+                        if (e.v != 1.0 && e.v != 2.0) only12 = false;
+                        if (e.v == 4.0) has4 = true;
+                    }
+                    ok = tl.seekTimes.size() == 1 && tl.speeds.size() >= 6
+                         && only12 && !has4 && !tl.speeds.isEmpty()
+                         && tl.speeds.at(0).v == 2.0;
+                    why = QStringLiteral("expected the defect: press/release pairs reset the ramp each pair -> 1x<->2x flap, never 4x");
                 } else {   // Variable
                     double dwell = -1.0;
                     if (tl.speeds.size() >= 2 && tl.speeds.at(0).v == 2.0 && tl.speeds.at(1).v == 4.0)
