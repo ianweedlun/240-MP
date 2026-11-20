@@ -27,6 +27,13 @@
 // inside one process (test rigs construct several). Starts at 1.
 static std::atomic_int g_mpvInstanceSeq{0};
 
+// Held-key repeat cadence (#124) — mirrors InputManager's kRepeatDelayMs /
+// kRepeatIntervalMs so the synthesized gamepad/remap path and the raw remote
+// path produce the identical tick stream the SeekHoldPolicy ramp was tuned
+// for (20 ticks @ 100 ms = 2 s per speed step).
+static constexpr int kHoldRepeatDelayMs    = 400;
+static constexpr int kHoldRepeatIntervalMs = 100;
+
 MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                              AppCore *appCore, DisplayHandoff *handoff,
                              QObject *parent)
@@ -154,6 +161,15 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
     m_seekFlushTimer->setSingleShot(true);
     m_seekFlushTimer->setInterval(SeekHoldPolicy::kCoalesceFlushMs);
     connect(m_seekFlushTimer, &QTimer::timeout, this, &MpvController::onSeekFlush);
+    // Held-key repeat synthesis (#124): one single-shot timer per shaped
+    // direction, restarted at the tick interval after every fire. Created
+    // stopped; sendKey arms them on the first keydown of a hold.
+    m_rightHoldTimer = new QTimer(this);
+    m_rightHoldTimer->setSingleShot(true);
+    connect(m_rightHoldTimer, &QTimer::timeout, this, &MpvController::onHoldRepeatTick);
+    m_leftHoldTimer = new QTimer(this);
+    m_leftHoldTimer->setSingleShot(true);
+    connect(m_leftHoldTimer, &QTimer::timeout, this, &MpvController::onHoldRepeatTick);
     m_connectTimer = new QTimer(this);
     m_connectTimer->setInterval(100);
     connect(m_connectTimer, &QTimer::timeout, this, &MpvController::tryConnectIpc);
@@ -684,13 +700,61 @@ void MpvController::sendKey(const QString &key, bool autoRepeat) {
     // connect in main.cpp (mpv owns the screen). SeekHoldPolicy shapes taps
     // into single exact seeks and holds into a speed ramp / coalesced rewind,
     // so a 10 presses/s held key can never backlog the demuxer again.
+    //
+    // #124: the remote's default directional keys reach QML with whatever
+    // autorepeat the OS/EGLFS supplies — absent on some remotes, mislabeled
+    // as fresh presses on others, variable-rate where present. Trusting that
+    // flag made the ramp engage inconsistently (no ramp, ramp reset mid-hold,
+    // or a dwell that tracked the OS rate instead of 2 s). MpvController now
+    // owns the hold: the FIRST keydown of a LEFT/RIGHT hold feeds the policy
+    // as before, and a private timer synthesizes every repeat tick at the
+    // InputManager cadence. Any further keydown for a key already held —
+    // repeat-flagged or mislabeled as fresh — is ignored, so the tick stream
+    // is deterministic on every key path. sendKeyUp ends the hold.
+    if (key == QLatin1String("RIGHT") || key == QLatin1String("LEFT")) {
+        const bool right = (key == QLatin1String("RIGHT"));
+        bool &held = right ? m_rightHeld : m_leftHeld;
+        if (held)
+            return;   // the internal timer is the sole repeat source
+        held = true;
+        executePolicyCommand(m_seekPolicy.press(key, autoRepeat));
+        syncSeekFlushTimer();
+        QTimer *t = right ? m_rightHoldTimer : m_leftHoldTimer;
+        // A first event already flagged as a repeat means the initial down
+        // was missed (e.g. the view gained focus mid-hold): the hold is in
+        // progress, so skip the initial delay.
+        t->start(autoRepeat ? kHoldRepeatIntervalMs : kHoldRepeatDelayMs);
+        return;
+    }
     executePolicyCommand(m_seekPolicy.press(key, autoRepeat));
     syncSeekFlushTimer();
 }
 
 void MpvController::sendKeyUp(const QString &key) {
+    if (key == QLatin1String("RIGHT")) {
+        m_rightHeld = false;
+        m_rightHoldTimer->stop();
+    } else if (key == QLatin1String("LEFT")) {
+        m_leftHeld = false;
+        m_leftHoldTimer->stop();
+    }
     executePolicyCommand(m_seekPolicy.release(key));
     syncSeekFlushTimer();
+}
+
+void MpvController::onHoldRepeatTick() {
+    auto *t = qobject_cast<QTimer *>(sender());
+    if (!t) return;
+    const bool right = (t == m_rightHoldTimer);
+    const bool held  = right ? m_rightHeld : m_leftHeld;
+    if (!held) {
+        t->stop();
+        return;
+    }
+    const QString key = right ? QStringLiteral("RIGHT") : QStringLiteral("LEFT");
+    executePolicyCommand(m_seekPolicy.press(key, true));
+    syncSeekFlushTimer();
+    t->start(kHoldRepeatIntervalMs);
 }
 
 void MpvController::onSeekFlush() {
@@ -710,6 +774,13 @@ void MpvController::syncSeekFlushTimer() {
 void MpvController::resetSeekHold() {
     m_seekPolicy.reset();
     m_seekFlushTimer->stop();
+    // A stop/forceStop mid-hold must also end the physical-hold state, or the
+    // next keydown would be swallowed as a repeat of a hold that no longer
+    // exists (and a stranded timer would keep ticking into a dead session).
+    m_rightHeld = false;
+    m_leftHeld  = false;
+    m_rightHoldTimer->stop();
+    m_leftHoldTimer->stop();
 }
 
 void MpvController::executePolicyCommand(const SeekHoldPolicy::Command &cmd) {

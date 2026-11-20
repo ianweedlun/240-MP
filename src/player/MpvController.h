@@ -63,6 +63,11 @@ public:
     // instead of being dropped, so an early Back can never orphan the spawned mpv
     // (R-2). Directional keys are shaped by SeekHoldPolicy (taps -> exact seeks,
     // holds -> speed ramp / coalesced rewind); other keys pass through as keypress.
+    // LEFT/RIGHT holds are owned here (#124): the first keydown is the tap and a
+    // private timer synthesizes the repeat ticks, so the ramp dwell is deterministic
+    // even when OS/EGLFS autorepeat is absent, mislabeled as fresh presses, or
+    // variable-rate (the remote's default key path). Further keydowns for a key
+    // already held are ignored; sendKeyUp ends the hold.
     Q_INVOKABLE void sendKey(const QString &key, bool autoRepeat = false);
     // Key-up for the direct-IPC path and QML alike: ends a held-key speed ramp
     // or flushes the coalesced rewind accumulator (see SeekHoldPolicy).
@@ -135,6 +140,7 @@ private slots:
     void tryConnectIpc();
     void onIpcReadyRead();
     void onSeekFlush();
+    void onHoldRepeatTick();
 
 private:
     // Hardware video-decode profile, detected once from /proc/device-tree/model.
@@ -186,6 +192,17 @@ private:
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
     QTimer       *m_seekFlushTimer = nullptr;
+    // Held-key repeat synthesis (#124). The remote's default directional keys
+    // ride OS/EGLFS autorepeat, which is absent on some remotes, mislabeled as
+    // fresh presses on others, and variable-rate where present — trusting
+    // event.isAutoRepeat made the speed ramp engage inconsistently. These
+    // single-shot timers (400 ms first delay, then 100 ms per tick — the
+    // InputManager synthesized cadence) are the sole repeat source while a
+    // LEFT/RIGHT key is held; m_*Held tracks the physical hold across keydowns.
+    QTimer       *m_rightHoldTimer = nullptr;
+    QTimer       *m_leftHoldTimer  = nullptr;
+    bool          m_rightHeld      = false;
+    bool          m_leftHeld       = false;
     SeekHoldPolicy m_seekPolicy;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)

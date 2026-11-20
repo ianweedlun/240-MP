@@ -1265,6 +1265,41 @@ if(BUILD_TESTS)
     # qputenv it in main; this one cannot). Headless CI lanes have no display.
     set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+    # #124 hold-Right ramp consistency: REAL MpvController + REAL mpv + the REAL
+    # YouTube Player.qml driven through the RAW key path (QKeyEvents posted at
+    # the window — the remote's eventFilter return-false downstream). Two-sided:
+    # MP240_HOLD_EXPECT=fixed asserts the deterministic ramp; =defective asserts
+    # the known-bad pre-fix shapes (absent/mislabeled/variable-rate autorepeat).
+    # Loads Player.qml like youtube-seek-smoke, so the arm64 distro-Qt lane
+    # excludes it the same way; QSKIPs without mpv/ffmpeg. RUN_SERIAL: the dwell
+    # bands are wall-clock and must not race parallel ctest load.
+    add_executable(mpv-hold-repeat-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvHoldRepeatTest.cpp)
+    set_target_properties(mpv-hold-repeat-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-hold-repeat-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-hold-repeat-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-hold-repeat-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-hold-repeat-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-hold-repeat-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-hold-repeat COMMAND mpv-hold-repeat-tests)
+    set_tests_properties(mpv-hold-repeat PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" RUN_SERIAL TRUE)
+
     # R2 follow-up (issue #110): FailedToStart after a successful locate() must
     # emit a synthetic playbackEnded("failed") instead of leaving the Player
     # view waiting forever. Forces the spawn failure through the REAL locator
