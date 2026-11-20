@@ -141,6 +141,7 @@ private slots:
     void onIpcReadyRead();
     void onSeekFlush();
     void onHoldRepeatTick();
+    void onHoldEndGrace();      // #133: fires the deferred release after a pair stream stops
 
 private:
     // Hardware video-decode profile, detected once from /proc/device-tree/model.
@@ -201,8 +202,10 @@ private:
     // LEFT/RIGHT key is held; m_*Held tracks the physical hold across keydowns.
     QTimer       *m_rightHoldTimer = nullptr;
     QTimer       *m_leftHoldTimer  = nullptr;
+    QTimer       *m_holdEndGraceTimer = nullptr;   // #133: defers a release so a press/release pair can't tear down the hold
     bool          m_rightHeld      = false;
     bool          m_leftHeld       = false;
+    QString       m_lastHeldKey;             // #133: which key the grace timer must release
     SeekHoldPolicy m_seekPolicy;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
