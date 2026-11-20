@@ -13,7 +13,7 @@ private slots:
     void leftTapSeeksOneStep();
     void leftHoldCoalescesIntoFlushes();
     void leftReleaseFlushesRemainder();
-    void verticalTapsSeekChaptersHoldsDrop();
+    void verticalTapsOpenMenuHoldsDrop();
     void otherKeysPassThroughOnTapOnly();
     void resetClearsAllState();
     void heldBurstStaysWithinSeekBudget();
@@ -107,17 +107,25 @@ void SeekHoldPolicyTest::leftReleaseFlushesRemainder()
     QVERIFY(!p.flushTimerWanted());
 }
 
-void SeekHoldPolicyTest::verticalTapsSeekChaptersHoldsDrop()
+void SeekHoldPolicyTest::verticalTapsOpenMenuHoldsDrop()
 {
+    // #128: UP/DOWN are the owner's OSC-menu keys. A tap must pass through as
+    // a byte-identical keypress (the lua forced bindings open the menu); it
+    // must NOT seek. Held repeats drop so the menu cannot machine-gun.
     SeekHoldPolicy p;
-    QCOMPARE(p.press("UP", false).value, 60.0);
-    QCOMPARE(p.press("DOWN", false).value, -60.0);
+    const Cmd up = p.press("UP", false);
+    QCOMPARE(up.kind, Cmd::Key);
+    QCOMPARE(up.key, QString("UP"));
+    const Cmd down = p.press("DOWN", false);
+    QCOMPARE(down.kind, Cmd::Key);
+    QCOMPARE(down.key, QString("DOWN"));
     for (int i = 0; i < 10; ++i) {
         QCOMPARE(p.press("UP", true).kind, Cmd::None);
         QCOMPARE(p.press("DOWN", true).kind, Cmd::None);
     }
     QVERIFY(!p.flushTimerWanted());
     QCOMPARE(p.release("UP").kind, Cmd::None);
+    QCOMPARE(p.release("DOWN").kind, Cmd::None);
 }
 
 void SeekHoldPolicyTest::otherKeysPassThroughOnTapOnly()

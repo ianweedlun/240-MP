@@ -11,9 +11,12 @@
 //                  while held: playback runs from cache, no demuxer thrash.
 //   LEFT hold   -> coalesced backward seeks: accumulate -10 s per tick, one
 //                  flush per ~400 ms. Backward usually lands in cache.
-//   UP/DOWN hold-> ignored. Chapter-sized jumps stay per-tap; coalescing
-//                  them would build enormous forward scans.
-//   taps        -> single relative+exact seek (10 s horizontal, 60 s vertical).
+//   UP/DOWN     -> pass through on tap (the lua forced bindings open the mpv
+//                  OSC menu); repeats dropped so a held key cannot machine-gun
+//                  the menu. #128: the ±60 s vertical seek repurposing was an
+//                  unrequested behavior change — the menu is the owner's
+//                  contract for these keys.
+//   taps        -> single relative+exact seek (10 s horizontal).
 //   other keys  -> pass through on tap; repeats dropped (pause/quit must not
 //                  machine-gun either).
 //
@@ -35,7 +38,6 @@ public:
     void reset();
 
     static constexpr double kTapStepSec       = 10.0;
-    static constexpr double kVerticalStepSec  = 60.0;
     static constexpr double kRampSpeedNear    = 2.0;
     static constexpr double kRampSpeedFar     = 4.0;
     static constexpr int    kRampEscalateTicks = 10;  // ~1 s at 10 ticks/s
