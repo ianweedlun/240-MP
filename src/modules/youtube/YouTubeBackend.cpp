@@ -6,11 +6,14 @@
 #include "../../util/YtSponsorLru.h"
 #include "../../util/YtAuthGate.h"
 #include "../../util/YtBrowseRows.h"
+#include "../../util/YtHlsSelect.h"
+#include "../../util/YtFeedDedup.h"
 #include "../../util/YtDlpLocator.h"
 
 // Backend for the YouTube module
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -51,12 +54,29 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
             [this](const YtResolveResult &r) {
         if (r.ok) {
             clearNegativeCacheEntry(r.videoId); // a post-TTL success retires the old failure
+            if (!r.hlsManifestUrl.isEmpty()) {
+                // #128 live route: fetch + shape the HLS master; never cache a
+                // progressive pair for live content. Telemetry fires at the
+                // playlist hand-off so `ms` covers the whole live ladder.
+                m_resolveStartMs.insert(r.key,
+                                        QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
+                launchHlsResolve(r.videoId, r.resolution, r.key, r.hlsManifestUrl);
+                return;
+            }
             emit resolveTelemetry(r.videoId, QStringLiteral("innertube"), r.elapsedMs);
             if (r.expireEpoch > QDateTime::currentSecsSinceEpoch()) {
                 storeUrlCacheEntry(r.key, r.videoUrl, r.audioUrl, r.single,
                                    r.expireEpoch);
                 emit playbackUrlReady(r.videoId);
             }
+            finishUrlResolve(r.key);
+            return;
+        }
+        if (r.reason == QLatin1String("live-waiting")) {
+            // #128: the event has not started. Not a permanent failure — never
+            // negative-cache it, never pay a yt-dlp spawn; tell the viewer.
+            emit resolveTelemetry(r.videoId, QStringLiteral("live-waiting"), r.elapsedMs);
+            emit playbackResolveFailed(r.videoId, QStringLiteral("LIVE_WAITING"));
             finishUrlResolve(r.key);
             return;
         }
@@ -397,7 +417,9 @@ QVariantList YouTubeBackend::buildFeed() const {
         return a.toMap().value("publishedMs").toLongLong()
              > b.toMap().value("publishedMs").toLongLong();
     });
-    return all.mid(0, kMaxFeedItems);
+    // #128: collapse live double-posts and cross-channel videoId repeats
+    // before truncation so duplicates cannot eat the 100-row budget.
+    return ytfeed::dedupFeed(all).mid(0, kMaxFeedItems);
 }
 
 QVariantList YouTubeBackend::buildChannelList() const {
@@ -1539,6 +1561,66 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
     }
 }
 
+// #128 live route: one bounded GET of the HLS master, shaped to the resolution
+// cap, written to a per-video playlist file mpv demuxes as a single stream
+// (ffmpeg keeps A/V sync inside one HLS presentation — two independent live
+// playlists would drift). The cache entry is the FILE PATH with a 60 s TTL:
+// live segments roll, so a warm hit inside the minute reuses the just-written
+// file and anything older re-resolves a fresh master.
+static constexpr qint64 kLivePlaylistTtlS = 60;
+static constexpr qint64 kMaxHlsMasterBytes = 1024 * 1024;
+
+void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &resolution,
+                                      const QString &key, const QString &hlsUrl)
+{
+    QNetworkRequest req{QUrl(hlsUrl)};
+    QNetworkReply *reply = m_nam.get(req);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, key, videoId, resolution, hlsUrl]() {
+        reply->deleteLater();
+        const QByteArray body = reply->read(kMaxHlsMasterBytes);
+        const qint64 startedMs = m_resolveStartMs.take(key);
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startedMs;
+
+        QString playlistPath;
+        if (reply->error() == QNetworkReply::NoError && !body.isEmpty()) {
+            const QString shaped = ythls::filterMaster(
+                QString::fromUtf8(body), QUrl(hlsUrl),
+                ytstream::maxHeightForResolution(resolution));
+            if (!shaped.isEmpty()) {
+                const QString path = QDir::tempPath() + QStringLiteral("/240mp-yt-hls-")
+                                     + videoId + QStringLiteral(".m3u8");
+                QFile f(path);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    f.write(shaped.toUtf8());
+                    f.close();
+                    playlistPath = path;
+                }
+            }
+        }
+
+        if (playlistPath.isEmpty()) {
+            // One release of redundancy, same ladder as the progressive path:
+            // yt-dlp resolves live HLS too. Backdate so ms covers the ladder.
+            qWarning("[Youtube] live-hls-fail vid=%s ms=%lld err=%d",
+                     qPrintable(videoId), static_cast<long long>(ms),
+                     static_cast<int>(reply->error()));
+            emit resolveTelemetry(videoId, QStringLiteral("live-hls-fail"), ms);
+            m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch() - ms);
+            launchYtdlpResolve(videoId, resolution, key);
+            return;
+        }
+
+        storeUrlCacheEntry(key, playlistPath, QString(), true,
+                           QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS);
+        qWarning("[Youtube] resolve done (live-hls) vid=%s ms=%lld",
+                 qPrintable(videoId), static_cast<long long>(ms));
+        emit resolveTelemetry(videoId, QStringLiteral("live-hls"), ms);
+        emit playbackUrlReady(videoId);
+        finishUrlResolve(key);
+    });
+}
+
 void YouTubeBackend::launchYtdlpResolve(const QString &videoId, const QString &resolution,
                                         const QString &key)
 {
@@ -1574,12 +1656,33 @@ void YouTubeBackend::launchYtdlpResolve(const QString &videoId, const QString &r
             if (!u.isEmpty())
                 urls << u;
         }
+        // #128: a not-yet-started live event is not a permanent failure and
+        // not an empty resolve — yt-dlp says so explicitly. Surface the wait
+        // instead of the generic "unavailable" text; never negative-cache it.
+        const QString stderrText = QString::fromUtf8(proc->readAllStandardError());
+        if (urls.isEmpty()
+            && stderrText.contains(QLatin1String("will begin in a few moments"))) {
+            const qint64 waitStartedMs = m_resolveStartMs.take(key);
+            const qint64 waitMs = QDateTime::currentMSecsSinceEpoch() - waitStartedMs;
+            emit resolveTelemetry(videoId, QStringLiteral("live-waiting"), waitMs);
+            emit playbackResolveFailed(videoId, QStringLiteral("LIVE_WAITING"));
+            finishUrlResolve(key);
+            proc->deleteLater();
+            return;
+        }
         bool stored = false;
         if (!urls.isEmpty()) {
             const QString videoUrl = urls.value(0);
             const QString audioUrl = urls.value(1);
-            qint64 expire = yturl::expireEpochFromUrl(videoUrl);
-            if (!audioUrl.isEmpty()) {
+            // #128: live HLS URLs carry no expire param; give them the same
+            // short TTL as the shaped-master path so the fallback plays
+            // instead of dying at the expiry gate.
+            const bool isHls = videoUrl.contains(QLatin1String(".m3u8"))
+                || videoUrl.contains(QLatin1String("hls_playlist"));
+            qint64 expire = isHls
+                ? QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS
+                : yturl::expireEpochFromUrl(videoUrl);
+            if (!audioUrl.isEmpty() && !isHls) {
                 const qint64 audioExpire = yturl::expireEpochFromUrl(audioUrl);
                 if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
                     expire = audioExpire;

@@ -239,6 +239,36 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
         m_timeout->stop();
 
         const InnertubeObjects::StreamingData &sd = player.response.streamingData;
+        // #128: live events are HLS-only. A not-yet-started event answers
+        // LIVE_STREAM_OFFLINE with empty streamingData (the vendored endpoint
+        // treats it as a no-error status); a running event carries
+        // hlsManifestUrl. Progressive "pairs" from live responses
+        // (source=yt_live_broadcast) launched mpv into "Failed to recognize
+        // file format" on the owner's CRT — never serve them.
+        if (player.response.playabilityStatus == QLatin1String("LIVE_STREAM_OFFLINE")
+            || (player.response.videoDetails.isLive
+                && sd.hlsManifestUrl.isEmpty()
+                && sd.formats.isEmpty() && sd.adaptiveFormats.isEmpty())) {
+            YtResolveResult r;
+            r.videoId = m_videoId;
+            r.resolution = m_resolution;
+            r.key = m_key;
+            r.elapsedMs = m_timer.elapsed();
+            r.reason = QStringLiteral("live-waiting");
+            emitResult(r);
+            return;
+        }
+        if (player.response.videoDetails.isLive && !sd.hlsManifestUrl.isEmpty()) {
+            YtResolveResult r;
+            r.videoId = m_videoId;
+            r.resolution = m_resolution;
+            r.key = m_key;
+            r.elapsedMs = m_timer.elapsed();
+            r.ok = true;
+            r.hlsManifestUrl = sd.hlsManifestUrl;
+            emitResult(r);
+            return;
+        }
         QVector<ytstream::Format> formats;
         formats.reserve(sd.formats.size() + sd.adaptiveFormats.size());
         for (const InnertubeObjects::StreamingFormat &f : sd.formats)

@@ -14,7 +14,10 @@
 // commas cannot corrupt the other fields):
 //   meta,timeout_ms=<kTimeoutMs>
 //   accepted,key=<KEY>            (or refused,key=<KEY> and exit 66)
-//   event,wall_ms=N,resolve_ms=N,ok=0|1,key=<KEY>,reason=<text>
+//   event,wall_ms=N,resolve_ms=N,ok=0|1,hls=0|1,vod=0|1,key=<KEY>,reason=<text>
+//     hls=1 when the result carries an HLS master URL (#128 live route);
+//     vod=1 when it carries a progressive videoUrl. A live result must be
+//     hls=1,vod=0 — progressive pairs from live responses do not demux.
 //   summary,events=N
 //   keycount,key=<KEY>,n=N,ok=N   (one line per key that produced callbacks)
 //
@@ -84,7 +87,10 @@ int main(int argc, char **argv)
             if (r.ok)
                 ++c.ok;
             out << "event,wall_ms=" << wall.elapsed() << ",resolve_ms=" << r.elapsedMs
-                << ",ok=" << (r.ok ? 1 : 0) << ",key=" << r.key
+                << ",ok=" << (r.ok ? 1 : 0)
+                << ",hls=" << (r.hlsManifestUrl.isEmpty() ? 0 : 1)
+                << ",vod=" << (r.videoUrl.isEmpty() ? 0 : 1)
+                << ",key=" << r.key
                 << ",reason=" << r.reason << "\n";
             out.flush();
         });

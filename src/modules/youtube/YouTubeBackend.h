@@ -382,6 +382,8 @@ private:
                                           const QString &key);
     void                launchYtdlpResolve(const QString &videoId, const QString &resolution,
                                             const QString &key);
+    void                launchHlsResolve(const QString &videoId, const QString &resolution,
+                                         const QString &key, const QString &hlsUrl);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
