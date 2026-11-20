@@ -7,7 +7,7 @@
 // 1.3-9.5 s per video seek, 22 s from first press to resumed playback.
 //
 // Policy:
-//   RIGHT hold  -> playback-speed ramp (2x, then 4x after ~1 s). Zero seeks
+//   RIGHT hold  -> playback-speed ramp (2x, then 4x after ~2 s). Zero seeks
 //                  while held: playback runs from cache, no demuxer thrash.
 //   LEFT hold   -> coalesced backward seeks: accumulate -10 s per tick, one
 //                  flush per ~400 ms. Backward usually lands in cache.
@@ -40,7 +40,11 @@ public:
     static constexpr double kTapStepSec       = 10.0;
     static constexpr double kRampSpeedNear    = 2.0;
     static constexpr double kRampSpeedFar     = 4.0;
-    static constexpr int    kRampEscalateTicks = 10;  // ~1 s at 10 ticks/s
+    // 20 ticks @ 100 ms = 2 s per step. The owner reported (2026-11-20) that
+    // 2x lived for ~1 s before auto-escalating to 4x, so the step could not be
+    // deliberately selected — the ramp was a clock, not a choice. Two seconds
+    // per step puts a readable dwell under the 2x OSD before 4x engages.
+    static constexpr int    kRampEscalateTicks = 20;  // ~2 s at 10 ticks/s
     static constexpr int    kCoalesceFlushMs  = 400;
 
 private:

@@ -8,6 +8,7 @@ class SeekHoldPolicyTest : public QObject {
 private slots:
     void rightTapSeeksOneStep();
     void rightHoldRampsSpeedAndNeverSeeks();
+    void rightHoldDwellsTwoSecondsPerStep();
     void rightReleaseRestoresNormalSpeed();
     void rightTapAfterRampSeeksAgain();
     void leftTapSeeksOneStep();
@@ -47,6 +48,24 @@ void SeekHoldPolicyTest::rightHoldRampsSpeedAndNeverSeeks()
     for (int i = 0; i < 20; ++i)
         QCOMPARE(p.press("RIGHT", true).kind, Cmd::None);
     QVERIFY(!p.flushTimerWanted());
+}
+
+void SeekHoldPolicyTest::rightHoldDwellsTwoSecondsPerStep()
+{
+    // The owner's complaint (2026-11-20): 2x lived ~1 s before auto-escalating
+    // to 4x, so the step could not be deliberately selected. At 100 ms per
+    // synthesized repeat, 2x must now survive kRampEscalateTicks ticks (2 s)
+    // before 4x engages, and 4x must hold without further escalation.
+    SeekHoldPolicy p;
+    p.press("RIGHT", false);
+    QCOMPARE(p.press("RIGHT", true).value, 2.0);
+    for (int i = 1; i < SeekHoldPolicy::kRampEscalateTicks; ++i)
+        QCOMPARE(p.press("RIGHT", true).kind, Cmd::None);
+    QCOMPARE(p.press("RIGHT", true).value, 4.0);
+    for (int i = 1; i < SeekHoldPolicy::kRampEscalateTicks; ++i)
+        QCOMPARE(p.press("RIGHT", true).kind, Cmd::None);
+    // Escalation is capped at 4x: a third step does not exist.
+    QCOMPARE(p.press("RIGHT", true).kind, Cmd::None);
 }
 
 void SeekHoldPolicyTest::rightReleaseRestoresNormalSpeed()
@@ -157,7 +176,7 @@ void SeekHoldPolicyTest::heldBurstStaysWithinSeekBudget()
 {
     // The measured failure: 10 presses/s while held, one seek each. A 3-second
     // RIGHT hold must produce ZERO seeks; a 3-second LEFT hold (30 synthesized
-    // repeats) at one flush per 4 ticks must produce at most 8 seeks (vs 30
+    // repeats) at one flush per 400 ms must produce at most 8 seeks (vs 30
     // unshaped), totaling -300 s.
     SeekHoldPolicy p;
     int rightSeeks = 0;
