@@ -56,6 +56,9 @@ private slots:
     void sortedGamesIgnoresArticlesAndCase();
     void recentGamesHonorsGameSort();
     void failedLaunchDoesNotEnterRecentlyPlayed();
+    void gameRunningChangedOnSpawnAndExit();
+    void gameRunningChangedOnFailedStart();
+    void refusedLaunchDoesNotEmitGameRunningChanged();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -773,6 +776,76 @@ void RetroArchBackendTest::failedLaunchDoesNotEnterRecentlyPlayed() {
     // Wait for the async FailedToStart to clear the live-process pointer.
     QTRY_VERIFY_WITH_TIMEOUT(!be->gameRunning(), 2000);
     QVERIFY(be->recentGames().isEmpty());
+}
+
+// IDLE-02: gameRunning must be observable as edges, not just pollable — the
+// Main.qml idle writer hangs off gameRunningChanged. /bin/sh executes the
+// "ROM" as a script, giving a deterministic ~400 ms child without a real
+// RetroArch install; signal edges are under test, not spawn timing.
+void RetroArchBackendTest::gameRunningChangedOnSpawnAndExit() {
+    const QString rom = m_tmp.path() + "/ROMs/sleeper.nes";
+    QFile romFile(rom);
+    QVERIFY(romFile.open(QIODevice::WriteOnly));
+    romFile.write("sleep 0.4\n");
+    romFile.close();
+
+    RetroArchBackend *be = makeBackend(QString(), QString(), QStringLiteral("/bin/sh"));
+    QVERIFY(be);
+    QSignalSpy spy(be, &RetroArchBackend::gameRunningChanged);
+    QVERIFY(!be->gameRunning());
+
+    QVariantMap game;
+    game.insert(QStringLiteral("name"), QStringLiteral("Sleeper"));
+    game.insert(QStringLiteral("romPath"), rom);
+    be->launchGame(game, QStringLiteral("nes"));
+
+    // The spawn edge is synchronous with launchGame's return.
+    QVERIFY(be->gameRunning());
+    QCOMPARE(spy.count(), 1);
+    QTRY_VERIFY_WITH_TIMEOUT(!be->gameRunning(), 3000);
+    QCOMPARE(spy.count(), 2); // exit edge
+}
+
+// FailedToStart is delivered asynchronously after launchGame returns: the
+// spawn edge fires first, the error nullptr path must fire the return edge.
+void RetroArchBackendTest::gameRunningChangedOnFailedStart() {
+    const QString rom = m_tmp.path() + "/ROMs/failed-start.nes";
+    QFile romFile(rom);
+    QVERIFY(romFile.open(QIODevice::WriteOnly));
+    romFile.write("not a real rom, but it exists on disk");
+    romFile.close();
+
+    RetroArchBackend *be = makeBackend(QString(), QString(),
+                                       m_tmp.path() + "/no-such-retroarch");
+    QVERIFY(be);
+    QSignalSpy spy(be, &RetroArchBackend::gameRunningChanged);
+
+    QVariantMap game;
+    game.insert(QStringLiteral("name"), QStringLiteral("Never Starts"));
+    game.insert(QStringLiteral("romPath"), rom);
+    be->launchGame(game, QStringLiteral("nes"));
+
+    QCOMPARE(spy.count(), 1); // spawn edge (pointer set synchronously)
+    QVERIFY(be->gameRunning());
+    QTRY_VERIFY_WITH_TIMEOUT(!be->gameRunning(), 2000);
+    QCOMPARE(spy.count(), 2); // error edge
+}
+
+// A launch refused before spawn (missing ROM) never touches the process
+// pointer, so it must not emit a phantom game edge.
+void RetroArchBackendTest::refusedLaunchDoesNotEmitGameRunningChanged() {
+    RetroArchBackend *be = makeBackend(QString(), QString(), QStringLiteral("/bin/sh"));
+    QVERIFY(be);
+    QSignalSpy spy(be, &RetroArchBackend::gameRunningChanged);
+
+    QVariantMap game;
+    game.insert(QStringLiteral("name"), QStringLiteral("Missing ROM"));
+    game.insert(QStringLiteral("romPath"), m_tmp.path() + "/ROMs/does-not-exist.nes");
+    be->launchGame(game, QStringLiteral("nes"));
+
+    QTest::qWait(100);
+    QCOMPARE(spy.count(), 0);
+    QVERIFY(!be->gameRunning());
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)

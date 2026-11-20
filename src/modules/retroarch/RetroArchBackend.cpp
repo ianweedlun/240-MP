@@ -743,7 +743,10 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
             [this, process](QProcess::ProcessError error) {
         Q_UNUSED(error)
         qWarning("[RetroArch] process error: %s", qPrintable(process->errorString()));
+        const bool wasRunning = m_gameProcess != nullptr;
         m_gameProcess = nullptr;
+        if (wasRunning)
+            emit gameRunningChanged();
         if (m_handoff)
             m_handoff->releaseDeferred(QLatin1String("retroarch"), []() {});
         process->deleteLater();
@@ -751,7 +754,10 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, [this, process](int exitCode, QProcess::ExitStatus) {
         qInfo("[RetroArch] exited with code %d", exitCode);
+        const bool wasRunning = m_gameProcess != nullptr;
         m_gameProcess = nullptr;
+        if (wasRunning)
+            emit gameRunningChanged();
         if (m_handoff)
             m_handoff->releaseDeferred(QLatin1String("retroarch"), []() {});
         process->deleteLater();
@@ -768,6 +774,7 @@ void RetroArchBackend::launchGame(const QVariantMap &game, const QString &system
     });
     process->start();
     m_gameProcess = process;
+    emit gameRunningChanged();
 }
 
 QVariantList RetroArchBackend::recentGames() const {
