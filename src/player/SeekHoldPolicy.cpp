@@ -30,12 +30,6 @@ SeekHoldPolicy::Command SeekHoldPolicy::press(const QString &key, bool autoRepea
         } else {
             m_leftAccum -= kTapStepSec;   // flushed by the owner's timer
         }
-    } else if (key == QLatin1String("UP") || key == QLatin1String("DOWN")) {
-        if (!autoRepeat) {
-            cmd.kind = Command::Seek;
-            cmd.value = (key == QLatin1String("UP")) ? kVerticalStepSec : -kVerticalStepSec;
-        }
-        // Held vertical repeats are dropped: one chapter jump per press.
     } else if (!autoRepeat) {
         cmd.kind = Command::Key;
         cmd.key = key;

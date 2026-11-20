@@ -44,9 +44,14 @@ struct YtResolveResult {
     QString audioUrl;      // empty for a muxed single stream
     bool    single = false;
     bool    ok = false;
-    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / visitordata-size-cap / exception:...
+    QString reason;        // failure class: timeout / no-playable-pair / no-expiry / visitordata-size-cap / live-waiting / exception:...
     qint64  expireEpoch = 0;
     qint64  elapsedMs = 0;
+    // #128 live route: ok=true with this set means the video is a LIVE event
+    // and videoUrl/audioUrl are empty — the caller must fetch this HLS master
+    // playlist, shape it (ythls::filterMaster) and play it as a single URL.
+    // Progressive pairs from live responses are not demuxable by mpv.
+    QString hlsManifestUrl;
 };
 
 Q_DECLARE_METATYPE(YtResolveResult)

@@ -42,25 +42,56 @@ def log(row):
             f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def player_body():
+def player_body(mode="vod"):
     # Healthy pair: 480p H.264 video + itag-140 AAC audio (default-language
     # track), expire=4102444800 (2100-01-01) so the expiry gate always passes.
+    vod_pair = [
+        {"itag": 135, "url": "http://127.0.0.1:9/video?expire=4102444800",
+         "mimeType": "video/mp4; codecs=\"avc1.4d401e\"",
+         "width": 640, "height": 480, "qualityLabel": "480p"},
+        {"itag": 140, "url": "http://127.0.0.1:9/audio?expire=4102444800",
+         "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+         "audioQuality": "AUDIO_QUALITY_MEDIUM",
+         "audioTrack": {"id": "en.4", "displayName": "English original",
+                        "audioIsDefault": True}}
+    ]
+    hls_url = ("https://manifest.googlevideo.com/api/manifest/hls_playlist/"
+               "fixture/master.m3u8")
+    if mode == "live-waiting":
+        # #128: a not-yet-started live event. The vendored endpoint treats
+        # LIVE_STREAM_OFFLINE as a no-error status; streamingData is empty.
+        return {
+            "playabilityStatus": {"status": "LIVE_STREAM_OFFLINE"},
+            "videoDetails": {"videoId": "fixture", "isLive": True},
+            "streamingData": {"formats": [], "adaptiveFormats": []}
+        }
+    if mode == "live-hls":
+        # #128: a running live event — HLS master only, no progressive pair.
+        return {
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"videoId": "fixture", "isLive": True},
+            "streamingData": {"hlsManifestUrl": hls_url,
+                              "formats": [], "adaptiveFormats": []}
+        }
+    if mode == "live-hls-with-pair":
+        # #128 regression shape (the owner's CRT defect): a LIVE response that
+        # ALSO carries progressive-looking URLs (source=yt_live_broadcast).
+        # The resolver must still take the HLS route — mpv cannot demux the
+        # live progressive pair.
+        return {
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"videoId": "fixture", "isLive": True},
+            "streamingData": {"hlsManifestUrl": hls_url,
+                              "expiresInSeconds": 21599,
+                              "formats": [], "adaptiveFormats": vod_pair}
+        }
     return {
         "playabilityStatus": {"status": "OK"},
-        "videoDetails": {"videoId": "fixture"},
+        "videoDetails": {"videoId": "fixture", "isLive": False},
         "streamingData": {
             "expiresInSeconds": 21599,
             "formats": [],
-            "adaptiveFormats": [
-                {"itag": 135, "url": "http://127.0.0.1:9/video?expire=4102444800",
-                 "mimeType": "video/mp4; codecs=\"avc1.4d401e\"",
-                 "width": 640, "height": 480, "qualityLabel": "480p"},
-                {"itag": 140, "url": "http://127.0.0.1:9/audio?expire=4102444800",
-                 "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                 "audioQuality": "AUDIO_QUALITY_MEDIUM",
-                 "audioTrack": {"id": "en.4", "displayName": "English original",
-                                "audioIsDefault": True}}
-            ]
+            "adaptiveFormats": vod_pair
         }
     }
 
@@ -133,7 +164,7 @@ class Handler(socketserver.BaseRequestHandler):
                 response(conn, 200, page, host, path,
                          delay_ms=args.visitor_delay_ms, content_type="text/html")
             elif host == "www.youtube.com" and path.startswith("/youtubei/v1/player"):
-                response(conn, 200, player_body(), host, path)
+                response(conn, 200, player_body(args.player_mode), host, path)
             else:
                 response(conn, 404, {"error": "unfixtured", "host": host, "path": path},
                          host, path)
@@ -155,6 +186,9 @@ if __name__ == "__main__":
     p.add_argument("--log", required=True)
     p.add_argument("--visitor-delay-ms", type=int, default=0,
                    help="fixture-side sleep before the visitorData GET reply")
+    p.add_argument("--player-mode", default="vod",
+                   choices=["vod", "live-waiting", "live-hls", "live-hls-with-pair"],
+                   help="shape of the canned Player response (#128 live cases)")
     args = p.parse_args()
     if args.visitor_delay_ms < 0:
         p.error("--visitor-delay-ms must be >= 0")

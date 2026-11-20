@@ -27,6 +27,9 @@ namespace InnertubeEndpoints
         }
 
         response.playbackTracking = InnertubeObjects::PlaybackTracking(data["playbackTracking"]);
+        // 240-MP local extension (#128): expose the raw status for live-event
+        // classification (LIVE_STREAM_OFFLINE = event has not started yet).
+        response.playabilityStatus = status;
         response.streamingData = InnertubeObjects::StreamingData(data["streamingData"]);
         response.videoDetails = InnertubeObjects::PlayerVideoDetails(data["videoDetails"]);
 

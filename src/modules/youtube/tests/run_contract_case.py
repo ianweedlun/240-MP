@@ -55,6 +55,15 @@ CASES = {
     "delayed-abandoned": {"delay_ms": 5500, "observe_ms": None, "expect": "timeout"},
     "near-deadline":     {"delay_ms": 3500, "observe_ms": None, "expect": "success"},
     "fast-healthy":      {"delay_ms": 0,    "observe_ms": 1500, "expect": "success"},
+    # #128 live classification, same loopback fixture, canned Player shapes:
+    "live-waiting":      {"delay_ms": 0, "observe_ms": 1500, "expect": "live-waiting",
+                          "player_mode": "live-waiting"},
+    "live-hls":          {"delay_ms": 0, "observe_ms": 1500, "expect": "live-hls",
+                          "player_mode": "live-hls"},
+    # The CRT defect shape: LIVE response that also carries progressive URLs.
+    # Pre-fix code serves the pair (vod=1) and mpv fails to demux it.
+    "live-hls-with-pair": {"delay_ms": 0, "observe_ms": 1500, "expect": "live-hls",
+                           "player_mode": "live-hls-with-pair"},
 }
 
 
@@ -98,13 +107,13 @@ def make_cert(evidence):
     return cert, key
 
 
-def start_proxy(fixture, port, cert, key, logpath, delay_ms):
+def start_proxy(fixture, port, cert, key, logpath, delay_ms, player_mode="vod"):
     """Start the fixture proxy; return the Popen once ready, or None on failure
     (early exit / never ready) so the caller can retry on another port."""
     proc = subprocess.Popen(
         [sys.executable, str(fixture), "--port", str(port), "--cert", str(cert),
          "--key", str(key), "--log", str(logpath),
-         "--visitor-delay-ms", str(delay_ms)],
+         "--visitor-delay-ms", str(delay_ms), "--player-mode", player_mode],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
@@ -144,7 +153,7 @@ def parse_probe(text):
             ev = {}
             for tok in line[6:].split(","):
                 k, _, v = tok.partition("=")
-                if k in ("wall_ms", "resolve_ms", "ok"):
+                if k in ("wall_ms", "resolve_ms", "ok", "hls", "vod"):
                     ev[k] = int(v)
                 elif k == "key":
                     ev[k] = v
@@ -214,7 +223,8 @@ def main():
         for attempt in range(5):
             if port is None:
                 port = free_port()
-            proxy = start_proxy(Path(a.fixture), port, cert, cert_key, proxy_log, delay_ms)
+            proxy = start_proxy(Path(a.fixture), port, cert, cert_key, proxy_log,
+                                delay_ms, case.get("player_mode", "vod"))
             if proxy is not None:
                 break
             if a.port is not None:
@@ -318,11 +328,46 @@ def main():
             violate("abandoned-attempt-no-player",
                     f"{len(players)} Player request(s) issued for an attempt already "
                     f"abandoned by the timeout (expected 0): {detail}")
-    else:
-        if len(mine) == 1 and not (mine[0]["ok"] == 1 and mine[0]["reason"] == ""):
-            violate("healthy-single-success",
-                    f"expected the single result ok=1 with empty reason, got "
+    elif case["expect"] == "live-waiting":
+        # #128: LIVE_STREAM_OFFLINE must classify as live-waiting — not
+        # no-playable-pair (which would pay a yt-dlp spawn and negative-cache
+        # an event that simply has not started).
+        if len(mine) == 1 and not (mine[0]["ok"] == 0
+                                   and mine[0]["reason"] == "live-waiting"):
+            violate("live-waiting-class",
+                    f"expected the single result ok=0 reason=live-waiting, got "
                     f"ok={mine[0]['ok']} reason={mine[0]['reason']!r}")
+        if len(mine) == 0:
+            violate("live-waiting-class",
+                    f"no result arrived within the {observe_ms} ms window")
+        if len(players) != 1:
+            violate("player-request-issued",
+                    f"expected exactly 1 Player request, got {len(players)}")
+    elif case["expect"] == "live-hls":
+        # #128: a LIVE event must take the HLS master route (hls=1, vod=0)
+        # even when the response also carries progressive-looking URLs —
+        # those launched mpv into "Failed to recognize file format" on the CRT.
+        if len(mine) == 1 and not (mine[0]["ok"] == 1 and mine[0]["reason"] == ""
+                                   and mine[0].get("hls") == 1
+                                   and mine[0].get("vod") == 0):
+            violate("live-hls-route",
+                    f"expected the single result ok=1 hls=1 vod=0 empty reason, got "
+                    f"ok={mine[0]['ok']} hls={mine[0].get('hls')} "
+                    f"vod={mine[0].get('vod')} reason={mine[0]['reason']!r}")
+        if len(mine) == 0:
+            violate("live-hls-route",
+                    f"no result arrived within the {observe_ms} ms window")
+        if len(players) != 1:
+            violate("player-request-issued",
+                    f"expected exactly 1 Player request, got {len(players)}")
+    else:
+        if len(mine) == 1 and not (mine[0]["ok"] == 1 and mine[0]["reason"] == ""
+                                   and mine[0].get("hls") == 0
+                                   and mine[0].get("vod") == 1):
+            violate("healthy-single-success",
+                    f"expected the single result ok=1 hls=0 vod=1 with empty reason, got "
+                    f"ok={mine[0]['ok']} hls={mine[0].get('hls')} "
+                    f"vod={mine[0].get('vod')} reason={mine[0]['reason']!r}")
         if any(e["reason"] == "timeout" for e in mine):
             violate("no-timeout-on-healthy",
                     "a timeout result was emitted for an attempt whose visitorData "

@@ -75,13 +75,14 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
         f.write("ESC quit\n");
         f.write("BS quit\n");
         f.write("ENTER cycle pause\n");
-        // Seek steps for the native/physical-keyboard path. The app's own key
-        // paths (QML and direct IPC) shape seeks through SeekHoldPolicy with
-        // the same steps; held directions never reach mpv as repeated keypresses.
+        // Horizontal seek steps for the native/physical-keyboard path. The
+        // app's own key paths (QML and direct IPC) shape seeks through
+        // SeekHoldPolicy with the same steps; held directions never reach mpv
+        // as repeated keypresses. UP/DOWN stay UNBOUND here: the lua forced
+        // bindings (mpv_osc/open_menu_up|down) own them on every path — #128
+        // restored the OSC menu after an unrequested ±60 s repurposing.
         f.write("RIGHT seek 10 relative+exact\n");
         f.write("LEFT seek -10 relative+exact\n");
-        f.write("UP seek 60 relative+exact\n");
-        f.write("DOWN seek -60 relative+exact\n");
         f.close();
     }
 

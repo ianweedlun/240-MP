@@ -223,7 +223,9 @@ FocusScope {
             playerRoot.directPlayUrl = ""
             playerRoot.directAudioUrl = ""
             playerRoot.ytdlArgs = []
-            playerRoot.errorMessage = "PLAYBACK FAILED\n\nTHIS VIDEO IS UNAVAILABLE"
+            playerRoot.errorMessage = reason === "LIVE_WAITING"
+                                    ? "LIVE EVENT HASN'T STARTED YET\n\nCHECK BACK SOON"
+                                    : "PLAYBACK FAILED\n\nTHIS VIDEO IS UNAVAILABLE"
         }
     }
 

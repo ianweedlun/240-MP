@@ -1079,6 +1079,31 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-stream-select COMMAND yt-stream-select-tests)
 
+    # Live HLS master shaping (#128): pure fixture tests for the variant cap,
+    # audio-rendition pruning, URI absolutization and the lowest-known
+    # fallbacks. No network, no Qt event loop, no vendored library.
+    add_executable(yt-hls-select-tests
+        src/util/tests/YtHlsSelectTest.cpp)
+    set_target_properties(yt-hls-select-tests PROPERTIES AUTOMOC ON)
+    target_include_directories(yt-hls-select-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(yt-hls-select-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-hls-select-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-hls-select COMMAND yt-hls-select-tests)
+
+    # Subscription-union dedup (#128): videoId repeat + live double-post
+    # collapse, with the far-apart same-title and missing-metadata safety arms.
+    add_executable(yt-feed-dedup-tests
+        src/util/tests/YtFeedDedupTest.cpp)
+    set_target_properties(yt-feed-dedup-tests PROPERTIES AUTOMOC ON)
+    target_include_directories(yt-feed-dedup-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(yt-feed-dedup-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-feed-dedup-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-feed-dedup COMMAND yt-feed-dedup-tests)
+
     # Lab gate probe (NOT a ctest test — it needs the network and mpv).
     # Resolves through the real YtInnertubeResolver and requires mpv to decode
     # BOTH streams. A curl Range probe is not a playability proof: IOS URLs
@@ -1122,7 +1147,8 @@ if(BUILD_TESTS)
     if(NOT MSVC)
         target_compile_options(yt-resolver-contract-probe PRIVATE -Wall -Wextra)
     endif()
-    foreach(contract_case delayed-abandoned near-deadline fast-healthy)
+    foreach(contract_case delayed-abandoned near-deadline fast-healthy
+                         live-waiting live-hls live-hls-with-pair)
         add_test(NAME yt-resolver-contract-${contract_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_contract_case.py
