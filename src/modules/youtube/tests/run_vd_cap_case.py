@@ -7,10 +7,11 @@ inclusive kMaxHomepageBytes cap on cumulative delivered body bytes, a token
 straddling a chunk boundary is still found via the carry window, a healthy
 page resolves ok=1 with the EXACT token chained into the Player request, and
 an oversize page fails cleanly with ok=false reason="visitordata-size-cap"
-through the same continuation the backend's unconditional yt-dlp ladder
-consumes (YouTubeBackend.cpp ctor: every !ok result -> launchYtdlpResolve,
-no reason filtering — so the resolver-level ok=false + reason IS the
-observable ladder-reach signal; the cap path must NOT chain a Player request).
+through the same continuation the backend's failure classifier consumes
+(YouTubeBackend.cpp ctor: transient failures surface playbackResolveFailed;
+no subprocess ladder since NEG-01 — so the resolver-level ok=false + reason
+IS the observable clean-failure signal; the cap path must NOT chain a Player
+request).
 
 Cases (positive side passes pre- AND post-fix; negative side FAILS pre-fix):
   healthy-control        56 B page, fixture-vd token. ok=1, exact token.
@@ -469,8 +470,8 @@ def check_round(rd, cap, timeout_ms, violations):
             violate("clean-cap-failure", f"expected ok=0 "
                     f"reason='visitordata-size-cap', got ok={ev['ok'] if ev else '?'} "
                     f"reason={(ev['reason'] if ev else '(no event)')!r} — an oversize "
-                    "homepage must fail cleanly into the backend's unconditional "
-                    "yt-dlp ladder (YouTubeBackend.cpp: every !ok -> launchYtdlpResolve)")
+                    "homepage must fail cleanly (surfaces playbackResolveFailed; "
+                    "no subprocess ladder since NEG-01: YouTubeBackend.cpp ctor)")
         if players:
             violate("cap-failure-no-player", f"{len(players)} Player request(s) "
                     "although the cap failed the resolve — the cap path must emit "

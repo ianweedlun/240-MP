@@ -597,8 +597,8 @@ void NfcReaderBackend::clearPosition(const QString &videoPath) {
 }
 
 // Same format cascade as the YouTube module; only applies to mapping entries
-// that resolve through yt-dlp (YouTube page URLs) — local files and direct
-// media URLs never reach the ytdl hook.
+// that resolve through the innertube player endpoint (YouTube page URLs) —
+// local files and direct media URLs never reach the URL cache.
 QString NfcReaderBackend::ytdlFormatForResolution(const QString &resolution) const {
     int height = 480;
     if (resolution == QLatin1String("720p"))

@@ -191,7 +191,7 @@ void YtInnertubeResolver::fetchVisitorData()
 // kVdChunkBytes + kVdCarryBytes), enforcing the inclusive kMaxHomepageBytes
 // cap on cumulative delivered bytes BEFORE any QString conversion. Never
 // materializes the whole page. Terminal paths: token found (early exit),
-// cap exceeded (clean failure into the backend's yt-dlp ladder), or return
+// cap exceeded (clean failure re-arms the refetch latch), or return
 // with m_vdDone unset so finished() applies EOF/error semantics.
 void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
 {

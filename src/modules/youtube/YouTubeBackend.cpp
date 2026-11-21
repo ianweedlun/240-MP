@@ -8,7 +8,6 @@
 #include "../../util/YtBrowseRows.h"
 #include "../../util/YtHlsSelect.h"
 #include "../../util/YtFeedDedup.h"
-#include "../../util/YtDlpLocator.h"
 
 // Backend for the YouTube module
 
@@ -46,10 +45,9 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
     : QObject(parent), m_appRoot(appRoot), m_dataRoot(dataRoot)
 {
     m_itResolver = new YtInnertubeResolver(this);
-    // One in-process attempt per key; on failure the SAME key falls back to the
-    // yt-dlp spawn (one release of redundancy — the card keeps the subprocess
-    // path until Innertube proves itself on the Pi). The fallback start time is
-    // backdated to the original launch so its `ms` figure covers the ladder.
+    // One in-process attempt per key; on failure the SAME key surfaces to the
+    // caller (transient) or lands in the negative cache (permanent) — the
+    // yt-dlp subprocess ladder is gone (NEG-01 convergence).
     connect(m_itResolver, &YtInnertubeResolver::finished, this,
             [this](const YtResolveResult &r) {
         if (r.ok) {
@@ -74,7 +72,7 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
         }
         if (r.reason == QLatin1String("live-waiting")) {
             // #128: the event has not started. Not a permanent failure — never
-            // negative-cache it, never pay a yt-dlp spawn; tell the viewer.
+            // negative-cache it; tell the viewer.
             emit resolveTelemetry(r.videoId, QStringLiteral("live-waiting"), r.elapsedMs);
             emit playbackResolveFailed(r.videoId, QStringLiteral("LIVE_WAITING"));
             finishUrlResolve(r.key);
@@ -87,8 +85,8 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
                               QStringLiteral("innertube-fail:") + r.reason, r.elapsedMs);
         const QString failureClass = storeNegativeCacheEntry(r.videoId, r.reason);
         if (!failureClass.isEmpty()) {
-            // The response itself proved this video cannot resolve. Do not pay
-            // a yt-dlp spawn now or on any warm/focus/press path for 24 h.
+            // The response itself proved this video cannot resolve. Do not
+            // retry it on any warm/focus/press path for 24 h.
             emit playbackResolveFailed(r.videoId, failureClass);
             finishUrlResolve(r.key);
             return;
@@ -518,9 +516,9 @@ QVariantMap YouTubeBackend::check_playlists() {
 }
 
 // ---------------------------------------------------------------------------
-// Playlist loaders — yt-dlp --flat-playlist subprocesses feeding the same
-// cache/queue shape as the RSS channel path. yt-dlp is used (rather than the
-// playlist RSS feed) because the feed stops at 15 entries.
+// Playlist loaders — native Innertube browse walks feeding the same
+// cache/queue shape as the RSS channel path. Browse (rather than the playlist
+// RSS feed) because the feed stops at 15 entries.
 // ---------------------------------------------------------------------------
 
 void YouTubeBackend::load_playlists(bool forceRefresh) {
@@ -902,9 +900,10 @@ void YouTubeBackend::delete_watch_later() {
 // ---------------------------------------------------------------------------
 // Direct-playback path (issue #28 plan A). mpv's ytdl_hook re-resolves the
 // signed stream URL on every launch; the app pays that at each play. This
-// resolves with yt-dlp ahead of time (fire-and-forget) and keeps the URL
-// under its own expire= epoch; the Player takes the cached URL plus
-// --ytdl=no while it is fresh, else falls back to the ytdl path unchanged.
+// resolves with the Innertube resolver ahead of time (fire-and-forget) and
+// keeps the URL under its own expire= epoch; the Player takes the cached URL
+// plus --ytdl=no while it is fresh, else falls back to the ytdl path
+// unchanged.
 
 QString YouTubeBackend::urlCacheFilePath() const
 {
@@ -1509,8 +1508,8 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
         return; // nothing stored for this pair: the cold path is already in effect
     // A cached URL that failed to PLAY must not be re-minted by the same
     // resolver. invalidateCachedUrl is only called on a playback failure, so
-    // mark the key's in-process attempt spent: the retry goes to yt-dlp instead
-    // of looping resolve -> 403 -> evict -> resolve on the same client.
+    // mark the key's in-process attempt spent: the key surfaces RESOLVE_BUSY
+    // rather than looping resolve -> 403 -> evict -> resolve on the same client.
     m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
     QFile f(urlCacheFilePath());
     if (!f.open(QIODevice::WriteOnly))
@@ -1570,8 +1569,8 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
         return;
     }
     // One Innertube attempt per key. A spent key or a busy resolver means this
-    // key never resolves in-process — surface a transient failure rather than
-    // spawning yt-dlp (ladder removed, NEG-01 convergence).
+    // key never resolves in-process — surface a transient failure (the
+    // yt-dlp ladder is gone, NEG-01 convergence).
     if (m_itTried.contains(key)) {
         emit playbackResolveFailed(videoId, QStringLiteral("RESOLVE_BUSY"));
         finishUrlResolve(key);

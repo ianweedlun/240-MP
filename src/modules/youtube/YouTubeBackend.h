@@ -28,8 +28,8 @@ class YtInnertubeResolver;
 //
 // Playlists come from <dataRoot>/youtube_playlists.txt (one playlist URL or ID
 // per line, optional "My Name | <url>" display-name prefix). RSS feeds for
-// playlists stop at 15 entries, so playlist contents are fetched by spawning
-// yt-dlp --flat-playlist instead (async QProcess, same session cache TTL).
+// playlists stop at 15 entries, so playlist contents are fetched natively via
+// the Innertube browse walk (browsePlaylist, same session cache TTL).
 //
 // Two user files besides subscriptions/playlists:
 //   youtube_history.json     — watch history + resume positions, keyed by videoId
@@ -63,20 +63,22 @@ public:
     Q_INVOKABLE QString ytdlFormatForResolution(const QString &resolution) const;
 
     // Direct-playback path (issue #28 plan A): ytdl_hook re-resolves every stream
-    // at each mpv launch, which is seconds on the Pi. resolvePlayback asks yt-dlp
-    // for the signed URL in advance (background, fire-and-forget); cachedPlaybackUrl
-    // hands it to the Player while its signed window is still fresh, and the Player
-    // launches mpv with --ytdl=no around it. Freshness is the URL's own expire=
-    // epoch (parse + margin math live in util/YtUrlFresh.h, unit-tested).
+    // at each mpv launch, which is seconds on the Pi. resolvePlayback asks the
+    // Innertube resolver for the signed URL in advance (background,
+    // fire-and-forget); cachedPlaybackUrl hands it to the Player while its
+    // signed window is still fresh, and the Player launches mpv with --ytdl=no
+    // around it. Freshness is the URL's own expire= epoch (parse + margin math
+    // live in util/YtUrlFresh.h, unit-tested).
     //
-    // The format string is usually bestvideo+bestaudio, so yt-dlp -g prints TWO
-    // URLs (video line 1, audio line 2). Playing only line 1 hands mpv a silent
-    // video-only stream; the pair must be cached and passed together
-    // (url + --audio-file=<audio>). cachedPlaybackAudioUrl mirrors the video lookup.
-    // A ONE-line output (live broadcasts, combined best[] formats) is a fully
-    // muxed single stream: cached with a single=1 marker and played without
-    // --audio-file (cachedPlaybackSingle exposes the marker). Entries missing
-    // BOTH the audio half and the marker predate the pairing and stay misses.
+    // The format string is usually bestvideo+bestaudio, so the resolver prints
+    // TWO URLs (video line 1, audio line 2). Playing only line 1 hands mpv a
+    // silent video-only stream; the pair must be cached and passed together
+    // (url + --audio-file=<audio>). cachedPlaybackAudioUrl mirrors the video
+    // lookup. A ONE-line output (live broadcasts, combined best[] formats) is
+    // a fully muxed single stream: cached with a single=1 marker and played
+    // without --audio-file (cachedPlaybackSingle exposes the marker). Entries
+    // missing BOTH the audio half and the marker predate the pairing and stay
+    // misses.
     Q_INVOKABLE void resolvePlayback(const QString &videoId, const QString &resolution);
     Q_INVOKABLE QString cachedPlaybackUrl(const QString &videoId, const QString &resolution);
     Q_INVOKABLE QString cachedPlaybackAudioUrl(const QString &videoId, const QString &resolution);
@@ -98,10 +100,10 @@ public:
 
     // Plan A round 4: speculative warm-up of the CURRENT list. Whenever a view
     // presents a video list (feed, channel, playlist, watch-later, history),
-    // the front entries are resolved in the background — one chained yt-dlp
-    // process at a time — so picking any of them plays with the direct-URL
-    // path at the mpv-init floor instead of paying a cold resolve. Entries
-    // already fresh or in flight are skipped; queue caps bound the backlog.
+    // the front entries are resolved in the background — one chained resolve
+    // at a time — so picking any of them plays with the direct-URL path at the
+    // mpv-init floor instead of paying a cold resolve. Entries already fresh or
+    // in flight are skipped; queue caps bound the backlog.
     Q_INVOKABLE void warmListPlayback(const QStringList &videoIds,
                                       const QString &resolution);
 
@@ -156,7 +158,7 @@ public:
     // continuation or UC/PU browseId on the account home)
     Q_INVOKABLE void loadAccountList(const QString &kind);
     // Videos of a signed-in account playlist via the account browse — the
-    // signed twin of load_playlist_videos (yt-dlp). Emits the same
+    // signed twin of load_playlist_videos (browsePlaylist). Emits the same
     // playlistVideosLoaded(playlistId, videos) contract with the SAME id the
     // caller passed, so views reuse one handler for both paths.
     Q_INVOKABLE void loadAccountPlaylistVideos(const QString &playlistId);
@@ -272,7 +274,7 @@ private:
     struct PlaylistEntry {
         QString      playlistId;
         QString      fileName;         // optional "Name |" override from the file
-        QString      fetchedTitle;     // playlist_title reported by yt-dlp
+        QString      fetchedTitle;     // first video title from the browse walk
         QVariantList videos;           // playlist order
         qint64       fetchedMs = 0;
         bool         fetchOk   = false;
@@ -340,8 +342,8 @@ private:
     bool    m_emitChannelsWhenDone = false;
     QString m_emitChannelVideosWhenDone;      // channelId, or empty
 
-    // Playlist mirror of the channel cache/refresh state, fed by yt-dlp
-    // subprocesses instead of RSS requests.
+    // Playlist mirror of the channel cache/refresh state, fed by the
+    // Innertube browse walk instead of RSS requests.
     QHash<QString, PlaylistEntry> m_playlists;
     QStringList m_playlistOrder;              // playlist IDs in file order (deduped)
     QStringList m_playlistFetchQueue;         // stale IDs waiting for a process slot
@@ -361,10 +363,10 @@ private:
     bool        m_negativeCacheLoaded = false;
 
     // Speculative warm-up state (issue #28 plan A round 4). m_resolveKeys
-    // tracks every cache key with a live yt-dlp process (press-initiated or
-    // warm), so warm passes and a Player never duplicate work on one video.
+    // tracks every cache key with a live resolve (press-initiated or warm),
+    // so warm passes and a Player never duplicate work on one video.
     // m_warmChainKey is the warm entry currently owning the single chained
-    // process; its completion pumps the queue to the next entry.
+    // resolve; its completion pumps the queue to the next entry.
     QStringList         m_warmQueue;    // "videoId<US>resolution" tokens
     QSet<QString>       m_resolveKeys;
     QString             m_warmChainKey;
@@ -375,11 +377,11 @@ private:
     QString             warmToken(const QString &videoId,
                                  const QString &resolution) const; // US-separator form
     // One in-process Innertube resolver (overnight torture t_7ffb1fd1). Cheap
-    // enough to warm a whole list; the yt-dlp spawn stays as the fallback.
+    // enough to warm a whole list; no subprocess fallback remains (NEG-01).
     YtInnertubeResolver *m_itResolver = nullptr;
     // Keys with a spent in-process attempt. A key gets exactly one Innertube
-    // try; after that the yt-dlp fallback owns it, so a failed resolve never
-    // loops and never runs two resolvers at once.
+    // try; after that it surfaces RESOLVE_BUSY on warm paths, so a failed
+    // resolve never loops.
     QSet<QString> m_itTried;
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
                                           const QString &key);
@@ -417,12 +419,12 @@ private:
     static constexpr int    kMaxFeedItems    = 100;
     static constexpr int    kMaxHistoryItems = 100;
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
-    static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // yt-dlp is heavy on the Pi
+    static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // browse walks are cheap; keep it parallel
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
     static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
     static constexpr int    kUrlCacheMaxEntries = 80;
-    // The in-process resolver is ~20x cheaper than a yt-dlp spawn, so one warm
-    // pass can cover a whole list page instead of the front dozen rows.
+    // The in-process resolver is ~20x cheaper than a subprocess spawn, so one
+    // warm pass can cover a whole list page instead of the front dozen rows.
     static constexpr int    kWarmListMax  = 50;  // entries warmed per list view
     static constexpr int    kWarmQueueMax = 64;  // backlog cap across rapid browsing
     // Segment prefetch is cheaper than a URL resolve and covers the whole list

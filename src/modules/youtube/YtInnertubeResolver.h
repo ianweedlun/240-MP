@@ -2,11 +2,12 @@
 
 // In-process YouTube Innertube resolver (overnight torture t_7ffb1fd1).
 //
-// Replaces the per-play `yt-dlp -g` spawn with one Player request against the
-// VISIONOS client, using a page-derived visitorData. IOS-client URLs resolve
-// fast but 403 on the open-ended `Range: bytes=0-` that ffmpeg sends, so they
-// never play; VISIONOS URLs return 200 bare / 206 open-ended. The gate is mpv
-// decode of BOTH streams (build-test/yt-resolver-probe), not a curl probe.
+// Replaces the per-play `yt-dlp -g` spawn (removed in NEG-01) with one Player
+// request against the VISIONOS client, using a page-derived visitorData.
+// IOS-client URLs resolve fast but 403 on the open-ended `Range: bytes=0-`
+// that ffmpeg sends, so they never play; VISIONOS URLs return 200 bare /
+// 206 open-ended. The gate is mpv decode of BOTH streams
+// (build-test/yt-resolver-probe), not a curl probe.
 //
 // Why VISIONOS: yt-dlp's JS-less default client. Its Player response carries
 // direct googlevideo URLs (no signatureCipher, no n-transform) and those URLs
@@ -86,8 +87,8 @@ public:
     bool inFlight() const { return m_inFlight; }
 
     // Bound on a single attempt, milliseconds. The spike's worst observed
-    // resolve was 385 ms; 4 s is the outer bound before the backend hands the
-    // key to the yt-dlp fallback, which owns the tail risk.
+    // resolve was 385 ms; 4 s is the outer bound before the backend surfaces a
+    // transient failure, which owns the tail risk.
     static constexpr int kTimeoutMs = 4000;
 
     // Bound on the visitorData homepage scan: inclusive maximum of cumulative
