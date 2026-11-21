@@ -14,6 +14,7 @@ private slots:
     void transientFailuresAreNotCached();
     void ttlExpiryAllowsFreshAttempt();
     void persistenceRoundTrip();
+    void syntheticVdNeverCached();
 };
 
 void YtNegativeCacheTest::permanentFailuresAreCached()
@@ -50,6 +51,29 @@ void YtNegativeCacheTest::transientFailuresAreNotCached()
         QVERIFY(ytneg::recordFailure(cache, QStringLiteral("video-id"), reason, now).isEmpty());
         QVERIFY(cache.isEmpty());
         QVERIFY(ytneg::freshFailureClass(cache, QStringLiteral("video-id"), now).isEmpty());
+    }
+}
+
+// NEG-01: a failure earned while Player ran against the client's synthetic
+// visitorData (real homepage fetch failed) is a resolver-side condition — the
+// `synthetic-vd:` tag must NEVER be recorded as a permanent video verdict,
+// even though YouTube answered LOGIN_REQUIRED for that synthetic id.
+void YtNegativeCacheTest::syntheticVdNeverCached()
+{
+    const qint64 now = 1800000000;
+    const QStringList synthetic{
+        QStringLiteral("synthetic-vd:exception:[Player] Error: confirm you're not a bot (LOGIN_REQUIRED)"),
+        QStringLiteral("synthetic-vd:exception:[Player] Error: sign in (LOGIN_REQUIRED)"),
+        QStringLiteral("synthetic-vd:exception:[Player] Video is LOGIN_REQUIRED - no reason given."),
+        QStringLiteral("synthetic-vd:exception:[Player] Error: unavailable (UNPLAYABLE)"),
+    };
+
+    for (const QString &reason : synthetic) {
+        QJsonObject cache;
+        QCOMPARE(ytneg::permanentFailureClass(reason), QString());
+        QVERIFY(ytneg::recordFailure(cache, QStringLiteral("some-video"), reason, now).isEmpty());
+        QVERIFY(cache.isEmpty());
+        QVERIFY(ytneg::freshFailureClass(cache, QStringLiteral("some-video"), now).isEmpty());
     }
 }
 

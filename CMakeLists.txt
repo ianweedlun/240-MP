@@ -114,7 +114,6 @@ add_executable(240mp
     src/player/MpvController.cpp
     src/player/SeekHoldPolicy.cpp
     src/util/MpvBasicOptions.cpp
-    src/util/YtDlpLocator.cpp
     src/util/MpvLocator.cpp
     src/util/ExecPath.cpp
     src/util/DisplayHandoff.cpp
@@ -642,7 +641,6 @@ if(BUILD_TESTS)
         src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/util/MpvBasicOptions.cpp
-        src/util/YtDlpLocator.cpp
         src/util/MpvLocator.cpp
         src/util/ExecPath.cpp
         src/util/DisplayHandoff.cpp
@@ -1020,8 +1018,7 @@ if(BUILD_TESTS)
     add_executable(yt-negative-cache-backend-tests
         src/modules/youtube/tests/YouTubeNegativeCacheIntegrationTest.cpp
         src/modules/youtube/YouTubeBackend.cpp
-        src/modules/youtube/YtInnertubeResolver.cpp
-        src/util/YtDlpLocator.cpp)
+        src/modules/youtube/YtInnertubeResolver.cpp)
     set_target_properties(yt-negative-cache-backend-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(yt-negative-cache-backend-tests PRIVATE src)
@@ -1039,8 +1036,7 @@ if(BUILD_TESTS)
     add_executable(yt-sponsor-persistence-tests
         src/modules/youtube/tests/YouTubeSponsorPersistenceTest.cpp
         src/modules/youtube/YouTubeBackend.cpp
-        src/modules/youtube/YtInnertubeResolver.cpp
-        src/util/YtDlpLocator.cpp)
+        src/modules/youtube/YtInnertubeResolver.cpp)
     set_target_properties(yt-sponsor-persistence-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(yt-sponsor-persistence-tests PRIVATE src)
@@ -1274,6 +1270,33 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
 
+    # VT-01 regression gate: armed-connection + no-premature-restore contract.
+    # Linux-only (VT ioctls / linux/vt.h); needs libdrm for the interposed capture
+    # path. One executable, one ctest case per arm; RUN_SERIAL because the arms
+    # wait on the real 800 ms restore timer and CI runs ctest -j4.
+    if(UNIX AND NOT APPLE)
+        add_executable(display-handoff-connection-gate
+            src/util/tests/DisplayHandoffConnectionGate.cpp
+            src/util/DisplayHandoff.cpp)
+        set_target_properties(display-handoff-connection-gate PROPERTIES AUTOMOC ON)
+        target_include_directories(display-handoff-connection-gate PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/util ${Libdrm_INCLUDE_DIRS})
+        target_link_libraries(display-handoff-connection-gate PRIVATE
+            Qt6::Core Qt6::Gui Qt6::Quick ${Libdrm_LIBRARIES})
+        target_compile_options(display-handoff-connection-gate PRIVATE -Wall -Wextra)
+        foreach(gate_arm
+            sanity timer-wins frame-wins stale-frame-keepwindow inflight-hide
+            inflight-after-accumulation benign-after-return idempotence
+            ordering-hide ordering-keepwindow)
+            add_test(NAME display-handoff-gate-${gate_arm}
+                COMMAND display-handoff-connection-gate ${gate_arm})
+            set_tests_properties(display-handoff-gate-${gate_arm} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DISPLAY=;WAYLAND_DISPLAY="
+                TIMEOUT 180
+                RUN_SERIAL TRUE)
+        endforeach()
+    endif()
+
     # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
     # with stub backends and asserts a Back in each launch phase routes to
     # sendKey (post-launch) vs goBack (pre-launch) — the launchDone flag, not the
@@ -1298,7 +1321,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvQuitIntentTest.cpp)
     set_target_properties(mpv-quit-intent-tests PROPERTIES AUTOMOC ON)
@@ -1335,7 +1357,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvHoldRepeatTest.cpp)
     set_target_properties(mpv-hold-repeat-tests PROPERTIES AUTOMOC ON)
@@ -1368,7 +1389,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvFailedToStartTest.cpp)
     set_target_properties(mpv-failedtostart-tests PROPERTIES AUTOMOC ON)
@@ -1408,7 +1428,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvInstanceSocketTest.cpp)
     set_target_properties(mpv-instance-socket-tests PROPERTIES AUTOMOC ON)

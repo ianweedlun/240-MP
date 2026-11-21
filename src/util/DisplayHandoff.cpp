@@ -248,6 +248,13 @@ void DisplayHandoff::completeRestore() {
     m_previousVt = -1;
     m_switchedVt = false;
     m_owner.clear();
+    // VT-01: drop this cycle's frameSwapped connection now the restore is done.
+    // Timer-wins: still armed (no frame arrived) — leaving it armed lets a later frame
+    // fire a stale completeRestore during the NEXT handoff (premature switch-back +
+    // early owner release). Frame-wins: SingleShot already consumed it -> harmless no-op.
+    // Runs AFTER the switch+clear, so ordering rules 1/2/3 are unchanged.
+    QObject::disconnect(m_frameConn);
+    m_frameConn = {};
 }
 
 int DisplayHandoff::getActiveVt() const {

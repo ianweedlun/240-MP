@@ -107,6 +107,17 @@ public:
     // modeset is a visible blank. See doRestore().
     void setRendererSuspendsWindow(bool on) { m_rendererSuspendsWindow = on; }
 
+    // Owns the current cycle's frameSwapped -> completeRestore connection. main.cpp
+    // arms it (it has the QQuickWindow) and hands the handle here so completeRestore()
+    // can drop it once the restore is done. Discarding the handle in main.cpp is what
+    // left a timer-won cycle's connection armed forever (VT-01 H1/H2). The handle is
+    // opaque — no window pointer is stored, no QQuickWindow knowledge is added.
+    void setFrameSwappedConnection(QMetaObject::Connection conn)
+    {
+        QObject::disconnect(m_frameConn);   // drop a prior cycle's leftover, if still armed
+        m_frameConn = conn;
+    }
+
     // TEST SEAM — src/util/tests/DisplayHandoffSignalTest.cpp only, production
     // never calls it. Replaces the CRTC capture step of acquire() (Qt DRM fd
     // discovery + saveDrmCrtcState) with a hook, because the ordering that
@@ -171,6 +182,7 @@ private:
     int     m_qtDrmFd      = -1;
     QTimer *m_releaseTimer = nullptr;
     QTimer *m_restoreTimer = nullptr;
+    QMetaObject::Connection m_frameConn;   // current cycle's frameSwapped -> completeRestore
     bool m_rendererSuspendsWindow = false;
     std::function<void()> m_onRestored;
     std::function<void()> m_crtcCaptureHook;   // test seam, see the setter

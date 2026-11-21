@@ -139,8 +139,8 @@ int main(int argc, char *argv[]) {
     });
     termPoll.start();
 
-    // Once, before anything looks for or spawns mpv / yt-dlp: the locators are
-    // pure queries and deliberately do not touch the environment themselves.
+    // Once, before anything looks for or spawns mpv: the locator is a pure
+    // query and deliberately does not touch the environment itself.
     execpath::primeSystemPath();
 
     const QString appRoot  = resolveAppRoot();
@@ -334,10 +334,13 @@ int main(int argc, char *argv[]) {
                          rootWindow, [rootWindow, &displayHandoff] {
                              rootWindow->setVisible(true);
                              rootWindow->requestUpdate();
-                             QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
-                                              &displayHandoff,
-                                              &DisplayHandoff::completeRestore,
-                                              Qt::SingleShotConnection);
+                             // Hand the handle to DisplayHandoff so completeRestore()
+                             // can drop it on the timer-wins path (VT-01).
+                             displayHandoff.setFrameSwappedConnection(
+                                 QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
+                                                  &displayHandoff,
+                                                  &DisplayHandoff::completeRestore,
+                                                  Qt::SingleShotConnection));
                          });
     }
 

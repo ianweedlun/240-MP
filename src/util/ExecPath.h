@@ -10,8 +10,8 @@
 // by every subprocess and is not safe to do concurrently.
 //
 // So it happens exactly once, from main(), before anything is spawned or looked
-// up. The locator functions (mpvbin::locate, ytdlp::locate) are then pure
-// queries with no side effects, callable from anywhere.
+// up. The locator functions (mpvbin::locate) are then pure queries with no
+// side effects, callable from anywhere.
 namespace execpath {
 // Call once from main(), on the main thread, before any locate() call. No-op
 // off macOS.
