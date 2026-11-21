@@ -147,6 +147,8 @@ private slots:
     void watchLaterCursorTvChip();
     void watchLaterCursorDesktopPlaylist();
     void watchLaterCursorMiss();
+    void playlistContinuationFromNextContinuationData();
+    void playlistContinuationIgnoresBrowseShape();
     void playlistRowsDesktopShelf();
     void playlistRowsTvTiles();
     void accountPlaylistsFilterKeepsPlAndLl();
@@ -401,6 +403,67 @@ void YtBrowseRowsTest::watchLaterCursorMiss()
 
     const QJsonValue cur = ytui::findWatchLaterCursor(root);
     QVERIFY(cur.isNull());
+}
+
+void YtBrowseRowsTest::playlistContinuationFromNextContinuationData()
+{
+    // The TVHTML5 public-playlist page (verified live: 0
+    // continuationItemRenderer, 1 nextContinuationData) carries its next-page
+    // token under playlistVideoListRenderer.continuations[0]; the dedicated
+    // playlist cursor must surface it while continuationToken (browse shape)
+    // and findWatchLaterCursor (home shape) stay quiet.
+    QJsonObject nd;
+    nd.insert(QStringLiteral("continuation"), QStringLiteral("4qmFsgJcTOKEN"));
+    QJsonObject cont;
+    cont.insert(QStringLiteral("nextContinuationData"), nd);
+    QJsonArray conts;
+    conts.append(cont);
+    QJsonObject pvl;
+    pvl.insert(QStringLiteral("continuations"), conts);
+    QJsonObject pvlWrap;
+    pvlWrap.insert(QStringLiteral("playlistVideoListRenderer"), pvl);
+
+    QJsonArray contents;
+    contents.append(pvlWrap);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), contents);
+
+    QCOMPARE(ytui::playlistContinuationToken(root), QStringLiteral("4qmFsgJcTOKEN"));
+    // The browse-only cursor and the home watch-later cursor must not swallow
+    // a playlist page's nextContinuationData token.
+    QVERIFY(ytui::continuationToken(root).isEmpty());
+    QVERIFY(ytui::findWatchLaterCursor(root).isNull());
+}
+
+void YtBrowseRowsTest::playlistContinuationIgnoresBrowseShape()
+{
+    // A page built entirely of browse-style continuationItemRenderer carrying
+    // a token must not be mis-read as a playlist cursor: playlist pagination
+    // is a separate wire shape, and an empty playlistContinuationToken(T)
+    // means "no playlist continuation", not a token to page on.
+    QJsonObject command;
+    command.insert(QStringLiteral("token"), QStringLiteral("TOKEN123"));
+    QJsonObject continuationCommandObj;
+    continuationCommandObj.insert(QStringLiteral("continuationCommand"), command);
+    QJsonObject endpoint;
+    endpoint.insert(QStringLiteral("continuationEndpoint"), continuationCommandObj);
+    QJsonObject contRenderer;
+    contRenderer.insert(QStringLiteral("continuationItemRenderer"), endpoint);
+
+    QJsonObject section;
+    QJsonArray sectionItems;
+    sectionItems.append(contRenderer);
+    section.insert(QStringLiteral("contents"), sectionItems);
+    QJsonObject wrapper;
+    wrapper.insert(QStringLiteral("sectionListRenderer"), section);
+    QJsonArray outer;
+    outer.append(wrapper);
+    QJsonObject root;
+    root.insert(QStringLiteral("contents"), outer);
+
+    QVERIFY(ytui::playlistContinuationToken(root).isEmpty());
+    // Sanity: the browse cursor still sees its own shape.
+    QCOMPARE(ytui::continuationToken(root), QStringLiteral("TOKEN123"));
 }
 
 void YtBrowseRowsTest::playlistRowsDesktopShelf()

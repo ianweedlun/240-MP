@@ -320,6 +320,9 @@ private:
     QList<PlaylistFileRef> readPlaylistEntries(QString *error = nullptr) const;
     void         ensurePlaylistsFresh(bool forceRefresh);
     void         spawnNextPlaylistFetch();
+    void         browsePlaylist(const QString &playlistId, const QString &cursor,
+                                int page, const QVariantList &acc);
+    void         assemblePlaylistFromBrowse(const QString &playlistId, const QVariantList &rows);
     void         finishPlaylistAggregate();
     QVariantList buildPlaylistList() const;
 
