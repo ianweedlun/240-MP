@@ -127,10 +127,10 @@ Cases and two-sided expectations (cap value is parsed from
 | no-token-under-cap | 13 B, no token, bot wall | PASS `exception:LOGIN_REQUIRED` via Player | PASS (preserved semantics) |
 | real-size-early-exit | 873,632 B live geometry, token @60,651, 16 KiB drip | PASS ok=1, bytes_sent ≤ 262,144 + reset | **FAIL** (whole page sent) |
 
-Ladder reach: the backend's `finished` handler takes EVERY `!ok` result to
-`launchYtdlpResolve` with no reason filtering (`YouTubeBackend.cpp` ctor), so
-the resolver-level `ok=false reason=visitordata-size-cap` + zero Player
-requests + the cap diagnostic IS the observable clean-failure-into-the-ladder
+Ladder reach: the backend's `finished` handler classifies every `!ok` result
+as transient (surfaces `playbackResolveFailed`; no subprocess ladder exists
+since NEG-01), so the resolver-level `ok=false reason=visitordata-size-cap` +
+zero Player requests + the cap diagnostic IS the observable clean-failure
 signal; the suite asserts all three rather than "no crash".
 
 Boundary-note: `cap-plus-one` is tokenless on purpose. A tail token on a

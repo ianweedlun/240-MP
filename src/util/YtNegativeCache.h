@@ -27,8 +27,18 @@ inline constexpr qint64 kNegativeCacheTtlS = 24 * 60 * 60;
 // empty string for every transient/other class. Do not broaden this by
 // guessing: no-playable-pair, no-expiry and subprocess empty output are not
 // evidence that the video itself is permanently unavailable.
+//
+// NEG-01: a reason tagged with the `synthetic-vd:` prefix never matches. The
+// resolver labels a failure `synthetic-vd:` when it ran Player against the
+// client's synthetic visitorData (the real homepage fetch failed/returned no
+// token); YouTube answers LOGIN_REQUIRED for that synthetic id, and that is a
+// visitorData condition on the resolver's side, NOT evidence that the video is
+// permanently unavailable. Only page-derived visitorData that still earns a
+// LOGIN_REQUIRED/UNPLAYABLE is a permanent video condition.
 inline QString permanentFailureClass(const QString &reason)
 {
+    if (reason.startsWith(QStringLiteral("synthetic-vd:")))
+        return QString();
     if (reason.contains(QStringLiteral("LOGIN_REQUIRED")))
         return QStringLiteral("LOGIN_REQUIRED");
     if (reason.contains(QStringLiteral("UNPLAYABLE")))

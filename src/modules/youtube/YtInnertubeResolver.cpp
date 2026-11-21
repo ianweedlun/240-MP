@@ -97,18 +97,58 @@ bool YtInnertubeResolver::resolve(const QString &videoId, const QString &resolut
     m_timeout->start(kTimeoutMs);
 
     // First resolve waits on the one-time visitorData fetch; the timeout above
-    // already covers that wait, so a slow page falls back to yt-dlp.
-    if (m_visitorData.isEmpty() && !m_vdDone) {
-        m_pendingStart = true;
-        // Carry this attempt's generation into the fetch continuation: the
-        // timeout abandons an attempt by bumping m_generation, and the late
-        // completion must not chain Player for an abandoned attempt (ROB-07).
-        m_pendingGeneration = generation;
-        fetchVisitorData();
-        return true;
+    // already covers that wait, so a slow page falls back to the native ladder.
+    //
+    // NEG-01: if a previous fetch failed, re-arm it within a bounded budget
+    // instead of chaining Player against synthetic VD — a mid-session network
+    // recovery must heal without a restart.
+    if (m_visitorData.isEmpty()) {
+        if (m_vdStarted || !m_vdDone || refetchEligible()) {
+            m_pendingStart = true;
+            // Carry this attempt's generation into the fetch continuation: the
+            // timeout abandons an attempt by bumping m_generation, and the late
+            // completion must not chain Player for an abandoned attempt (ROB-07).
+            m_pendingGeneration = generation;
+            fetchVisitorData();
+            return true;
+        }
     }
     startPlayer(generation);
     return true;
+}
+
+bool YtInnertubeResolver::refetchEligible() const
+{
+    // Wall-clock cooldown since the last failed fetch, not the per-attempt
+    // m_timer (which is the outer resolve-bound). Budget plus spacing prevents
+    // a refetch storm while still healing a mid-session network recovery.
+    if (m_vdRefetchCount >= kMaxVdRefetches)
+        return false;
+    if (m_vdLastFailMs == 0)
+        return true;
+    return QDateTime::currentMSecsSinceEpoch() - m_vdLastFailMs >= kVdRefetchCooldownMs;
+}
+
+QString YtInnertubeResolver::failureReason(const QString &base, bool syntheticVd) const
+{
+    // NEG-01: when Player ran against the client's synthetic visitorData, tag
+    // the failure so ytneg::permanentFailureClass() skips it. A LOGIN_REQUIRED
+    // earned by an empty/synthetic id is a visitorData condition, not a
+    // perman-avail verdict on the video.
+    if (syntheticVd)
+        return QStringLiteral("synthetic-vd:") + base;
+    return base;
+}
+
+// NEG-01: record a visitorData fetch failure and re-arm the one-shot latch so
+// a later resolve may refetch within the bounded budget (cooldown-spaced). A
+// repeat network blip must not extend the broken-session poison the way the
+// old sticky m_vdDone did.
+void YtInnertubeResolver::markVisitorDataFailed()
+{
+    m_vdLastFailMs = QDateTime::currentMSecsSinceEpoch();
+    ++m_vdRefetchCount;
+    m_vdStarted = false;   // allow a subsequent fetchVisitorData() re-arm
 }
 
 void YtInnertubeResolver::fetchVisitorData()
@@ -132,7 +172,8 @@ void YtInnertubeResolver::fetchVisitorData()
         drainVisitorData(reply);    // final burst, if any (also on error)
         if (m_vdDone)
             return;
-        m_vdDone = true;            // EOF-no-token or error: don't retry per resolve
+        m_vdDone = true;            // EOF-no-token or error
+        markVisitorDataFailed();    // NEG-01: re-arm so the next resolve refetches
         if (m_pendingStart) {
             m_pendingStart = false;
             // Generation invariant: only the still-live waiting attempt may
@@ -150,7 +191,7 @@ void YtInnertubeResolver::fetchVisitorData()
 // kVdChunkBytes + kVdCarryBytes), enforcing the inclusive kMaxHomepageBytes
 // cap on cumulative delivered bytes BEFORE any QString conversion. Never
 // materializes the whole page. Terminal paths: token found (early exit),
-// cap exceeded (clean failure into the backend's yt-dlp ladder), or return
+// cap exceeded (clean failure re-arms the refetch latch), or return
 // with m_vdDone unset so finished() applies EOF/error semantics.
 void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
 {
@@ -162,7 +203,8 @@ void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
             break;
         m_vdBytes += chunk.size();
         if (m_vdBytes > kMaxHomepageBytes) {
-            m_vdDone = true;   // sticky: an oversized page is a server-side condition
+            m_vdDone = true;   // oversized page: server-side condition
+            markVisitorDataFailed(); // NEG-01: re-arm latch so a later resolve refetches
             qWarning("[Youtube] visitorData homepage exceeded size cap (bytes=%lld cap=%lld)",
                      static_cast<long long>(m_vdBytes),
                      static_cast<long long>(kMaxHomepageBytes));
@@ -188,6 +230,8 @@ void YtInnertubeResolver::drainVisitorData(QNetworkReply *reply)
         if (m.hasMatch()) {
             m_visitorData = m.captured(1);
             m_vdDone = true;
+            m_vdRefetchCount = 0; // NEG-01: a successful fetch proves recovery
+            m_vdLastFailMs = 0;
             m_vdBuf = QByteArray();
             m_vdBytes = 0;
             if (reply->isRunning())
@@ -209,6 +253,12 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
     // `generation` is the originating attempt's, passed in by the caller.
     // Re-reading m_generation here would bind a late continuation to whatever
     // attempt is current and defeat the timeout invalidation (ROB-07).
+    //
+    // NEG-01: if this attempt runs against the client's synthetic visitorData
+    // (real homepage fetch failed and refetch budget exhausted), any Player
+    // failure is a visitorData condition — tag the reason so the durable
+    // negative cache never records it as a permanent video verdict.
+    const bool syntheticVd = m_visitorData.isEmpty();
 
     PlayerReply *reply = nullptr;
     try {
@@ -223,7 +273,7 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
         r.resolution = m_resolution;
         r.key = m_key;
         r.ok = false;
-        r.reason = QStringLiteral("exception:") + ex.message();
+        r.reason = failureReason(QStringLiteral("exception:") + ex.message(), syntheticVd);
         r.elapsedMs = m_timer.elapsed();
         emitResult(r);
         return;
@@ -314,7 +364,7 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
     });
 
     connect(reply, &PlayerReply::exception, this,
-            [this, generation](const InnertubeException &ex) {
+            [this, generation, syntheticVd](const InnertubeException &ex) {
         // Generation invariant: same as the finished handler above — a stale
         // exception from an abandoned attempt must not emit a second result.
         if (generation != m_generation)
@@ -325,7 +375,7 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
         r.resolution = m_resolution;
         r.key = m_key;
         r.ok = false;
-        r.reason = QStringLiteral("exception:") + ex.message();
+        r.reason = failureReason(QStringLiteral("exception:") + ex.message(), syntheticVd);
         r.elapsedMs = m_timer.elapsed();
         emitResult(r);
     });

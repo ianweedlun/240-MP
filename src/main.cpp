@@ -139,8 +139,8 @@ int main(int argc, char *argv[]) {
     });
     termPoll.start();
 
-    // Once, before anything looks for or spawns mpv / yt-dlp: the locators are
-    // pure queries and deliberately do not touch the environment themselves.
+    // Once, before anything looks for or spawns mpv: the locator is a pure
+    // query and deliberately does not touch the environment itself.
     execpath::primeSystemPath();
 
     const QString appRoot  = resolveAppRoot();

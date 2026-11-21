@@ -1,6 +1,5 @@
 #include "MpvController.h"
 #include "../AppCore.h"
-#include "../util/YtDlpLocator.h"
 #include "../util/MpvLocator.h"
 #include "../util/MpvBasicOptions.h"
 #include "../util/MpvInstancePaths.h"
@@ -396,9 +395,11 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     if (!subLangs.isEmpty())
         args << QString("--slang=%1").arg(subLangs.join(QStringLiteral(",")));
 
-    // yt-dlp hook intercepts HTTP media URLs and can break Plex/Jellyfin
-    // playback with spurious 401/400 errors — disabled unless the caller
-    // explicitly opts in via extraArgs (e.g. YouTube passes --ytdl=yes).
+    // mpv's ytdl_hook (when a caller explicitly opts in via --ytdl in
+    // extraArgs) uses whatever yt-dlp is on the global PATH; the app no longer
+    // manages or locates a yt-dlp copy of its own (NEG-01 removed every
+    // yt-dlp dependency). The hook stays default-off below so Plex/Jellyfin
+    // HTTP playback is never intercepted.
     bool ytdlEnabled = false;
     for (const QString &a : extraArgs) {
         if (a == QLatin1String("--ytdl") || a.startsWith(QLatin1String("--ytdl=")))
@@ -434,17 +435,6 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
             // Path is comma- and space-free, so it is safe in the script-opts list.
             scriptOpts << QString("subinfo-file=%1").arg(m_subInfoPath);
         }
-    }
-    // Point mpv's ytdl_hook at the same user-updatable yt-dlp the app resolves,
-    // so both agree on one copy even when it isn't on the global PATH (the
-    // SteamOS story). Merged into the single --script-opts below — a second
-    // --script-opts flag would replace, not append, clobbering the entries above.
-    // The comma guard mirrors the subinfo-file constraint (a path with a comma
-    // would break the join); realistically never hit.
-    if (ytdlEnabled) {
-        const QString ytdlPath = ytdlp::locate(m_dataRoot);
-        if (!ytdlPath.isEmpty() && !ytdlPath.contains(QLatin1Char(',')))
-            scriptOpts << QString("ytdl_hook-ytdl_path=%1").arg(ytdlPath);
     }
     // SponsorBlock segment hints for the OSC (set by the YouTube Player right
     // before this launch; consumed once so other modules never inherit them).

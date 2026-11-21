@@ -15,7 +15,7 @@ class YouTubeNegativeCacheIntegrationTest : public QObject {
 
 private slots:
     void permanentResultPersistsWithoutYtdlpFallback();
-    void transientResultKeepsYtdlpFallback();
+    void transientFailureNeverSpawnsYtdlp();
     void cachedFailureSkipsWarmFocusAndPressAcrossRestart();
 
 private:
@@ -94,7 +94,10 @@ void YouTubeNegativeCacheIntegrationTest::permanentResultPersistsWithoutYtdlpFal
              QStringLiteral("LOGIN_REQUIRED"));
 }
 
-void YouTubeNegativeCacheIntegrationTest::transientResultKeepsYtdlpFallback()
+// W2 (NEG-01 convergence): the yt-dlp fallback is removed. A transient timeout
+// must surface playbackResolveFailed directly and MUST NOT spawn yt-dlp — the
+// sentinel marker must never be written, and nothing is negative-cached.
+void YouTubeNegativeCacheIntegrationTest::transientFailureNeverSpawnsYtdlp()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -116,8 +119,9 @@ void YouTubeNegativeCacheIntegrationTest::transientResultKeepsYtdlpFallback()
     result.elapsedMs = 4000;
     emit resolver->finished(result);
 
-    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(marker), 1000);
-    QCOMPARE(failed.count(), 0);
+    // Transient failure reaches the caller, never a yt-dlp spawn.
+    QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 1000);
+    QTRY_VERIFY(!QFile::exists(marker));
     const QJsonObject persisted = ytneg::readNegativeCache(
         dir.filePath(QStringLiteral("youtube_resolve_failures.json")),
         QDateTime::currentSecsSinceEpoch());

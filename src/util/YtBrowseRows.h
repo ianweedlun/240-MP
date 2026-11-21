@@ -287,6 +287,41 @@ inline QVariantList extractChannelSyncRows(const QJsonObject &root)
     return rows;
 }
 
+// Playlist pagination cursor (public VL playlists, NEG-01 yt-dlp removal): the
+// TVHTML5 playlist page carries its next-page token under
+// playlistVideoListRenderer.continuations[0].nextContinuationData.continuation —
+// NOT continuationItemRenderer (browse pages use that shape; this one does not,
+// verified live: 0 continuationItemRenderer, 1 nextContinuationData). Empty
+// string means the list is single-page or already exhausted.
+inline QString playlistContinuationToken(const QJsonObject &root)
+{
+    QQueue<QJsonValue> queue;
+    queue.enqueue(QJsonValue(root));
+    while (!queue.isEmpty()) {
+        const QJsonValue v = queue.dequeue();
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            if (o.contains(QStringLiteral("continuations"))) {
+                const QJsonArray conts = o.value(QStringLiteral("continuations")).toArray();
+                for (const QJsonValue &c : conts) {
+                    const QJsonValue nd = c.toObject().value(QStringLiteral("nextContinuationData"));
+                    const QString token = nd.toObject().value(QStringLiteral("continuation")).toString();
+                    if (!token.isEmpty())
+                        return token;
+                }
+            }
+            const QList<QString> keys = o.keys();
+            for (const QString &key : keys)
+                queue.enqueue(o.value(key));
+        } else if (v.isArray()) {
+            const QJsonArray arr = v.toArray();
+            for (const QJsonValue &item : arr)
+                queue.enqueue(item);
+        }
+    }
+    return QString();
+}
+
 // First continuationItemRenderer token at any depth — the cursor for the
 // next browse page; empty when the list is single-page.
 inline QString continuationToken(const QJsonObject &root)
