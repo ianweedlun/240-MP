@@ -114,7 +114,6 @@ add_executable(240mp
     src/player/MpvController.cpp
     src/player/SeekHoldPolicy.cpp
     src/util/MpvBasicOptions.cpp
-    src/util/YtDlpLocator.cpp
     src/util/MpvLocator.cpp
     src/util/ExecPath.cpp
     src/util/DisplayHandoff.cpp
@@ -642,7 +641,6 @@ if(BUILD_TESTS)
         src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/util/MpvBasicOptions.cpp
-        src/util/YtDlpLocator.cpp
         src/util/MpvLocator.cpp
         src/util/ExecPath.cpp
         src/util/DisplayHandoff.cpp
@@ -965,8 +963,7 @@ if(BUILD_TESTS)
     add_executable(yt-negative-cache-backend-tests
         src/modules/youtube/tests/YouTubeNegativeCacheIntegrationTest.cpp
         src/modules/youtube/YouTubeBackend.cpp
-        src/modules/youtube/YtInnertubeResolver.cpp
-        src/util/YtDlpLocator.cpp)
+        src/modules/youtube/YtInnertubeResolver.cpp)
     set_target_properties(yt-negative-cache-backend-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(yt-negative-cache-backend-tests PRIVATE src)
@@ -984,8 +981,7 @@ if(BUILD_TESTS)
     add_executable(yt-sponsor-persistence-tests
         src/modules/youtube/tests/YouTubeSponsorPersistenceTest.cpp
         src/modules/youtube/YouTubeBackend.cpp
-        src/modules/youtube/YtInnertubeResolver.cpp
-        src/util/YtDlpLocator.cpp)
+        src/modules/youtube/YtInnertubeResolver.cpp)
     set_target_properties(yt-sponsor-persistence-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(yt-sponsor-persistence-tests PRIVATE src)
@@ -1243,7 +1239,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvQuitIntentTest.cpp)
     set_target_properties(mpv-quit-intent-tests PROPERTIES AUTOMOC ON)
@@ -1280,7 +1275,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvHoldRepeatTest.cpp)
     set_target_properties(mpv-hold-repeat-tests PROPERTIES AUTOMOC ON)
@@ -1313,7 +1307,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvFailedToStartTest.cpp)
     set_target_properties(mpv-failedtostart-tests PROPERTIES AUTOMOC ON)
@@ -1353,7 +1346,6 @@ if(BUILD_TESTS)
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
-        src/util/YtDlpLocator.cpp
         src/util/FontconfigOverride.cpp
         src/tests/MpvInstanceSocketTest.cpp)
     set_target_properties(mpv-instance-socket-tests PROPERTIES AUTOMOC ON)
