@@ -30,6 +30,10 @@ class IdleTracker : public QObject {
     // sharing one flag means whichever session ends first unblocks the other.
     // Same blocking->unblocked idle-count reset as mpvActive.
     Q_PROPERTY(bool scriptActive READ isScriptActive WRITE setScriptActive NOTIFY scriptActiveChanged)
+    // Blocks activation while a RetroArch game owns the screen. The game child
+    // owns the whole console and input is suppressed during play, so without
+    // this flag the idle count ticks straight through gameplay (IDLE-02).
+    Q_PROPERTY(bool gameActive READ isGameActive WRITE setGameActive NOTIFY gameActiveChanged)
 
 public:
     explicit IdleTracker(int thresholdSec = 60, QObject *parent = nullptr);
@@ -40,11 +44,13 @@ public:
     bool isEnabled()     const { return m_enabled;      }
     bool isMpvActive()    const { return m_mpvActive;    }
     bool isScriptActive() const { return m_scriptActive; }
+    bool isGameActive()   const { return m_gameActive;   }
 
     void setThreshold(int seconds);
     void setEnabled(bool on);
     void setMpvActive(bool active);
     void setScriptActive(bool active);
+    void setGameActive(bool active);
 
     // Called from C++ or QML to mark input activity — resets the idle counter
     // and deactivates the idle state if it was active.
@@ -57,6 +63,7 @@ signals:
     void enabledChanged();
     void mpvActiveChanged();
     void scriptActiveChanged();
+    void gameActiveChanged();
     // Emitted on every resetActivity() call (including from the event filter)
     // and on the blocking->unblocked edge of mpvActive/scriptActive.
     void activityDetected();
@@ -69,7 +76,7 @@ private slots:
 
 private:
     // Any external session that owns the screen suppresses the saver.
-    bool blocked() const { return m_mpvActive || m_scriptActive; }
+    bool blocked() const { return m_mpvActive || m_scriptActive || m_gameActive; }
 
     // Shared count/activity reset behind resetActivity() and both setters'
     // blocking->unblocked edge (IDLE-01), so the paths cannot diverge.
@@ -82,4 +89,5 @@ private:
     bool   m_enabled     = false;   // off until Main.qml applies the saved setting
     bool   m_mpvActive    = false;
     bool   m_scriptActive = false;
+    bool   m_gameActive   = false;
 };

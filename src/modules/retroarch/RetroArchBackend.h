@@ -24,6 +24,10 @@ class DisplayHandoff;
 class RetroArchBackend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString retroarchPath READ retroarchPath NOTIFY retroarchPathChanged)
+    // True while the launchGame() child is alive. NOTIFY so QML can block the
+    // idle tracker for the whole game (IDLE-02) — polling alone never tells
+    // Main.qml when the game starts or ends.
+    Q_PROPERTY(bool gameRunning READ gameRunning NOTIFY gameRunningChanged)
 
 public:
     explicit RetroArchBackend(const QString &appRoot, const QString &dataRoot,
@@ -99,6 +103,7 @@ signals:
     void playlistsReady(const QVariantList &playlists);
     void gamesReady(const QVariantList &games);
     void retroarchPathChanged();
+    void gameRunningChanged();
 
 public slots:
     // Called directly by AppCore::save_setting before moduleSettingChanged is
