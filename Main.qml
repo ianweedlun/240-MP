@@ -255,8 +255,10 @@ Window {
 
     // --- MPV PLAYBACK TRACKING ---
     // Block the screen saver while mpv is playing so it never flashes during or
-    // immediately after playback. The core guard is in IdleTracker (mpvActive
-    // property), which also resets the idle timer on transitions.
+    // immediately after playback. IdleTracker's mpvActive property freezes the
+    // idle count while blocked and resets it on the blocking->unblocked edge;
+    // the paired resetActivity() calls here additionally treat playback start
+    // as activity and are kept as defense in depth.
     Connections {
         target: mpvController
         function onPositionChanged(ms) {
