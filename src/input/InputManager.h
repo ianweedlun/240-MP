@@ -87,7 +87,10 @@ signals:
     // Emitted instead of posting a key event when the Qt window is inactive
     // (fullscreen mpv holds OS focus on macOS, which clears QML active focus).
     // main.cpp connects this to MpvController::sendKey.
-    void mpvKeyRequested(const QString &key);
+    void mpvKeyRequested(const QString &key, bool autoRepeat);
+    // Key-up on the direct-IPC path: held-key coalesced seeks in MpvController
+    // end on release, so the release must cross too.
+    void mpvKeyReleased(const QString &key);
     // Capture-mode reporting (see setRemapCapture): a raw press on any of the
     // three remappable input paths — a real keyboard key (its Qt::Key), a
     // Consumer Control button (kEvdevKeyBase + Linux KEY_* code; Linux only,

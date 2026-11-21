@@ -20,6 +20,14 @@ public:
     virtual bool isMuted() const = 0;
     virtual bool setMuted(bool muted) = 0;
 
+    // Whether level()/isMuted() reflect a hardware observation. Synchronous
+    // backends read hardware on demand, so they are always "observed" (the
+    // default). Async backends (T1 P-5A) start from cached defaults and return
+    // false until their first successful parsed read — callers that sequence
+    // startup work (restore, first key press) can wait on this instead of
+    // blocking the UI thread.
+    virtual bool hasHardwareState() const { return true; }
+
     // Human-readable backend name, e.g. "pipewire", "alsa", "none".
     virtual QString backendName() const = 0;
 };

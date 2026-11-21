@@ -44,6 +44,13 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED) # gamepad input (InputManager)
 
+# In-process YouTube Innertube resolver (vendor). GPL-3.0; see
+# third_party/innertube-qt/ for provenance and the two CMake patches below.
+# Built with INNERTUBE_NO_WEBENGINE=ON — the auth store's WebEngine includes
+# are guarded, and the app never needs to render a web page itself.
+set(INNERTUBE_NO_WEBENGINE ON CACHE BOOL "Disable WebEngine for innertube-qt" FORCE)
+add_subdirectory(third_party/innertube-qt)
+
 # libdrm is used on Linux/RPi to save and restore the KMS CRTC state
 # around mpv playback so Qt EGLFS can resume cleanly after mpv exits.
 if(NOT APPLE)
@@ -81,6 +88,7 @@ add_executable(240mp
     src/modules/emby/EmbyBackend.cpp
     src/modules/ambient_mode/AmbientModeBackend.cpp
     src/modules/youtube/YouTubeBackend.cpp
+    src/modules/youtube/YtInnertubeResolver.cpp
     src/modules/nfc_reader/NfcReaderBackend.cpp
     src/modules/nfc_reader/PcscDriver.cpp
     src/modules/nfc_reader/Pn532SerialDriver.cpp
@@ -104,6 +112,7 @@ add_executable(240mp
     src/modules/virtual_channels/TVDBAuth.cpp
     src/modules/virtual_channels/TVDBNetworkResolver.cpp
     src/player/MpvController.cpp
+    src/player/SeekHoldPolicy.cpp
     src/util/MpvBasicOptions.cpp
     src/util/YtDlpLocator.cpp
     src/util/MpvLocator.cpp
@@ -115,6 +124,7 @@ add_executable(240mp
     src/audio/ALSAVolumeMixer.cpp
     src/audio/VolumeMixerFactory.cpp
     src/audio/VolumeManager.cpp
+    src/audio/MixerProcessRunner.cpp
     src/input/InputManager.cpp
     src/input/IdleTracker.cpp
     src/update/UpdateManager.cpp
@@ -163,6 +173,7 @@ target_link_libraries(240mp PRIVATE
     Qt6::Svg
     OpenSSL::Crypto
     SDL2::SDL2
+    innertube-qt
     $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>
 )
 
@@ -189,6 +200,8 @@ target_include_directories(240mp PRIVATE
 
 # ── macOS bundle metadata ──────────────────────────────────────────────────────
 set_target_properties(240mp PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_NAME "240-MP"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
@@ -225,6 +238,28 @@ if(APPLE)
         DESTINATION "240mp.app/Contents/Resources"
         COMPONENT Runtime)
 
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "240mp.app/Contents/Resources"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "240mp.app/Contents/Resources/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "240mp.app/Contents/Resources/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
+
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"
         "${CMAKE_SOURCE_DIR}/modules"
@@ -251,6 +286,28 @@ else()
     install(FILES "${CMAKE_SOURCE_DIR}/Main.qml"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
         COMPONENT Runtime)
+
+    # Keep third-party licences under their own paths: several are named LICENSE.
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/LICENSE"
+        "${CMAKE_SOURCE_DIR}/THANKS.md"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
+        COMPONENT Runtime)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/LICENSE"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/innertube-qt/lib/verdigris/LICENSE.LGPLv3"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/innertube-qt/lib/verdigris"
+            COMPONENT Runtime)
+    endif()
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt")
+        install(FILES "${CMAKE_SOURCE_DIR}/third_party/expected-lite/LICENSE.txt"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp/third_party/expected-lite"
+            COMPONENT Runtime)
+    endif()
 
     install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/views"
@@ -398,18 +455,72 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
 
+    # T1 M-3: re-registering the same backend/module id must not multiply
+    # AppCore's signal fan-out. Real AppCore + probe backend, QSignalSpy on
+    # all three re-emitted signals; control (x1) and stress (x10) arms. The
+    # stress arm FAILS BY DESIGN until registerModule() is idempotent.
+    # No QML engine, no network (QGuiApplication for offscreen Qt).
+    add_executable(appcore-reregistration-tests
+        src/AppCore.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/AppCoreReregistrationTest.cpp)
+    set_target_properties(appcore-reregistration-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-reregistration-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-reregistration-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-reregistration-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
+
+    # Raw keyboard/remote taps must be visible in the TELEMETRY state log too.
+    # Uses the real InputManager event filter and AppCore log sink; no QML,
+    # network, audio hardware, or physical input device is driven.
+    add_executable(input-manager-telemetry-tests
+        src/input/InputManager.cpp
+        src/AppCore.cpp
+        src/audio/VolumeManager.cpp
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/InputManagerTelemetryTest.cpp)
+    set_target_properties(input-manager-telemetry-tests PROPERTIES AUTOMOC ON)
+    target_compile_definitions(input-manager-telemetry-tests PRIVATE
+        APP_TELEMETRY MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(input-manager-telemetry-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test SDL2::SDL2
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(input-manager-telemetry-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(input-manager-telemetry-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(input-manager-telemetry-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME input-manager-telemetry COMMAND input-manager-telemetry-tests)
+
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
-    # No real audio hardware needed — the factory picks a no-op on WSL/CI.
+    # No real audio hardware needed — the factory picks a no-op on WSL/CI, and
+    # the async ALSA backend is driven end-to-end with the compiled mixer-stub
+    # child (TORTURE_* env knobs) through the real MixerProcessRunner seam.
     add_executable(volume-mixer-tests
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeMixerTest.cpp)
     set_target_properties(volume-mixer-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
     target_include_directories(volume-mixer-tests PRIVATE src)
+    target_compile_definitions(volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    add_dependencies(volume-mixer-tests mixer-stub)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(volume-mixer-tests PRIVATE -Wall -Wextra)
     endif()
@@ -421,6 +532,7 @@ if(BUILD_TESTS)
         src/audio/NoopVolumeMixer.cpp
         src/audio/PipeWireVolumeMixer.cpp
         src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
         src/audio/VolumeMixerFactory.cpp
         src/tests/VolumeManagerTest.cpp)
     set_target_properties(volume-manager-tests PROPERTIES AUTOMOC ON)
@@ -430,6 +542,151 @@ if(BUILD_TESTS)
         target_compile_options(volume-manager-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME volume-manager COMMAND volume-manager-tests)
+
+    # Async mixer process seam (T1 P-5A): dedicated-thread QProcess runner with
+    # latest-wins coalescing, bounded timeouts and cached-state accessors. A
+    # fake child executable stands in for amixer/wpctl (delay, exit codes,
+    # garbage output) so the suite needs no audio hardware. Run under
+    # ASan/UBSan with detect_leaks=1 — clean shutdown is part of the contract.
+    add_executable(mixer-fake-child src/tests/fake-mixer-child.cpp)
+    add_executable(mixer-process-runner-tests
+        src/audio/MixerProcessRunner.cpp
+        src/tests/MixerProcessRunnerTest.cpp)
+    set_target_properties(mixer-process-runner-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mixer-process-runner-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(mixer-process-runner-tests PRIVATE src)
+    target_compile_definitions(mixer-process-runner-tests PRIVATE
+        FAKE_MIXER_CHILD_PATH="$<TARGET_FILE:mixer-fake-child>")
+    add_dependencies(mixer-process-runner-tests mixer-fake-child)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mixer-process-runner-tests PRIVATE -Wall -Wextra)
+        target_compile_options(mixer-fake-child PRIVATE -Wall -Wextra)
+    endif()
+
+    # Held-key seek shaping (YouTube slow-stream fix): pure policy logic, no
+    # mpv/IPC/timers needed — the owner drives flush() from a QTimer.
+    add_executable(seek-hold-policy-tests
+        src/player/SeekHoldPolicy.cpp
+        src/tests/SeekHoldPolicyTest.cpp)
+    set_target_properties(seek-hold-policy-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(seek-hold-policy-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(seek-hold-policy-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(seek-hold-policy-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME seek-hold-policy COMMAND seek-hold-policy-tests)
+    add_test(NAME mixer-process-runner COMMAND mixer-process-runner-tests)
+
+    # PipeWire async backend contract (T1 P-5A): drives the real backend against
+    # the checked-in compiled mixer-stub on PATH (no audio hardware). Timing,
+    # coalescing, clamp no-ops and every failure-mode rollback, sanitizer-clean.
+    add_executable(pipewire-volume-mixer-tests
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/tests/PipeWireVolumeMixerTest.cpp)
+    set_target_properties(pipewire-volume-mixer-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(pipewire-volume-mixer-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(pipewire-volume-mixer-tests PRIVATE src)
+    add_dependencies(pipewire-volume-mixer-tests mixer-stub)
+    target_compile_definitions(pipewire-volume-mixer-tests PRIVATE
+        MIXER_STUB_PATH="$<TARGET_FILE:mixer-stub>")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(pipewire-volume-mixer-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME pipewire-volume-mixer COMMAND pipewire-volume-mixer-tests)
+
+    # P-5A delayed-mixer UI-stall regression (torture T1): a slow system mixer
+    # must not stall the UI thread >16 ms. Drives the REAL InputManager file
+    # channel + REAL VolumeManager + REAL ALSA/PipeWire mixers offscreen, with
+    # scratch PATH-stub amixer/wpctl whose delay/failure mode the orchestrator
+    # controls (TORTURE_DELAY_MS / TORTURE_STUB_MODE). No audio hardware, no
+    # system state: all delay and state live in scratch dirs. Two-sided: the
+    # delay200 cases and alsa-delay0 FAIL on the unfixed snapshot (ALSA ~1.5 s
+    # direct / ~1.5 s heartbeat, 7 amixer spawns per press; PipeWire ~211 ms);
+    # noop-control proves the rig itself is green with an instant mixer, and
+    # the fault cases (nonzero exit / garbage / missing executable) must stay
+    # bounded and sanitizer-clean. Needs python3 (stdlib only). RUN_SERIAL:
+    # the runs share the app's /tmp/240mp_key.in debug channel.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target volume-stall-probe mixer-stub
+    #   ctest --test-dir build-test -R volume-stall --output-on-failure
+    # See src/tests/README-volume-stall.md (env vars, RESULT fields, baseline).
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # The PATH-stub mixer: one compiled binary the orchestrator copies into
+    # scratch bin dirs as amixer/wpctl. Compiled, not scripted — interpreter
+    # startup would dwarf the ~3 ms spawn cost the baseline was measured
+    # with. Built WITHOUT sanitizers even in sanitizer builds (it is fixture
+    # infrastructure, not product code; ASan startup would skew the timings).
+    add_executable(mixer-stub src/tests/mixer-stubs/mixer_stub.cpp)
+    set_target_properties(mixer-stub PROPERTIES AUTOMOC OFF)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mixer-stub PRIVATE -Wall -Wextra
+            -fno-sanitize=address,undefined)
+        target_link_options(mixer-stub PRIVATE -fno-sanitize=address,undefined)
+    endif()
+    add_executable(volume-stall-probe
+        src/tests/VolumeStallProbe.cpp
+        # Same link closure the lab harness proved for InputManager+AppCore:
+        # the input layer references MpvController (media-key IPC) and the
+        # RetroArch backend (launch handoff), so their symbols must resolve.
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/input/InputManager.cpp
+        src/modules/retroarch/RetroArchBackend.cpp
+        src/modules/retroarch/RecentGamesStore.cpp
+        src/audio/VolumeManager.cpp
+        src/audio/NoopVolumeMixer.cpp
+        src/audio/PipeWireVolumeMixer.cpp
+        src/audio/ALSAVolumeMixer.cpp
+        src/audio/MixerProcessRunner.cpp
+        src/audio/VolumeMixerFactory.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/MpvLocator.cpp
+        src/util/ExecPath.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/FontconfigOverride.cpp)
+    set_target_properties(volume-stall-probe PROPERTIES AUTOMOC ON)
+    target_link_libraries(volume-stall-probe PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick SDL2::SDL2
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(volume-stall-probe PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(volume-stall-probe PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    # Repo root as a C string literal (same set()/\" pattern as the smokes:
+    # a bare inline \" gets stripped by target_compile_definitions).
+    set(MP240_VOLUME_STALL_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_CURRENT_SOURCE_DIR}\"")
+    target_compile_definitions(volume-stall-probe PRIVATE ${MP240_VOLUME_STALL_ROOT_DEF})
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(volume-stall-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(stall_case alsa-delay200 alsa-delay0 pipewire-delay200 pipewire-delay0
+                       noop-control alsa-faults pipewire-faults alsa-edge pipewire-edge)
+        # The 16 ms wall-clock gate needs a quiet host. The macOS CI runner
+        # (macos-15-intel) jitters 50-58 ms on the noop control's heartbeat
+        # with ZERO mixer I/O — rig noise, not product (the canary's exact
+        # verdict, see README). Timing cases therefore run on Linux only;
+        # fault cases (boundedness/sanitizer, no 16 ms gate) run everywhere.
+        if(APPLE AND NOT stall_case MATCHES "faults$")
+            continue()
+        endif()
+        # Both mixers are async on the mixer process seam (T1 P-5A), so
+        # every case asserts the fixed shape in normal mode. --baseline
+        # remains an orchestrator mode for the two-sided red-shape proof.
+        add_test(NAME volume-stall-${stall_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_volume_stall_case.py
+                --case ${stall_case}
+                --probe $<TARGET_FILE:volume-stall-probe>
+                --stub-bin $<TARGET_FILE:mixer-stub>
+                --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(volume-stall-${stall_case} PROPERTIES
+            TIMEOUT 180
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
 
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
@@ -560,6 +817,28 @@ if(BUILD_TESTS)
     target_compile_definitions(plex-player-smoke PRIVATE ${MP240_PLEX_ROOT_DEF})
     add_test(NAME plex-player-smoke COMMAND plex-player-smoke)
 
+    # YouTube Player launch smoke: drives the real Player.qml offscreen with
+    # stub backends and asserts the launch depends only on the stream URL pair
+    # — cached segments ride as an EDL, a still-fetching or dead sponsor domain
+    # adds zero wait (the old cold path held first frame for up to 6 s).
+    add_executable(youtube-player-smoke src/tests/youtube-player-smoke-test.cpp)
+    set_target_properties(youtube-player-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-player-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-player-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-player-smoke COMMAND youtube-player-smoke)
+
+    # YouTube Player held-key wiring: repeat flag + key-up must cross to
+    # MpvController (SeekHoldPolicy shapes them; logic unit-tested separately).
+    add_executable(youtube-seek-smoke src/tests/youtube-seek-smoke-test.cpp)
+    set_target_properties(youtube-seek-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-seek-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_include_directories(youtube-seek-smoke PRIVATE src)
+    target_compile_definitions(youtube-seek-smoke PRIVATE MP240_REPO_ROOT="${CMAKE_SOURCE_DIR}")
+    add_test(NAME youtube-seek-smoke COMMAND youtube-seek-smoke)
+
     add_executable(local-files-player-smoke src/tests/local-files-player-smoke-test.cpp)
     set_target_properties(local-files-player-smoke PROPERTIES AUTOMOC ON)
     target_link_libraries(local-files-player-smoke PRIVATE
@@ -567,6 +846,28 @@ if(BUILD_TESTS)
     target_compile_definitions(local-files-player-smoke PRIVATE
         MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME local-files-player-smoke COMMAND local-files-player-smoke)
+
+    # R10: an empty filePath must goBack() at the launch entry instead of
+    # stranding the view (no mpv child ever spawns, so Back/ESC cannot exit).
+    # Two-sided: fails on the pre-fix snapshot by design.
+    add_executable(local-files-empty-path-smoke src/tests/local-files-empty-path-smoke-test.cpp)
+    set_target_properties(local-files-empty-path-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(local-files-empty-path-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(local-files-empty-path-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME local-files-empty-path-smoke COMMAND local-files-empty-path-smoke)
+
+    # YouTube primary lists: a real Down key must emit a named select line.
+    # Runs on the x86/macOS QML lanes; arm64 excludes it with the other Effects
+    # smokes because distro Qt 6.4 has no QtQuick.Effects module.
+    add_executable(youtube-telemetry-smoke src/tests/youtube-telemetry-smoke-test.cpp)
+    set_target_properties(youtube-telemetry-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-telemetry-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-telemetry-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-telemetry-smoke COMMAND youtube-telemetry-smoke)
 endif()
 
 # ── CPack ──────────────────────────────────────────────────────────────────────
@@ -602,6 +903,18 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME mpv-basic-options COMMAND mpv-basic-options-tests)
 
+    # T2 (issue #111): per-instance mpv temp paths — pure helper tests.
+    # No process spawning; exercise the sun_path bound and uniqueness logic.
+    add_executable(mpv-instance-paths-tests
+        src/util/tests/MpvInstancePathsTest.cpp)
+    set_target_properties(mpv-instance-paths-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-paths-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(mpv-instance-paths-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(mpv-instance-paths-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-paths COMMAND mpv-instance-paths-tests)
+
     # Built-in palette consistency tests: themes table (Main.qml) vs the Settings
     # picker list (views/Settings.qml) — drift guard for adding color schemes.
     add_executable(palette-tests
@@ -635,6 +948,53 @@ if(BUILD_TESTS)
         target_compile_options(yt-url-invalidate-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME yt-url-invalidate COMMAND yt-url-invalidate-tests)
+
+    # Durable negative cache for permanent YouTube resolve failures. Exercises
+    # classification, the 24 h TTL and the real on-disk persistence helpers.
+    add_executable(yt-negative-cache-tests
+        src/util/tests/YtNegativeCacheTest.cpp)
+    set_target_properties(yt-negative-cache-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-negative-cache-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-negative-cache-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-negative-cache COMMAND yt-negative-cache-tests)
+
+    # Backend wiring gate for the same cache: list warm, focus warm and press
+    # must not reach either resolver, including after a backend restart.
+    add_executable(yt-negative-cache-backend-tests
+        src/modules/youtube/tests/YouTubeNegativeCacheIntegrationTest.cpp
+        src/modules/youtube/YouTubeBackend.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp
+        src/util/YtDlpLocator.cpp)
+    set_target_properties(yt-negative-cache-backend-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-negative-cache-backend-tests PRIVATE src)
+    target_link_libraries(yt-negative-cache-backend-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test innertube-qt)
+    if(NOT MSVC)
+        target_compile_options(yt-negative-cache-backend-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-negative-cache-backend COMMAND yt-negative-cache-backend-tests)
+
+    # Persistence gate for the bounded ID-keyed state (MEM-01 follow-up):
+    # oversized/legacy/corrupt files must load straight into the caps, self-heal
+    # into bounded MRU-first writes, and the debounced save must flush on exit.
+    # Seeds files and constructs the real backend — no network, no proxy.
+    add_executable(yt-sponsor-persistence-tests
+        src/modules/youtube/tests/YouTubeSponsorPersistenceTest.cpp
+        src/modules/youtube/YouTubeBackend.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp
+        src/util/YtDlpLocator.cpp)
+    set_target_properties(yt-sponsor-persistence-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-sponsor-persistence-tests PRIVATE src)
+    target_link_libraries(yt-sponsor-persistence-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test innertube-qt)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-persistence-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-persistence COMMAND yt-sponsor-persistence-tests)
 
     # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
     # before-expiry semantics. No processes, no network.
@@ -681,6 +1041,164 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-sponsor-edl COMMAND yt-sponsor-edl-tests)
 
+    # SponsorBlock fetch gate (latency follow-up): transient failures are
+    # negative-cached for a short TTL so a dead sponsor.ajay.app costs one
+    # request per video per window, a confirmed-empty window is a permanent
+    # hit, and the suppression map is pruned. Pure clock math.
+    add_executable(yt-sponsor-ttl-tests
+        src/util/tests/YtSponsorTtlTest.cpp)
+    set_target_properties(yt-sponsor-ttl-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-sponsor-ttl-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-ttl-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-ttl COMMAND yt-sponsor-ttl-tests)
+
+    # Bounded eviction: hard LRU caps on the ID-keyed SponsorBlock and
+    # known-id state. Plateau, hot-entry survival, segment/timestamp co-eviction
+    # and clean refetch of evicted ids. Pure container math.
+    add_executable(yt-sponsor-lru-tests
+        src/util/tests/YtSponsorLruTest.cpp)
+    set_target_properties(yt-sponsor-lru-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-sponsor-lru-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-sponsor-lru-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-sponsor-lru COMMAND yt-sponsor-lru-tests)
+
+    # Innertube stream selection (overnight torture t_7ffb1fd1): pure fixture
+    # tests for the cap-enforcement, H.264 preference, itag-140 audio pick,
+    # muxed fallback, and expiry derivation. No network, no Qt event loop,
+    # no vendored library.
+    add_executable(yt-stream-select-tests
+        src/util/tests/YtStreamSelectTest.cpp)
+    set_target_properties(yt-stream-select-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-stream-select-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-stream-select-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-stream-select COMMAND yt-stream-select-tests)
+
+    # Live HLS master shaping (#128): pure fixture tests for the variant cap,
+    # audio-rendition pruning, URI absolutization and the lowest-known
+    # fallbacks. No network, no Qt event loop, no vendored library.
+    add_executable(yt-hls-select-tests
+        src/util/tests/YtHlsSelectTest.cpp)
+    set_target_properties(yt-hls-select-tests PROPERTIES AUTOMOC ON)
+    target_include_directories(yt-hls-select-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(yt-hls-select-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-hls-select-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-hls-select COMMAND yt-hls-select-tests)
+
+    # Subscription-union dedup (#128): videoId repeat + live double-post
+    # collapse, with the far-apart same-title and missing-metadata safety arms.
+    add_executable(yt-feed-dedup-tests
+        src/util/tests/YtFeedDedupTest.cpp)
+    set_target_properties(yt-feed-dedup-tests PROPERTIES AUTOMOC ON)
+    target_include_directories(yt-feed-dedup-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(yt-feed-dedup-tests PRIVATE Qt6::Core Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(yt-feed-dedup-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-feed-dedup COMMAND yt-feed-dedup-tests)
+
+    # Lab gate probe (NOT a ctest test — it needs the network and mpv).
+    # Resolves through the real YtInnertubeResolver and requires mpv to decode
+    # BOTH streams. A curl Range probe is not a playability proof: IOS URLs
+    # answer bounded ranges but 403 the open-ended range ffmpeg sends.
+    #   ./build-test/yt-resolver-probe <videoId>
+    add_executable(yt-resolver-probe
+        src/modules/youtube/tests/YtResolverProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-resolver-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-resolver-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-resolver-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+
+# ROB-07 one-terminal-result contract (YtInnertubeResolver.h): exactly one
+    # finished() per accepted resolve(), and an attempt abandoned by the timeout
+    # must never emit again nor chain a Player request. Two-sided regression:
+    # delayed-abandoned (visitorData replies AFTER the 4 s timeout), near-deadline
+    # (replies just BEFORE it), fast-healthy control (over-suppression guard).
+    # Drives the REAL resolver + vendored library against a loopback CONNECT+TLS
+    # fixture proxy — no live network, no mpv, no display. Delays are fixture-side
+    # sleeps, configurable via --visitor-delay-ms/--observe-ms on the case script
+    # or YT_CONTRACT_VISITOR_DELAY_MS/YT_CONTRACT_OBSERVE_MS. Needs python3 and
+    # the openssl CLI (ephemeral self-signed fixture cert, generated per run).
+    # On the unfixed snapshot delayed-abandoned FAILS (phantom ok=1 after the
+    # timeout); the other two cases pass. See src/modules/youtube/tests/README.md.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target yt-resolver-contract-probe
+    #   ctest --test-dir build-test -R yt-resolver-contract --output-on-failure
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(yt-resolver-contract-probe
+        src/modules/youtube/tests/YtResolverContractProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-resolver-contract-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-resolver-contract-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-resolver-contract-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+    if(NOT MSVC)
+        target_compile_options(yt-resolver-contract-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(contract_case delayed-abandoned near-deadline fast-healthy
+                         live-waiting live-hls live-hls-with-pair)
+        add_test(NAME yt-resolver-contract-${contract_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_contract_case.py
+                --case ${contract_case}
+                --probe $<TARGET_FILE:yt-resolver-contract-probe>
+                --fixture ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/fixture_proxy.py)
+        set_tests_properties(yt-resolver-contract-${contract_case} PROPERTIES
+            TIMEOUT 120
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
+    # MEM-02 visitorData size-cap regression (two-sided, loopback TLS fixture,
+    # no live network): healthy controls (small page, real 450-char token,
+    # chunk-boundary straddles) must resolve ok=1 with the EXACT token chained
+    # into the Player request; oversize pages must fail cleanly with
+    # reason=visitordata-size-cap into the backend's unconditional yt-dlp
+    # ladder, with bounded bytes-consumed/HWM accounting. On the pre-fix
+    # snapshot cap-plus-one / oversize-* / real-size-early-exit FAIL; the
+    # healthy controls pass on both sides. See src/modules/youtube/tests/README.md.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target yt-visitordata-cap-probe
+    #   ctest --test-dir build-test -R yt-visitordata-cap --output-on-failure
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(yt-visitordata-cap-probe
+        src/modules/youtube/tests/YtVdCapProbe.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-visitordata-cap-probe PROPERTIES AUTOMOC ON CXX_STANDARD 20)
+    target_link_libraries(yt-visitordata-cap-probe PRIVATE
+        Qt6::Core Qt6::Network innertube-qt)
+    target_include_directories(yt-visitordata-cap-probe PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/innertube-qt/src
+        ${CMAKE_SOURCE_DIR}/src/util)
+    if(NOT MSVC)
+        target_compile_options(yt-visitordata-cap-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(vd_cap_case
+            healthy-control realistic-token straddle-key-64k straddle-value-64k
+            straddle-value-256k exact-cap cap-plus-one oversize-no-token
+            oversize-token no-token-under-cap real-size-early-exit)
+        add_test(NAME yt-visitordata-cap-${vd_cap_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_vd_cap_case.py
+                --case ${vd_cap_case}
+                --probe $<TARGET_FILE:yt-visitordata-cap-probe>
+                --fixture ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/vd_cap_fixture_proxy.py)
+        set_tests_properties(yt-visitordata-cap-${vd_cap_case} PROPERTIES
+            TIMEOUT 120
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
     # DisplayHandoff signal contract (issue #75, PR #77): displayTaken() fires
     # exactly once per completed hand-off and only AFTER the CRTC state is
     # captured, displayReturned() once per return, and a refused hand-off stays
@@ -700,6 +1218,159 @@ if(BUILD_TESTS)
         target_compile_options(display-handoff-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
+
+    # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
+    # with stub backends and asserts a Back in each launch phase routes to
+    # sendKey (post-launch) vs goBack (pre-launch) — the launchDone flag, not the
+    # first-position playbackStarted flag, gates the quit intent.
+    add_executable(youtube-quit-intent-smoke src/tests/youtube-quit-intent-smoke-test.cpp)
+    set_target_properties(youtube-quit-intent-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(youtube-quit-intent-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Test)
+    target_compile_definitions(youtube-quit-intent-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME youtube-quit-intent-smoke COMMAND youtube-quit-intent-smoke)
+
+    # R-2 (issue #109): quit-intent hybrid against the REAL MpvController + mpv.
+    # SPEC-1 pre-connect invariant x100 (ESC/BS/STOP), SPEC-2 post-connect lua
+    # preservation, SPEC-4 loop-on bounded exit. Real AppCore (config-driven
+    # mpv_video_args/screensaver_timeout); QSKIPs when mpv/ffmpeg are absent so
+    # CI lanes without a media stack stay green.
+    add_executable(mpv-quit-intent-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvQuitIntentTest.cpp)
+    set_target_properties(mpv-quit-intent-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-quit-intent-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-quit-intent-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-quit-intent-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-quit-intent-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-quit-intent-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-quit-intent COMMAND mpv-quit-intent-tests)
+    # QTEST_MAIN constructs a QGuiApplication before any main-body code runs, so
+    # the offscreen platform must come from the environment (the QML smokes can
+    # qputenv it in main; this one cannot). Headless CI lanes have no display.
+    set_tests_properties(mpv-quit-intent PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    # #124 hold-Right ramp consistency: REAL MpvController + REAL mpv + the REAL
+    # YouTube Player.qml driven through the RAW key path (QKeyEvents posted at
+    # the window — the remote's eventFilter return-false downstream). Two-sided:
+    # MP240_HOLD_EXPECT=fixed asserts the deterministic ramp; =defective asserts
+    # the known-bad pre-fix shapes (absent/mislabeled/variable-rate autorepeat).
+    # Loads Player.qml like youtube-seek-smoke, so the arm64 distro-Qt lane
+    # excludes it the same way; QSKIPs without mpv/ffmpeg. RUN_SERIAL: the dwell
+    # bands are wall-clock and must not race parallel ctest load.
+    add_executable(mpv-hold-repeat-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvHoldRepeatTest.cpp)
+    set_target_properties(mpv-hold-repeat-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-hold-repeat-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-hold-repeat-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-hold-repeat-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-hold-repeat-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-hold-repeat-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-hold-repeat COMMAND mpv-hold-repeat-tests)
+    set_tests_properties(mpv-hold-repeat PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" RUN_SERIAL TRUE)
+
+    # R2 follow-up (issue #110): FailedToStart after a successful locate() must
+    # emit a synthetic playbackEnded("failed") instead of leaving the Player
+    # view waiting forever. Forces the spawn failure through the REAL locator
+    # (private PATH dir holding an executable-but-invalid "mpv" -> ENOEXEC).
+    # The core cases need no mpv installed, so every CI lane runs the gate for
+    # real; only the relaunch-after-failure case QSKIPs without mpv/ffmpeg.
+    add_executable(mpv-failedtostart-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvFailedToStartTest.cpp)
+    set_target_properties(mpv-failedtostart-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-failedtostart-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-failedtostart-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-failedtostart-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-failedtostart-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-failedtostart-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-failedtostart COMMAND mpv-failedtostart-tests)
+    # Same QTEST_MAIN/offscreen constraint as mpv-quit-intent above. Isolate the
+    # IPC socket into a per-build TMPDIR so parallel tests cannot race on it.
+    # Keep the path short: mpv's Unix socket is limited by sockaddr_un.sun_path
+    # (108 bytes on Linux), which a nested worktree build dir can exceed.
+    set(_failedtostart_tmp_base "$ENV{TMPDIR}")
+    if(NOT _failedtostart_tmp_base)
+        set(_failedtostart_tmp_base "/tmp")
+    endif()
+    string(MD5 _failedtostart_tmp_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${_failedtostart_tmp_hash}" 0 8 _failedtostart_tmp_hash)
+    set(_failedtostart_tmp "${_failedtostart_tmp_base}/240mp-ft-${_failedtostart_tmp_hash}")
+    file(MAKE_DIRECTORY "${_failedtostart_tmp}")
+    set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_failedtostart_tmp}")
+
+    # T2 (issue #111): real MpvController per-instance socket contract.
+    # No mpv spawning — constructs the controller and checks socketPath()/logFilePath().
+    add_executable(mpv-instance-socket-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/YtDlpLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/MpvInstanceSocketTest.cpp)
+    set_target_properties(mpv-instance-socket-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(mpv-instance-socket-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(mpv-instance-socket-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(mpv-instance-socket-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(mpv-instance-socket-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpv-instance-socket-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpv-instance-socket COMMAND mpv-instance-socket-tests)
+    set_tests_properties(mpv-instance-socket PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 endif()
 

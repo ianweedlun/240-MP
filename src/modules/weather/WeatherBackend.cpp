@@ -249,8 +249,9 @@ WeatherBackend::WeatherBackend(const QString &appRoot, const QString &dataRoot,
         fetchOtherObservations();
     });
 
-    // Its own socket name: MpvController uses /240mp-mpv.sock for the player,
-    // and two mpvs sharing one path would hand the wrong process our commands.
+    // Its own socket name: MpvController uses a per-instance
+    // /240mp-mpv-<pid>-<seq>.sock for the player (T2, issue #111), and two mpvs
+    // sharing one path would hand the wrong process our commands.
     m_musicSocketPath = QDir::tempPath() + QStringLiteral("/240mp-weather-music.sock");
 }
 

@@ -133,7 +133,7 @@ jobs:
           # binary is byte-identical to official beta, md5 included.
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           TARBALL="240-MP-pi-rc-${{ github.event.pull_request.number }}-linux-arm64-$(git rev-parse --short HEAD)"
@@ -149,7 +149,7 @@ jobs:
       # .240mp-rc-deployed-md5 checkable; the build-only lane's artifact is not.
       - name: Upload RC tarball (sha-addressed artifact)
         if: env.MODE != 'skip'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz
@@ -208,9 +208,9 @@ jobs:
             if [ -n "$APP_PID" ] && [ "$PI_MD5R" = "$LOCAL_MD5" ]; then
               BOOT=$($SSH "tail -n 6 /tmp/240mp_state.log" 2>/dev/null || true)
               if [ "$MODE" = "rc" ]; then
-                for i in $(seq 1 10); do
+                for j in $(seq 1 10); do
                   $SSH "echo $REF > \$HOME/.240mp-rc-deployed-rev && echo $PR_NUM > \$HOME/.240mp-rc-deployed-pr && echo $LOCAL_MD5 > \$HOME/.240mp-rc-deployed-md5" && break
-                  echo "marker write attempt $i failed (Pi still settling), retry"; sleep 20
+                  echo "marker write attempt $j failed (Pi still settling), retry"; sleep 20
                 done
                 {
                   echo "### Pi RC deploy — PR $PR_NUM (**un-merged code on the Pi**)"
@@ -222,9 +222,9 @@ jobs:
                   echo "CRT test the PR's behaviors now: your word on the behaviors gates your approving review; merge = official deploy over this RC."
                 } > /tmp/rc_body.md
               else
-                for i in $(seq 1 10); do
+                for j in $(seq 1 10); do
                   $SSH "echo $REF > \$HOME/.240mp-last-deployed-rev && rm -f \$HOME/.240mp-rc-deployed-rev \$HOME/.240mp-rc-deployed-pr \$HOME/.240mp-rc-deployed-md5 \$HOME/.240mp-rc-restore-rev" && break
-                  echo "restore marker write attempt $i failed (Pi still settling), retry"; sleep 20
+                  echo "restore marker write attempt $j failed (Pi still settling), retry"; sleep 20
                 done
                 {
                   echo "### Pi restored to official beta \`$REF\`"
@@ -349,7 +349,7 @@ jobs:
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           sha12=$(git rev-parse --short=12 HEAD)
@@ -360,7 +360,7 @@ jobs:
 
       - name: Upload burst tarball (sha-addressed, md5-checkable)
         if: steps.burst_decide.outputs.skip != '1'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-tarball-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz
@@ -493,7 +493,7 @@ jobs:
             libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="buildonly-pi-rc"
-          cmake --build build --parallel
+          cmake --build build --parallel 4
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
           mkdir -p install/scripts && cp scripts/240mp-ci-deploy.sh install/scripts/
           TARBALL="240-MP-pi-rc-buildonly-linux-arm64-$(git rev-parse --short HEAD)"
@@ -502,7 +502,7 @@ jobs:
           echo "ARTIFACT_SHA=$(git rev-parse --short=12 HEAD)" >> $GITHUB_ENV
 
       - name: Upload tarball (build-only artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: pi-rc-buildonly-${{ env.ARTIFACT_SHA }}
           path: ${{ env.TARBALL }}.tar.gz

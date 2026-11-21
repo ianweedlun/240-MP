@@ -21,51 +21,19 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
+      # QtQuick.Effects (AppBar's MultiEffect) needs Qt >= 6.5 and
+      # QtQml.WorkerScript (Player.qml) needs >= 6.5 too; the noble arm64
+      # runner ships Qt 6.4 with no package for either. Those QML layout
+      # smokes run on the x86 lane's Qt 6.7 SDK instead. This lane still
+      # builds every smoke binary and runs all non-QML-layout tests.
       - name: Checkout
         uses: actions/checkout@v4.2.2
-
-      - name: Install build dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            libqt6svg6 \
-            qt6-svg-dev \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-window \
-            libdrm-dev \
-            libssl-dev \
-            libsdl2-dev \
-            libpcsclite-dev \
-            libqt6sql6 \
-            libqt6sql6-sqlite \
-            ccache
-
-      - name: Configure (with tests)
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTS=ON \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAPP_VERSION="${{ github.sha }}"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Run tests
-        run: |
-          # QtQuick.Effects (AppBar's MultiEffect) needs Qt >= 6.5 and
-          # QtQml.WorkerScript (Player.qml) needs >= 6.5 too; the noble arm64
-          # runner ships Qt 6.4 with no package for either. Those QML layout
-          # smokes run on the x86 lane's Qt 6.7 SDK instead. This lane still
-          # builds every smoke binary and runs all non-QML-layout tests.
-          ctest --test-dir build --output-on-failure -j4 \
-            -E 'recent-view-smoke|plex-player-smoke|local-files-player-smoke|weather-current-smoke'
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
+        with:
+          apt-packages: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite"
+          app-version: ${{ github.sha }}
+          test-exclude-regex: 'recent-view-smoke|plex-player-smoke|local-files-player-smoke|local-files-empty-path-smoke|weather-current-smoke|youtube-player-smoke|youtube-quit-intent-smoke|youtube-seek-smoke|youtube-telemetry-smoke|mpv-hold-repeat'
 
       - name: Install to staging prefix
         run: |
@@ -89,14 +57,14 @@ jobs:
           echo "TARBALL_NAME=$TARBALL_NAME" >> "$GITHUB_ENV"
 
       - name: Upload Linux arm64 build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: 240mp-linux-arm64
           path: build/240mp
           retention-days: 5
 
       - name: Upload tarball artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: tarball-linux-arm64
           path: "${{ env.TARBALL_NAME }}.tar.gz"
@@ -112,50 +80,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.2
-
-      - name: Install Qt 6
-        uses: jurplel/install-qt-action@v4
+      - name: Build and test core
+        uses: ./.github/actions/build-and-test
         with:
-          version: '6.7.3'
-          host: linux
-          target: desktop
-          arch: linux_gcc_64
-          cache: true
-
-      - name: Install build dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            libdrm-dev \
-            libssl-dev \
-            libsdl2-dev \
-            libpcsclite-dev \
-            libgl1-mesa-dev \
-            libxkbcommon-dev \
-            libxcb-cursor0 \
-            ccache
-
-      - name: Configure (with tests)
-        run: |
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}" \
-            -DBUILD_TESTS=ON \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DAPP_VERSION="${{ github.sha }}"
-
-      - name: Build
-        run: cmake --build build --parallel
-
-      - name: Run tests
-        run: |
-          ctest --test-dir build --output-on-failure -j4
+          qt-host: linux
+          qt-version: '6.7.3'
+          qt-arch: linux_gcc_64
+          apt-packages: "build-essential cmake libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0"
+          app-version: ${{ github.sha }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: 240mp-linux-x86_64
           path: build/240mp
@@ -261,7 +196,7 @@ jobs:
 
       - name: Download arm64 tarball from this run
         if: env.SKIP_DEPLOY != '1'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.3.0
         with:
           name: tarball-linux-arm64
 

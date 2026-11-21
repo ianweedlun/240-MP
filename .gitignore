@@ -13,6 +13,12 @@ Thumbs.db
 /build-*
 /.cache
 build-*/
+# ...but not our own composite action: `.github/actions/build-and-test/` is a
+# source path, not a build output. Without these negations git ignores the
+# whole directory and every workflow referencing it ships broken CI.
+!.github/actions/
+!.github/actions/build-and-test/
+!.github/actions/build-and-test/**
 *.local.bak/
 # AppImage build outputs (scripts/build-appimage.sh, scripts/build-mpv.sh)
 /AppDir
@@ -22,6 +28,8 @@ build-*/
 
 devbuild/
 .local-build-*/
+# P-5A volume-stall harness evidence (run artifacts, any cwd)
+volume-stall-evidence/
 
 # Secrets and agent scratch state — never commit credentials or sweep live worktrees
 ######################

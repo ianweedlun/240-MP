@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QJsonArray>
 #include <QStringList>
+#include "player/SeekHoldPolicy.h"
 
 class AppCore;
 class DisplayHandoff;
@@ -25,6 +26,14 @@ public:
     int position()    const { return m_position;    }
     int duration()    const { return m_duration;    }
     int playlistPos() const { return m_playlistPos; }
+
+    // Per-instance IPC socket / mpv log paths (T2, issue #111). Published so
+    // tooling and the regression harness can discover this instance's socket
+    // without guessing a shared name. socketPath() is EMPTY when the path
+    // would exceed sockaddr_un.sun_path and IPC was disabled for this instance
+    // (see util/MpvInstancePaths.h); logFilePath() is always set.
+    QString socketPath()  const { return m_socketPath;  }
+    QString logFilePath() const { return m_logFilePath; }
 
     Q_INVOKABLE void loadAndPlay(const QString &url, float startSeconds,
                                   int audioTrack, int subTrack,
@@ -48,7 +57,21 @@ public:
     // which a process that has stopped servicing that socket never reads.
     Q_INVOKABLE void forceStop();
     Q_INVOKABLE void seekTo(int positionMs);
-    Q_INVOKABLE void sendKey(const QString &key);
+    // Forward a key to mpv. Quit-intent keys (ESC/BS/STOP) are guaranteed-delivery:
+    // post-connect they are sent as a byte-identical "keypress" (preserving the lua
+    // menu-esc/screensaver dismiss semantics); pre-connect they call forceStop()
+    // instead of being dropped, so an early Back can never orphan the spawned mpv
+    // (R-2). Directional keys are shaped by SeekHoldPolicy (taps and holds ->
+    // coalesced exact seeks); other keys pass through as keypress.
+    // LEFT/RIGHT holds are owned here (#124): the first keydown is the tap and a
+    // private timer synthesizes the repeat ticks, so the seek cadence is deterministic
+    // even when OS/EGLFS autorepeat is absent, mislabeled as fresh presses, or
+    // variable-rate (the remote's default key path). Further keydowns for a key
+    // already held are ignored; sendKeyUp ends the hold.
+    Q_INVOKABLE void sendKey(const QString &key, bool autoRepeat = false);
+    // Key-up for the direct-IPC path and QML alike: ends a held-key seek hold
+    // or flushes the coalesced accumulator (see SeekHoldPolicy).
+    Q_INVOKABLE void sendKeyUp(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system
     // mixer stays the single loudness authority (#34). There is deliberately
@@ -65,6 +88,10 @@ public:
     // (#34). Safe to call with no child running — it is dropped.
     Q_INVOKABLE void showVolumeOsd(int level, bool muted);
     Q_INVOKABLE void clearOsdPrompt();
+    // Open the OSC nav menu via the explicit lua menu-show message. Independent
+    // of key shaping (UP/DOWN are seek-shaped on the app key path), so callers
+    // and tests can surface the menu without issuing a seek. Dropped pre-connect.
+    Q_INVOKABLE void showOscMenu();
 
     // True only on devices whose smooth-playback decode path can't crop/zoom (the
     // Pi 3 DRM-overlay path). Settings uses this to show the "Smooth Playback"
@@ -91,7 +118,8 @@ signals:
     //   "stopped" — user quit/stopped before the end (also the safe default for a
     //               crash/kill with no end-file event).
     //   "failed"  — mpv exited with an error (code 2 — file could not be played;
-    //               Up to the module as to when/how to use; for example Plex retries when transcoding).
+    //               or the process failed to start at all). Up to the module as to
+    //               when/how to use; for example Plex retries when transcoding.
     // A single signal (rather than one per reason) is deliberate: a Player view
     // connects one handler and branches on `reason`, so it can never silently drop
     // a case the way an unhandled per-reason signal would.
@@ -111,6 +139,9 @@ private slots:
     void onProcessFinished();
     void tryConnectIpc();
     void onIpcReadyRead();
+    void onSeekFlush();
+    void onHoldRepeatTick();
+    void onHoldEndGrace();      // #133: fires the deferred release after a pair stream stops
 
 private:
     // Hardware video-decode profile, detected once from /proc/device-tree/model.
@@ -118,6 +149,9 @@ private:
 
     void sendCommand(const QJsonArray &args);
     void sendCommand(const QJsonArray &args, int requestId);
+    void executePolicyCommand(const SeekHoldPolicy::Command &cmd);
+    void syncSeekFlushTimer();
+    void resetSeekHold();
     VideoProfile detectVideoProfile() const;
     // Appends the profile-specific --vo/--gpu-context/--hwdec flags (honouring the
     // app-level "mpv_video_args" override) to a forming mpv argument list.
@@ -157,6 +191,21 @@ private:
     QLocalSocket *m_ipc            = nullptr;
     QTimer       *m_connectTimer   = nullptr;
     QTimer       *m_watchdogTimer  = nullptr;
+    QTimer       *m_seekFlushTimer = nullptr;
+    // Held-key repeat synthesis (#124). The remote's default directional keys
+    // ride OS/EGLFS autorepeat, which is absent on some remotes, mislabeled as
+    // fresh presses on others, and variable-rate where present — trusting
+    // event.isAutoRepeat made the seek shaping engage inconsistently. These
+    // single-shot timers (400 ms first delay, then 100 ms per tick — the
+    // InputManager synthesized cadence) are the sole repeat source while a
+    // LEFT/RIGHT key is held; m_*Held tracks the physical hold across keydowns.
+    QTimer       *m_rightHoldTimer = nullptr;
+    QTimer       *m_leftHoldTimer  = nullptr;
+    QTimer       *m_holdEndGraceTimer = nullptr;   // #133: defers a release so a press/release pair can't tear down the hold
+    bool          m_rightHeld      = false;
+    bool          m_leftHeld       = false;
+    QString       m_lastHeldKey;             // #133: which key the grace timer must release
+    SeekHoldPolicy m_seekPolicy;
     qint64        m_lastIpcEventMs = 0;
     bool          m_paused         = false;  // mirrors mpv's pause property (watchdog exemption)
     QString       m_appRoot;

@@ -1,10 +1,19 @@
 #include "YouTubeBackend.h"
-#include "../../util/YtDlpLocator.h"
+#include "YtInnertubeResolver.h"
+#include "../../util/YtStreamSelect.h"
 #include "../../util/YtUrlFresh.h"
+#include "../../util/YtNegativeCache.h"
+#include "../../util/YtSponsorLru.h"
 #include "../../util/YtAuthGate.h"
 #include "../../util/YtBrowseRows.h"
+#include "../../util/YtHlsSelect.h"
+#include "../../util/YtFeedDedup.h"
+#include "../../util/YtDlpLocator.h"
+
+// Backend for the YouTube module
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -36,6 +45,67 @@ static QString watchUrlFor(const QString &videoId) {
 YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, QObject *parent)
     : QObject(parent), m_appRoot(appRoot), m_dataRoot(dataRoot)
 {
+    m_itResolver = new YtInnertubeResolver(this);
+    // One in-process attempt per key; on failure the SAME key falls back to the
+    // yt-dlp spawn (one release of redundancy — the card keeps the subprocess
+    // path until Innertube proves itself on the Pi). The fallback start time is
+    // backdated to the original launch so its `ms` figure covers the ladder.
+    connect(m_itResolver, &YtInnertubeResolver::finished, this,
+            [this](const YtResolveResult &r) {
+        if (r.ok) {
+            clearNegativeCacheEntry(r.videoId); // a post-TTL success retires the old failure
+            if (!r.hlsManifestUrl.isEmpty()) {
+                // #128 live route: fetch + shape the HLS master; never cache a
+                // progressive pair for live content. Telemetry fires at the
+                // playlist hand-off so `ms` covers the whole live ladder.
+                m_resolveStartMs.insert(r.key,
+                                        QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
+                launchHlsResolve(r.videoId, r.resolution, r.key, r.hlsManifestUrl);
+                return;
+            }
+            emit resolveTelemetry(r.videoId, QStringLiteral("innertube"), r.elapsedMs);
+            if (r.expireEpoch > QDateTime::currentSecsSinceEpoch()) {
+                storeUrlCacheEntry(r.key, r.videoUrl, r.audioUrl, r.single,
+                                   r.expireEpoch);
+                emit playbackUrlReady(r.videoId);
+            }
+            finishUrlResolve(r.key);
+            return;
+        }
+        if (r.reason == QLatin1String("live-waiting")) {
+            // #128: the event has not started. Not a permanent failure — never
+            // negative-cache it, never pay a yt-dlp spawn; tell the viewer.
+            emit resolveTelemetry(r.videoId, QStringLiteral("live-waiting"), r.elapsedMs);
+            emit playbackResolveFailed(r.videoId, QStringLiteral("LIVE_WAITING"));
+            finishUrlResolve(r.key);
+            return;
+        }
+        qWarning("[Youtube] innertube-fail vid=%s reason=%s ms=%lld",
+                 qPrintable(r.videoId), qPrintable(r.reason),
+                 static_cast<long long>(r.elapsedMs));
+        emit resolveTelemetry(r.videoId,
+                              QStringLiteral("innertube-fail:") + r.reason, r.elapsedMs);
+        const QString failureClass = storeNegativeCacheEntry(r.videoId, r.reason);
+        if (!failureClass.isEmpty()) {
+            // The response itself proved this video cannot resolve. Do not pay
+            // a yt-dlp spawn now or on any warm/focus/press path for 24 h.
+            emit playbackResolveFailed(r.videoId, failureClass);
+            finishUrlResolve(r.key);
+            return;
+        }
+        m_resolveStartMs.insert(r.key,
+                                QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
+        launchYtdlpResolve(r.videoId, r.resolution, r.key);
+    });
+}
+
+YouTubeBackend::~YouTubeBackend()
+{
+    // Flush a debounced save before the members die: app exit must not lose a
+    // confirmed window that landed inside the debounce interval. The timer is
+    // a child QObject and cannot fire during destruction (no event loop here).
+    if (m_sponsorSaveDirty)
+        saveSponsorCache();
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +417,9 @@ QVariantList YouTubeBackend::buildFeed() const {
         return a.toMap().value("publishedMs").toLongLong()
              > b.toMap().value("publishedMs").toLongLong();
     });
-    return all.mid(0, kMaxFeedItems);
+    // #128: collapse live double-posts and cross-channel videoId repeats
+    // before truncation so duplicates cannot eat the 100-row budget.
+    return ytfeed::dedupFeed(all).mid(0, kMaxFeedItems);
 }
 
 QVariantList YouTubeBackend::buildChannelList() const {
@@ -833,6 +905,65 @@ void YouTubeBackend::ensureUrlCacheLoaded()
                         kUrlCacheMaxEntries);
 }
 
+QString YouTubeBackend::negativeCacheFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_resolve_failures.json");
+}
+
+void YouTubeBackend::ensureNegativeCacheLoaded()
+{
+    if (m_negativeCacheLoaded)
+        return;
+    m_negativeCacheLoaded = true;
+    m_negativeCache = ytneg::readNegativeCache(
+        negativeCacheFilePath(), QDateTime::currentSecsSinceEpoch());
+}
+
+void YouTubeBackend::saveNegativeCache()
+{
+    ytneg::pruneNegativeCache(m_negativeCache, QDateTime::currentSecsSinceEpoch());
+    if (!ytneg::writeNegativeCache(negativeCacheFilePath(), m_negativeCache))
+        qWarning("[Youtube] could not persist negative resolve cache");
+}
+
+QString YouTubeBackend::storeNegativeCacheEntry(const QString &videoId, const QString &reason)
+{
+    ensureNegativeCacheLoaded();
+    const QString failureClass = ytneg::recordFailure(
+        m_negativeCache, videoId, reason, QDateTime::currentSecsSinceEpoch());
+    if (!failureClass.isEmpty())
+        saveNegativeCache();
+    return failureClass;
+}
+
+void YouTubeBackend::clearNegativeCacheEntry(const QString &videoId)
+{
+    ensureNegativeCacheLoaded();
+    if (!m_negativeCache.contains(videoId))
+        return;
+    m_negativeCache.remove(videoId);
+    saveNegativeCache();
+}
+
+bool YouTubeBackend::negativeCacheBlocks(const QString &videoId)
+{
+    ensureNegativeCacheLoaded();
+    const QString failureClass = ytneg::freshFailureClass(
+        m_negativeCache, videoId, QDateTime::currentSecsSinceEpoch());
+    if (failureClass.isEmpty())
+        return false;
+
+    emit resolveTelemetry(videoId, QStringLiteral("negative-cache"), 0);
+    // resolvePlayback() runs synchronously inside Player.preparePlayback(),
+    // before playAt() sets waitingForResolve. Deliver cached failures on the
+    // next event-loop turn so the Player cannot miss the signal and fall into
+    // its timed mpv/ytdl_hook fallback.
+    QTimer::singleShot(0, this, [this, videoId, failureClass]() {
+        emit playbackResolveFailed(videoId, failureClass);
+    });
+    return true;
+}
+
 QString YouTubeBackend::sponsorCacheFilePath() const
 {
     return m_dataRoot + QStringLiteral("/youtube_sponsor.json");
@@ -848,14 +979,62 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &parseError);
         if (doc.isArray()) {
+            // Anything dropped here (invalid row, duplicate, orphan, prune)
+            // means the legacy file no longer matches memory -> self-heal it
+            // into the bounded MRU-first form with one synchronous rewrite.
+            bool legacyDirty = false;
             for (const QJsonValue &e : doc.array()) {
                 const QJsonObject o = e.toObject();
                 const QString vid = o.value(QStringLiteral("videoId")).toString();
-                if (vid.isEmpty())
+                if (vid.isEmpty()) {
+                    legacyDirty = true;
                     continue;
-                m_sponsorCache.insert(vid, yt::segmentsFromRows(
-                    o.value(QStringLiteral("segments")).toArray()));
+                }
+                // Atomic entry: a row without a segments array gets NO cache
+                // entry and NO stamp, so a stamp-only legacy row can never
+                // orphan a timestamp. An EMPTY array is valid (confirmed "no
+                // segments"); every real legacy format wrote the array.
+                const QJsonValue rows = o.value(QStringLiteral("segments"));
+                if (!rows.isArray()) {
+                    legacyDirty = true;
+                    continue;
+                }
+                // Duplicates keep the FIRST occurrence whole (payload, stamp
+                // and position), so the legacy prune stays deterministic.
+                if (m_sponsorCache.contains(vid)) {
+                    legacyDirty = true;
+                    continue;
+                }
+                m_sponsorCache.insert(vid, yt::segmentsFromRows(rows.toArray()));
+                // Keep the ORIGINAL stamp (0 = pre-stamp legacy entry) through
+                // the prune; re-stamping happens only AFTER ordering, below.
+                m_sponsorFetchedAt.insert(vid, static_cast<qint64>(
+                    o.value(QStringLiteral("fetchedAt")).toDouble(0)));
+                // Rebuild the recency index in file order (writes are
+                // MRU-first); legacy files have no hit-recency signal.
+                ytlru::appendIfAbsent(m_sponsorLru, vid);
             }
+            if (ytlru::dropOrphanStamps(m_sponsorCache, m_sponsorFetchedAt) > 0)
+                legacyDirty = true;
+            // Oversized legacy file -> deterministic prune to the cap (newest
+            // stamps win). A bounded file is untouched, stale residents keep
+            // serving playback until their refetch lands.
+            if (ytlru::pruneSponsorOnLoad(m_sponsorLru, m_sponsorCache,
+                                          m_sponsorFetchedAt,
+                                          QDateTime::currentMSecsSinceEpoch(),
+                                          kSponsorCacheMaxEntries) > 0)
+                legacyDirty = true;
+            // Entries written before the stamp existed are stamped NOW, so
+            // an upgraded cache ages out gradually rather than refetching
+            // every video on first boot. AFTER the prune, never before: a
+            // re-stamp to now must not bias which legacy entries survive.
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            for (auto it = m_sponsorFetchedAt.begin(); it != m_sponsorFetchedAt.end(); ++it) {
+                if (it.value() <= 0)
+                    it.value() = now;
+            }
+            if (legacyDirty)
+                saveSponsorCache();
         }
     }
 }
@@ -863,9 +1042,11 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
 void YouTubeBackend::saveSponsorCache()
 {
     QJsonArray arr;
-    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it) {
+    // Recency order (MRU first): the file order is the reload recency signal,
+    // and the index is capped, so the rewrite stays bounded.
+    for (const QString &vid : m_sponsorLru) {
         QJsonArray rows;
-        for (const yt::Segment &s : it.value()) {
+        for (const yt::Segment &s : m_sponsorCache.value(vid)) {
             QJsonObject o;
             QJsonArray range;
             range.append(s.start);
@@ -873,11 +1054,15 @@ void YouTubeBackend::saveSponsorCache()
             o.insert(QStringLiteral("category"), s.category);
             o.insert(QStringLiteral("segmentType"), s.action);
             o.insert(QStringLiteral("segment"), range);
+            o.insert(QStringLiteral("votes"), s.votes);
+            o.insert(QStringLiteral("locked"), s.locked ? 1 : 0);
+            o.insert(QStringLiteral("videoDuration"), s.videoDuration);
             rows.append(o);
         }
         QJsonObject e;
-        e.insert(QStringLiteral("videoId"), it.key());
+        e.insert(QStringLiteral("videoId"), vid);
         e.insert(QStringLiteral("segments"), rows);
+        e.insert(QStringLiteral("fetchedAt"), double(m_sponsorFetchedAt.value(vid)));
         arr.append(e);
     }
     QFile f(sponsorCacheFilePath());
@@ -885,21 +1070,212 @@ void YouTubeBackend::saveSponsorCache()
         f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
 }
 
+void YouTubeBackend::markSponsorCacheDirty()
+{
+    m_sponsorSaveDirty = true;
+    if (!m_sponsorSaveTimer) {
+        m_sponsorSaveTimer = new QTimer(this);
+        m_sponsorSaveTimer->setSingleShot(true);
+        m_sponsorSaveTimer->setInterval(kSponsorSaveDebounceMs);
+        connect(m_sponsorSaveTimer, &QTimer::timeout, this, [this]() {
+            if (m_sponsorSaveDirty) {
+                m_sponsorSaveDirty = false;
+                saveSponsorCache();
+            }
+        });
+    }
+    // Restart on every answer: while answers keep landing inside the interval
+    // (idle-fill burst) the write keeps sliding to the end of the burst, so
+    // 400 paced confirmations cost ONE bounded rewrite, not 400.
+    m_sponsorSaveTimer->start();
+}
+
+// ---------------------------------------------------------------------------
+// Idle SponsorBlock fill
+// ---------------------------------------------------------------------------
+
+QString YouTubeBackend::knownIdsFilePath() const
+{
+    return m_dataRoot + QStringLiteral("/youtube_known_ids.json");
+}
+
+void YouTubeBackend::ensureKnownIdsLoaded()
+{
+    if (m_knownIdsLoaded)
+        return;
+    m_knownIdsLoaded = true;
+    bool legacyDirty = false;
+    QFile f(knownIdsFilePath());
+    if (f.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+        for (const QJsonValue &v : doc.array()) {
+            const QString id = v.toString();
+            if (id.isEmpty()) {
+                legacyDirty = true;
+                continue;
+            }
+            // Duplicates keep the first occurrence (file order is the only
+            // recency signal a legacy string array has).
+            if (m_knownVideoIds.contains(id)) {
+                legacyDirty = true;
+                continue;
+            }
+            m_knownVideoIds.insert(id);
+            ytlru::appendIfAbsent(m_knownLru, id);
+        }
+    }
+    // Oversized legacy file: keep the FIRST cap ids in file order BEFORE the
+    // history merge. Dropped ids are re-surfaced on the next browse — a clean
+    // miss, never a corruption.
+    if (!ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds,
+                                kKnownVideoIdMaxEntries).isEmpty())
+        legacyDirty = true;
+    // Watch history is a second source: rewatches are the most likely plays.
+    QFile h(m_dataRoot + QStringLiteral("/youtube_history.json"));
+    if (h.open(QIODevice::ReadOnly)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(h.readAll());
+        const QJsonObject o = doc.object();
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+            if (!it.key().isEmpty()) {
+                m_knownVideoIds.insert(it.key());
+                ytlru::appendIfAbsent(m_knownLru, it.key());
+            }
+        }
+    }
+    // Final trim: the merge can push even a bounded file over cap. The tail
+    // goes first — those are the just-appended history keys, so every id the
+    // file itself carried keeps its front position. No load path may leave
+    // the pool above cap, even before the first mutation.
+    ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds, kKnownVideoIdMaxEntries);
+    // Self-heal an oversized/dirty legacy file once. A clean bounded file is
+    // not rewritten: its ids all survive the merge trim, so memory == file.
+    if (legacyDirty)
+        saveKnownIds();
+}
+
+void YouTubeBackend::saveKnownIds()
+{
+    QJsonArray arr;
+    // Recency order (MRU first), bounded by the index cap.
+    for (const QString &id : m_knownLru)
+        arr.append(id);
+    QFile f(knownIdsFilePath());
+    if (f.open(QIODevice::WriteOnly))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+void YouTubeBackend::noteKnownVideoIds(const QStringList &videoIds)
+{
+    ensureKnownIdsLoaded();
+    bool changed = false;
+    for (const QString &id : videoIds) {
+        if (id.isEmpty())
+            continue;
+        if (m_knownVideoIds.contains(id)) {
+            // Re-surfacing is a hit: refresh recency so hot ids survive
+            // eviction pressure, and persist the new order.
+            ytlru::touch(m_knownLru, id);
+            changed = true;
+            continue;
+        }
+        m_knownVideoIds.insert(id);
+        ytlru::touch(m_knownLru, id);
+        changed = true;
+    }
+    ytlru::evictKnownToCap(m_knownLru, m_knownVideoIds, kKnownVideoIdMaxEntries);
+    if (changed)
+        saveKnownIds();
+}
+
+QStringList YouTubeBackend::idleCandidates(const QStringList &candidates,
+                                           qint64 nowMs) const
+{
+    QSet<QString> cached;
+    for (auto it = m_sponsorCache.cbegin(); it != m_sponsorCache.cend(); ++it)
+        cached.insert(it.key());
+    return ytsb::idleSelect(candidates, m_sponsorFetchedAt, cached,
+                            m_sponsorFetching, m_sponsorFailedAt,
+                            nowMs, kIdleFillMax);
+}
+
+void YouTubeBackend::setIdleFillActive(bool idle)
+{
+    if (!idle) {
+        m_idleFilling = false;
+        m_idleQueue.clear();
+        if (m_idleTimer)
+            m_idleTimer->stop();
+        return;
+    }
+    if (m_idleFilling)
+        return;
+    ensureSponsorCacheLoaded();
+    ensureKnownIdsLoaded();
+    // MRU-first known pool: idle fill confirms the hottest ids first.
+    m_idleQueue = idleCandidates(m_knownLru,
+                                 QDateTime::currentMSecsSinceEpoch());
+    if (m_idleQueue.isEmpty())
+        return;
+    m_idleFilling = true;
+    if (!m_idleTimer) {
+        m_idleTimer = new QTimer(this);
+        m_idleTimer->setInterval(kIdleFillPaceMs);
+        connect(m_idleTimer, &QTimer::timeout, this, &YouTubeBackend::pumpIdleFill);
+    }
+    m_idleTimer->start();
+    qWarning("[Youtube] idle-fill start queued=%d", int(m_idleQueue.size()));
+}
+
+void YouTubeBackend::pumpIdleFill()
+{
+    if (!m_idleFilling || m_idleQueue.isEmpty()) {
+        setIdleFillActive(false);
+        return;
+    }
+    // Yield to the foreground. A live warm queue or an in-flight resolve owns
+    // the connection pool; competing with it is what made foreground sponsor
+    // fetches ~2x slower than a bare request. Re-check on the next tick.
+    if (!m_warmQueue.isEmpty() || (m_itResolver && m_itResolver->inFlight()))
+        return;
+    const QString id = m_idleQueue.takeFirst();
+    requestSponsorSegments(id);
+}
+
 // k-anonymous window fetch (Red doctrine): only the first 4 hex chars of the
 // SHA-256 of the videoId leave the device; the response is filtered client-side
 // to the exact videoId. 4xx (prefix unknown = no segments) caches an empty
-// entry; network failures do not, so the next play retries.
+// entry permanently; a transient failure is negative-cached for a short TTL so
+// a dead sponsor.ajay.app costs one request per video per window, not one per
+// play. Playback never waits on any of this — the Player freezes its EDL at the
+// launch instant and late segments apply on the next play.
 void YouTubeBackend::requestSponsorSegments(const QString &videoId)
 {
     if (videoId.isEmpty())
         return;
     ensureSponsorCacheLoaded();
-    if (m_sponsorCache.contains(videoId)) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    ytsb::pruneFailures(m_sponsorFailedAt, now);
+    const bool failureBlocks = ytsb::failureActive(m_sponsorFailedAt.value(videoId), now);
+    // A stale window is refetched, but the old segments stay in the cache and
+    // keep serving playback until the new answer lands — a refresh never
+    // removes skipping from a video that already had it.
+    const bool fresh = m_sponsorCache.contains(videoId)
+                       && !ytsb::successStale(m_sponsorFetchedAt.value(videoId), now);
+    switch (ytsb::decideFetch(fresh,
+                              m_sponsorFetching.contains(videoId),
+                              failureBlocks)) {
+    case ytsb::FetchDecision::ServeCache:
+        // A hit refreshes recency: the video is in active use, so it must
+        // outlive cold entries under eviction pressure.
+        ytlru::touch(m_sponsorLru, videoId);
         emit sponsorReady(videoId);
         return;
-    }
-    if (m_sponsorFetching.contains(videoId))
+    case ytsb::FetchDecision::AlreadyFetching:
+    case ytsb::FetchDecision::Suppressed:
         return;
+    case ytsb::FetchDecision::Fetch:
+        break;
+    }
     m_sponsorFetching.insert(videoId);
 
     const QByteArray digest =
@@ -923,6 +1299,12 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
         if (err != QNetworkReply::NoError && !clientErr) {
             qWarning("[Youtube] sponsor transient err=%d vid=%s", int(err), qPrintable(videoId));
             m_sponsorFetching.remove(videoId);
+            // Negative-cache the failure: retries inside the TTL are suppressed
+            // so a dead domain cannot turn every cold play into a fetch.
+            m_sponsorFailedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+            // Defense-in-depth beside the TTL prune: a burst of distinct
+            // failures inside one window cannot grow the map unbounded.
+            ytlru::capFailures(m_sponsorFailedAt, kSponsorFailedAtMaxEntries);
             reply->deleteLater();
             return;
         }
@@ -932,15 +1314,35 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
             doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
                           : QVector<yt::Segment>{};
         m_sponsorCache.insert(videoId, segs);
-        saveSponsorCache();
+        m_sponsorFetchedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+        // Single insert chokepoint: refresh recency, then co-evict the LRU
+        // tail from BOTH maps so no timestamp ever orphans.
+        ytlru::touch(m_sponsorLru, videoId);
+        ytlru::evictSponsorToCap(m_sponsorLru, m_sponsorCache, m_sponsorFetchedAt,
+                                 kSponsorCacheMaxEntries);
+        m_sponsorFailedAt.remove(videoId); // a real answer clears any stale stamp
+        markSponsorCacheDirty();
         m_sponsorFetching.remove(videoId);
         const qint64 start = m_sponsorStartMs.take(videoId);
         qWarning("[Youtube] sponsor done vid=%s segs=%d ms=%lld",
-               qPrintable(videoId), segs.size(),
+               qPrintable(videoId), static_cast<int>(segs.size()),
                static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - start));
         emit sponsorReady(videoId);
         reply->deleteLater();
     });
+}
+
+bool YouTubeBackend::hasSponsorSegments(const QString &videoId)
+{
+    if (videoId.isEmpty())
+        return false;
+    ensureSponsorCacheLoaded();
+    return m_sponsorCache.contains(videoId);
+}
+
+bool YouTubeBackend::sponsorFetchInFlight(const QString &videoId) const
+{
+    return m_sponsorFetching.contains(videoId);
 }
 
 // Per-category Off/Mark/Skip: "skip" ranges are cut out of the virtual timeline
@@ -1082,6 +1484,11 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
     const QString fmt = ytdlFormatForResolution(resolution);
     if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
         return; // nothing stored for this pair: the cold path is already in effect
+    // A cached URL that failed to PLAY must not be re-minted by the same
+    // resolver. invalidateCachedUrl is only called on a playback failure, so
+    // mark the key's in-process attempt spent: the retry goes to yt-dlp instead
+    // of looping resolve -> 403 -> evict -> resolve on the same client.
+    m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
     QFile f(urlCacheFilePath());
     if (!f.open(QIODevice::WriteOnly))
         return;
@@ -1133,23 +1540,104 @@ QString YouTubeBackend::warmToken(const QString &videoId,
 }
 
 void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &resolution,
-                                     const QString &fmt, const QString &key)
+                                         const QString &key)
 {
-    Q_UNUSED(resolution); // ytdlp's -f fmt carries the quality selection; param kept for the QML call-site's arity
+    if (negativeCacheBlocks(videoId)) {
+        finishUrlResolve(key);
+        return;
+    }
+    // One Innertube attempt per key: a spent key belongs to the fallback, so a
+    // failed resolve never retries in-process and never runs two resolvers.
+    if (m_itTried.contains(key)) {
+        launchYtdlpResolve(videoId, resolution, key);
+        return;
+    }
+    m_itTried.insert(key);
+    if (!m_itResolver->resolve(videoId, resolution, key)) {
+        // Resolver busy with another key: this key never got a completion
+        // signal, so hand it straight to the fallback rather than stalling.
+        m_itTried.remove(key);
+        launchYtdlpResolve(videoId, resolution, key);
+    }
+}
+
+// #128 live route: one bounded GET of the HLS master, shaped to the resolution
+// cap, written to a per-video playlist file mpv demuxes as a single stream
+// (ffmpeg keeps A/V sync inside one HLS presentation — two independent live
+// playlists would drift). The cache entry is the FILE PATH with a 60 s TTL:
+// live segments roll, so a warm hit inside the minute reuses the just-written
+// file and anything older re-resolves a fresh master.
+static constexpr qint64 kLivePlaylistTtlS = 60;
+static constexpr qint64 kMaxHlsMasterBytes = 1024 * 1024;
+
+void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &resolution,
+                                      const QString &key, const QString &hlsUrl)
+{
+    QNetworkRequest req{QUrl(hlsUrl)};
+    QNetworkReply *reply = m_nam.get(req);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, key, videoId, resolution, hlsUrl]() {
+        reply->deleteLater();
+        const QByteArray body = reply->read(kMaxHlsMasterBytes);
+        const qint64 startedMs = m_resolveStartMs.take(key);
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startedMs;
+
+        QString playlistPath;
+        if (reply->error() == QNetworkReply::NoError && !body.isEmpty()) {
+            const QString shaped = ythls::filterMaster(
+                QString::fromUtf8(body), QUrl(hlsUrl),
+                ytstream::maxHeightForResolution(resolution));
+            if (!shaped.isEmpty()) {
+                const QString path = QDir::tempPath() + QStringLiteral("/240mp-yt-hls-")
+                                     + videoId + QStringLiteral(".m3u8");
+                QFile f(path);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    f.write(shaped.toUtf8());
+                    f.close();
+                    playlistPath = path;
+                }
+            }
+        }
+
+        if (playlistPath.isEmpty()) {
+            // One release of redundancy, same ladder as the progressive path:
+            // yt-dlp resolves live HLS too. Backdate so ms covers the ladder.
+            qWarning("[Youtube] live-hls-fail vid=%s ms=%lld err=%d",
+                     qPrintable(videoId), static_cast<long long>(ms),
+                     static_cast<int>(reply->error()));
+            emit resolveTelemetry(videoId, QStringLiteral("live-hls-fail"), ms);
+            m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch() - ms);
+            launchYtdlpResolve(videoId, resolution, key);
+            return;
+        }
+
+        storeUrlCacheEntry(key, playlistPath, QString(), true,
+                           QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS);
+        qWarning("[Youtube] resolve done (live-hls) vid=%s ms=%lld",
+                 qPrintable(videoId), static_cast<long long>(ms));
+        emit resolveTelemetry(videoId, QStringLiteral("live-hls"), ms);
+        emit playbackUrlReady(videoId);
+        finishUrlResolve(key);
+    });
+}
+
+void YouTubeBackend::launchYtdlpResolve(const QString &videoId, const QString &resolution,
+                                        const QString &key)
+{
+    m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
+    const QString fmt = ytdlFormatForResolution(resolution);
     const QString bin = ytdlp::locate(m_dataRoot);
     if (bin.isEmpty()) {
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch()
+                          - m_resolveStartMs.remove(key);
         qWarning("[Youtube] resolve fail vid=%s err=no-ytdlp", qPrintable(videoId));
-        m_resolveKeys.remove(key);
-        if (m_warmChainKey == key) {
-            m_warmChainKey.clear();
-            pumpWarmQueue();
-        }
+        emit resolveTelemetry(videoId, QStringLiteral("ytdlp-fail:no-ytdlp"), ms);
+        finishUrlResolve(key);
         return;
     }
 
     auto *proc = new QProcess(this);
-    m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
-    qWarning("[Youtube] resolve start vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
+    qWarning("[Youtube] resolve start (ytdlp) vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
     QStringList args{
         QStringLiteral("-g"),
         QStringLiteral("--no-playlist"),
@@ -1158,16 +1646,9 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
         QStringLiteral("--"),
         watchUrlFor(videoId),
     };
-    // Same cookies.txt feeds the playback path natively (locked decision):
-    // googlevideo 403 on cold caches disappears even while OAuth is fine.
     if (QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt")))
         args << QStringLiteral("--cookies") << (m_dataRoot + QStringLiteral("/cookies.txt"));
     connect(proc, &QProcess::finished, this, [this, proc, key, videoId]() {
-        // yt-dlp -g prints one URL per selected format: the usual
-        // bestvideo+bestaudio split prints video on line 1 and audio on line 2;
-        // a combined best[...] fallback prints just one. Both lines carry their
-        // own expire= epoch; the entry lives under the EARLIER one, since a
-        // dead audio URL kills playback exactly as dead video does.
         const QList<QByteArray> lines = proc->readAllStandardOutput().split('\n');
         QStringList urls;
         for (const QByteArray &line : lines) {
@@ -1175,36 +1656,61 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
             if (!u.isEmpty())
                 urls << u;
         }
+        // #128: a not-yet-started live event is not a permanent failure and
+        // not an empty resolve — yt-dlp says so explicitly. Surface the wait
+        // instead of the generic "unavailable" text; never negative-cache it.
+        const QString stderrText = QString::fromUtf8(proc->readAllStandardError());
+        if (urls.isEmpty()
+            && stderrText.contains(QLatin1String("will begin in a few moments"))) {
+            const qint64 waitStartedMs = m_resolveStartMs.take(key);
+            const qint64 waitMs = QDateTime::currentMSecsSinceEpoch() - waitStartedMs;
+            emit resolveTelemetry(videoId, QStringLiteral("live-waiting"), waitMs);
+            emit playbackResolveFailed(videoId, QStringLiteral("LIVE_WAITING"));
+            finishUrlResolve(key);
+            proc->deleteLater();
+            return;
+        }
         bool stored = false;
         if (!urls.isEmpty()) {
             const QString videoUrl = urls.value(0);
-            const QString audioUrl = urls.value(1); // empty for combined formats
-            qint64 expire = yturl::expireEpochFromUrl(videoUrl);
-            if (!audioUrl.isEmpty()) {
+            const QString audioUrl = urls.value(1);
+            // #128: live HLS URLs carry no expire param; give them the same
+            // short TTL as the shaped-master path so the fallback plays
+            // instead of dying at the expiry gate.
+            const bool isHls = videoUrl.contains(QLatin1String(".m3u8"))
+                || videoUrl.contains(QLatin1String("hls_playlist"));
+            qint64 expire = isHls
+                ? QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS
+                : yturl::expireEpochFromUrl(videoUrl);
+            if (!audioUrl.isEmpty() && !isHls) {
                 const qint64 audioExpire = yturl::expireEpochFromUrl(audioUrl);
                 if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
                     expire = audioExpire;
             }
-            if (expire > QDateTime::currentMSecsSinceEpoch() / 1000) {
+            if (expire > QDateTime::currentSecsSinceEpoch()) {
                 storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
                 emit playbackUrlReady(videoId);
                 stored = true;
             }
         }
         const qint64 startedMs = m_resolveStartMs.take(key);
-        qWarning("[Youtube] resolve done vid=%s ms=%lld urls=%d stored=%d",
-               qPrintable(videoId),
-               static_cast<long long>(QDateTime::currentMSecsSinceEpoch() - startedMs),
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startedMs;
+        qWarning("[Youtube] resolve done (ytdlp) vid=%s ms=%lld urls=%d stored=%d",
+               qPrintable(videoId), static_cast<long long>(ms),
                urls.size(), stored ? 1 : 0);
+        emit resolveTelemetry(videoId,
+                              stored ? QStringLiteral("ytdlp") : QStringLiteral("ytdlp-empty"),
+                              ms);
         finishUrlResolve(key);
         proc->deleteLater();
     });
     connect(proc, &QProcess::errorOccurred, this,
-            [this, proc, key](QProcess::ProcessError processError) {
+            [this, proc, key, videoId](QProcess::ProcessError processError) {
                 if (processError == QProcess::FailedToStart) {
-                    // launch failure: no finished signal, so unwind bookkeeping here
+                    const qint64 ms = QDateTime::currentMSecsSinceEpoch()
+                                      - m_resolveStartMs.remove(key);
                     qWarning("[Youtube] resolve fail err=failed-to-start");
-                    m_resolveStartMs.remove(key);
+                    emit resolveTelemetry(videoId, QStringLiteral("ytdlp-fail:start"), ms);
                     finishUrlResolve(key);
                     proc->deleteLater();
                 }
@@ -1215,10 +1721,11 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 
 void YouTubeBackend::finishUrlResolve(const QString &key)
 {
+    m_itTried.remove(key);
     m_resolveKeys.remove(key);
     if (m_warmChainKey == key) {
         m_warmChainKey.clear();
-        pumpWarmQueue(); // this warm entry just owned the chain — continue it
+        pumpWarmQueue();
     }
 }
 
@@ -1229,6 +1736,8 @@ void YouTubeBackend::pumpWarmQueue()
         const int sep = token.indexOf(QChar(0x1F));
         const QString videoId    = token.left(sep);
         const QString resolution = token.mid(sep + 1);
+        if (negativeCacheBlocks(videoId))
+            continue;
         const QString fmt = ytdlFormatForResolution(resolution);
         const QString key = yturl::cacheKeyFor(videoId, fmt);
         if (hasFreshUrlPair(key) || m_resolveKeys.contains(key))
@@ -1236,24 +1745,27 @@ void YouTubeBackend::pumpWarmQueue()
         m_warmChainKey = key;
         m_resolveKeys.insert(key);
         qWarning("[Youtube] warm take vid=%s", qPrintable(videoId));
-        launchUrlResolve(videoId, resolution, fmt, key);
+        launchUrlResolve(videoId, resolution, key);
         return;
     }
 }
 
 void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString &resolution)
 {
-    // One speculative resolve pass over the front of a freshly presented list.
-    // A single chained yt-dlp process at a time (kWarmQueueMax bounds the
-    // backlog; kWarmListMax the front per call): browsing a list is slower
-    // than a resolve, so by the time a row is chosen its URL pair is very
-    // likely cached and Player takes its direct path.
+    // One speculative resolve pass over a freshly presented list. A single
+    // chained resolve at a time (kWarmQueueMax bounds the backlog;
+    // kWarmListMax the entries per call): browsing a list is slower than an
+    // in-process resolve, so by the time a row is chosen its URL pair is very
+    // likely cached and Player takes its direct path. The cap covers a whole
+    // list page now, not just the front dozen rows.
     ensureUrlCacheLoaded();
     const QString fmt = ytdlFormatForResolution(resolution);
     int queued = 0;
     for (const QString &videoId : videoIds) {
         if (videoId.isEmpty() || queued >= kWarmListMax || m_warmQueue.size() >= kWarmQueueMax)
             break;
+        if (negativeCacheBlocks(videoId))
+            continue;
         const QString key = yturl::cacheKeyFor(videoId, fmt);
         if (hasFreshUrlPair(key) || m_resolveKeys.contains(key))
             continue;
@@ -1265,10 +1777,21 @@ void YouTubeBackend::warmListPlayback(const QStringList &videoIds, const QString
     }
     if (queued > 0)
         qWarning("[Youtube] warm queued=%d queue-size=%d", queued, m_warmQueue.size());
-    // Pre-fetch segment windows for the whole list page so the first pick
-    // already has them when the Player launches (~300 ms single GET each).
-    for (const QString &id : videoIds)
+    // Pre-fetch segment windows for the WHOLE list page, not just the warmed
+    // front: the first pick then usually finds its window already on file and
+    // the launch carries the EDL with no added wait. Bounded so a pathological
+    // list cannot fan out without limit — the view's focused-row prefetch
+    // covers anything past the cap as the user scrolls.
+    int sponsorQueued = 0;
+    noteKnownVideoIds(videoIds);
+    for (const QString &id : videoIds) {
+        if (sponsorQueued >= kWarmSponsorPrefetchMax)
+            break;
+        if (id.isEmpty() || m_sponsorCache.contains(id) || m_sponsorFetching.contains(id))
+            continue;
+        ++sponsorQueued;
         requestSponsorSegments(id);
+    }
     if (m_warmChainKey.isEmpty())
         pumpWarmQueue();
 }
@@ -1278,12 +1801,19 @@ void YouTubeBackend::resolvePlayback(const QString &videoId, const QString &reso
     if (videoId.isEmpty())
         return;
     ensureUrlCacheLoaded();
+    if (negativeCacheBlocks(videoId))
+        return;
     const QString fmt = ytdlFormatForResolution(resolution);
     const QString key = yturl::cacheKeyFor(videoId, fmt);
-    if (hasFreshUrlPair(key) || m_resolveKeys.contains(key))
-        return; // fresh window already on file, or a resolve is already in flight
+    if (hasFreshUrlPair(key)) {
+        emit resolveTelemetry(videoId, QStringLiteral("cache"), 0);
+        return; // fresh window already on file
+    }
+    if (m_resolveKeys.contains(key)
+        || m_warmQueue.contains(warmToken(videoId, resolution)))
+        return; // a resolve is already in flight, or queued behind the warm chain
     m_resolveKeys.insert(key);
-    launchUrlResolve(videoId, resolution, fmt, key);
+    launchUrlResolve(videoId, resolution, key);
 }
 
 void YouTubeBackend::warmResumePlayback(const QString &resolution)

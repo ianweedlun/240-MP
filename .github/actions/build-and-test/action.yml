@@ -1,0 +1,166 @@
+name: "Build and Test Core"
+description: "Checkout, Qt setup, optional SDL2 source build, CMake configure, build, and ctest. The shared core of every build lane; per-lane divergence (apt package set, Qt install path, post-build packaging) is declared as inputs. Lanes needing a non-default checkout ref or a runtime-computed APP_VERSION stay standalone (pi-rc.yml)."
+
+inputs:
+  qt-host:
+    description: "Qt host OS passed to install-qt-action; empty to skip (arm64 installs Qt via apt)"
+    required: false
+    default: ""
+  qt-version:
+    description: "Qt version"
+    required: false
+    default: "6.7.3"
+  qt-arch:
+    description: "Qt architecture"
+    required: false
+    default: "linux_gcc_64"
+  qt-modules:
+    description: "Extra Qt modules"
+    required: false
+    default: ""
+  apt-packages:
+    description: "Single-line apt package list; empty to skips the apt step (macOS). ccache is appended by the ccache input."
+    required: false
+    default: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite"
+  build-sdl2-source:
+    description: "Whether to build SDL2 from source (macOS lanes; Homebrew's sdl2 is now the sdl2-compat/SDL3 shim)"
+    required: false
+    default: "false"
+  sdl2-osx-arch:
+    description: "CMAKE_OSX_ARCHITECTURES for the SDL2 build; empty for the runner's native arch"
+    required: false
+    default: ""
+  run-tests:
+    description: "Configure with -DBUILD_TESTS=ON and run ctest"
+    required: false
+    default: "true"
+  ccache:
+    description: "Wrap the build with ccache (installs it via apt when on)"
+    required: false
+    default: "true"
+  test-exclude-regex:
+    description: "CTest exclude regex"
+    required: false
+    default: ""
+  app-version:
+    description: "Value for -DAPP_VERSION; empty to omit the flag"
+    required: false
+    default: ""
+  install-prefix:
+    description: "Value for -DCMAKE_INSTALL_PREFIX; empty to omit the flag"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4.2.2
+
+    # Inputs reach shell scripts through env: — never interpolated into `run:`.
+    # app-version comes from github.ref_name, and ref names admit characters
+    # that would otherwise be shell-active inside double quotes.
+    - name: Install Qt 6
+      if: inputs.qt-host != ''
+      uses: jurplel/install-qt-action@v4.5.0
+      with:
+        version: ${{ inputs.qt-version }}
+        host: ${{ inputs.qt-host }}
+        target: desktop
+        arch: ${{ inputs.qt-arch }}
+        modules: ${{ inputs.qt-modules }}
+        cache: true
+
+    - name: Install Linux APT dependencies
+      if: inputs.apt-packages != ''
+      env:
+        APT_PACKAGES: ${{ inputs.apt-packages }}
+        USE_CCACHE: ${{ inputs.ccache }}
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.* /etc/apt/sources.list.d/azure-cli.*
+        sudo apt-get update
+        PKGS="$APT_PACKAGES"
+        if [ "$USE_CCACHE" = "true" ]; then
+          PKGS="$PKGS ccache"
+        fi
+        sudo apt-get install -y $PKGS
+      shell: bash
+
+    - name: Build SDL2 from source
+      if: inputs.build-sdl2-source == 'true'
+      id: build-sdl2
+      env:
+        SDL2_OSX_ARCH: ${{ inputs.sdl2-osx-arch }}
+      run: |
+        SDL2_VERSION=2.32.10
+        SRC="${RUNNER_TEMP}/SDL2-src"
+        BUILD="${RUNNER_TEMP}/SDL2-build"
+        git clone --depth 1 --branch "release-${SDL2_VERSION}" \
+          https://github.com/libsdl-org/SDL "$SRC"
+        ARGS=(-S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release
+              -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/sdl2-install"
+              -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF)
+        if [ -n "$SDL2_OSX_ARCH" ]; then
+          ARGS+=(-DCMAKE_OSX_ARCHITECTURES="$SDL2_OSX_ARCH")
+        fi
+        cmake "${ARGS[@]}"
+        cmake --build "$BUILD" --parallel 4
+        cmake --install "$BUILD"
+        echo "sdl2-prefix=${RUNNER_TEMP}/sdl2-install" >> "$GITHUB_OUTPUT"
+      shell: bash
+
+    - name: Configure CMake
+      env:
+        USE_CCACHE: ${{ inputs.ccache }}
+        SDL2_PREFIX: ${{ steps.build-sdl2.outputs.sdl2-prefix }}
+        RUN_TESTS: ${{ inputs.run-tests }}
+        APP_VERSION: ${{ inputs.app-version }}
+        INSTALL_PREFIX: ${{ inputs.install-prefix }}
+      run: |
+        ARGS=(-B build -DCMAKE_BUILD_TYPE=Release)
+        if [ "$USE_CCACHE" = "true" ]; then
+          ARGS+=(-DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+        fi
+        # One PREFIX_PATH flag, semicolon-joined: repeating -DCMAKE_PREFIX_PATH
+        # leaves duplicate cache writes that depend on last-one-wins behaviour.
+        PREFIXES=()
+        if [ -n "$QT_ROOT_DIR" ]; then
+          PREFIXES+=("$QT_ROOT_DIR")
+        fi
+        if [ -n "$SDL2_PREFIX" ]; then
+          PREFIXES+=("$SDL2_PREFIX")
+        fi
+        if [ "${#PREFIXES[@]}" -gt 0 ]; then
+          JOINED=$(IFS=';'; echo "${PREFIXES[*]}")
+          ARGS+=(-DCMAKE_PREFIX_PATH="$JOINED")
+        fi
+        if [ "$RUN_TESTS" = "true" ]; then
+          ARGS+=(-DBUILD_TESTS=ON)
+        fi
+        if [ -n "$APP_VERSION" ]; then
+          ARGS+=(-DAPP_VERSION="$APP_VERSION")
+        fi
+        if [ -n "$INSTALL_PREFIX" ]; then
+          ARGS+=(-DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX")
+        fi
+        cmake "${ARGS[@]}"
+      shell: bash
+
+    - name: Build with CMake
+      run: cmake --build build --parallel 4
+      shell: bash
+
+    - name: Run CTest
+      if: inputs.run-tests == 'true'
+      env:
+        EXCLUDE_REGEX: ${{ inputs.test-exclude-regex }}
+      run: |
+        # Array, not string concat: word-splitting a string variable does NOT
+        # re-apply quote removal, so "-E 'regex'" would pass the quotes through
+        # as literal characters and silently fail to exclude anything.
+        ARGS=(--test-dir build --output-on-failure -j4)
+        if [ -n "$EXCLUDE_REGEX" ]; then
+          ARGS+=(-E "$EXCLUDE_REGEX")
+        fi
+        ctest "${ARGS[@]}"
+      shell: bash
