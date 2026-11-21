@@ -502,6 +502,21 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME input-manager-telemetry COMMAND input-manager-telemetry-tests)
 
+    # IdleTracker blocking flags (IDLE-02): gameActive must freeze the idle
+    # count exactly like mpvActive/scriptActive, and the game-end reset pairing
+    # must give the keyless return a full fresh threshold. Accelerated 2 s
+    # threshold with real 1 s ticks; no display, no processes (QtGui only for
+    # the QKeyEvent type the event filter handles).
+    add_executable(idle-tracker-tests
+        src/tests/IdleTrackerTest.cpp
+        src/input/IdleTracker.cpp)
+    set_target_properties(idle-tracker-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(idle-tracker-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(idle-tracker-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME idle-tracker COMMAND idle-tracker-tests)
+
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
     # No real audio hardware needed — the factory picks a no-op on WSL/CI, and
@@ -682,6 +697,61 @@ if(BUILD_TESTS)
                 --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(volume-stall-${stall_case} PROPERTIES
             TIMEOUT 180
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
+    # IDLE-01 stale idle-count regression gate (torture IDLE-01): a keyless
+    # return from playback/script must start a FULL idle period, not fire the
+    # saver on the first tick from the frozen pre-playback count. Drives the
+    # REAL IdleTracker offscreen (Qt Core+Gui only — no QML/mpv/audio, runs on
+    # every CI lane) with an accelerated 4 s threshold and real 1000 ms ticks.
+    # Two-sided: the mpv and script arms FAIL by design on the pre-fix class
+    # (first-tick fire ~0.5 s / 1 tick); keypress and fresh-idle controls PASS
+    # on both sides. Every arm asserts the freeze invariant (zero
+    # idleSecondsChanged emissions during a 3.5 s block). Needs python3
+    # (stdlib only). RUN_SERIAL: timing gate, keep the 1 s ticks quiet.
+    #   cmake -B build-test -DBUILD_TESTS=ON
+    #   cmake --build build-test --target idle-tracker-stale-count-probe
+    #   ctest --test-dir build-test -R idle-tracker-stale-count --output-on-failure
+    # Two-sided control build (pre-fix checkout, never edited):
+    #   cmake -B build-ctl -DBUILD_TESTS=ON -DIDLE01_SOURCE_ROOT=<pre-fix-tree>
+    #   cmake --build build-ctl --target idle-tracker-stale-count-probe
+    #   ctest --test-dir build-ctl -R idle-tracker-stale-count --output-on-failure
+    # See src/tests/README-idle-tracker-stale-count.md (env, bands, expectations).
+    set(IDLE01_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+        "Source tree whose src/input/IdleTracker.cpp the stale-count probe compiles (point at a pre-fix checkout for the two-sided control run)")
+    add_executable(idle-tracker-stale-count-probe
+        src/tests/IdleTrackerStaleCountProbe.cpp
+        ${IDLE01_SOURCE_ROOT}/src/input/IdleTracker.cpp)
+    set_target_properties(idle-tracker-stale-count-probe PROPERTIES AUTOMOC ON)
+    target_include_directories(idle-tracker-stale-count-probe PRIVATE
+        ${IDLE01_SOURCE_ROOT}/src/input)
+    target_link_libraries(idle-tracker-stale-count-probe PRIVATE Qt6::Core Qt6::Gui)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(idle-tracker-stale-count-probe PRIVATE -Wall -Wextra)
+    endif()
+    # Compiled-rev provenance: the JSON reports the tree the class came FROM
+    # (IDLE01_SOURCE_ROOT), not the configure tree — they differ in control
+    # builds. Same set()/\" pattern as the other root defs.
+    execute_process(COMMAND git -C "${IDLE01_SOURCE_ROOT}" rev-parse HEAD
+        OUTPUT_VARIABLE IDLE01_SOURCE_REV
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+        RESULT_VARIABLE IDLE01_REV_RC)
+    if(NOT IDLE01_REV_RC EQUAL 0)
+        set(IDLE01_SOURCE_REV "unknown")
+    endif()
+    set(IDLE01_REV_DEF "IDLE01_SOURCE_REV=\"${IDLE01_SOURCE_REV}\"")
+    target_compile_definitions(idle-tracker-stale-count-probe PRIVATE ${IDLE01_REV_DEF})
+    foreach(idle_case mpv script keypress fresh)
+        add_test(NAME idle-tracker-stale-count-${idle_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_idle_tracker_stale_count_case.py
+                --case ${idle_case}
+                --probe $<TARGET_FILE:idle-tracker-stale-count-probe>
+                --source-root ${IDLE01_SOURCE_ROOT})
+        set_tests_properties(idle-tracker-stale-count-${idle_case} PROPERTIES
+            TIMEOUT 300
             RUN_SERIAL TRUE
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endforeach()
@@ -1214,6 +1284,33 @@ if(BUILD_TESTS)
         target_compile_options(display-handoff-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
+
+    # VT-01 regression gate: armed-connection + no-premature-restore contract.
+    # Linux-only (VT ioctls / linux/vt.h); needs libdrm for the interposed capture
+    # path. One executable, one ctest case per arm; RUN_SERIAL because the arms
+    # wait on the real 800 ms restore timer and CI runs ctest -j4.
+    if(UNIX AND NOT APPLE)
+        add_executable(display-handoff-connection-gate
+            src/util/tests/DisplayHandoffConnectionGate.cpp
+            src/util/DisplayHandoff.cpp)
+        set_target_properties(display-handoff-connection-gate PROPERTIES AUTOMOC ON)
+        target_include_directories(display-handoff-connection-gate PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/util ${Libdrm_INCLUDE_DIRS})
+        target_link_libraries(display-handoff-connection-gate PRIVATE
+            Qt6::Core Qt6::Gui Qt6::Quick ${Libdrm_LIBRARIES})
+        target_compile_options(display-handoff-connection-gate PRIVATE -Wall -Wextra)
+        foreach(gate_arm
+            sanity timer-wins frame-wins stale-frame-keepwindow inflight-hide
+            inflight-after-accumulation benign-after-return idempotence
+            ordering-hide ordering-keepwindow)
+            add_test(NAME display-handoff-gate-${gate_arm}
+                COMMAND display-handoff-connection-gate ${gate_arm})
+            set_tests_properties(display-handoff-gate-${gate_arm} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DISPLAY=;WAYLAND_DISPLAY="
+                TIMEOUT 180
+                RUN_SERIAL TRUE)
+        endforeach()
+    endif()
 
     # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
     # with stub backends and asserts a Back in each launch phase routes to
