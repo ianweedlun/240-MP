@@ -724,8 +724,8 @@ void InputManager::releaseAction(Action a) {
         m_repeatTimer.stop();
     }
     // mpv's "keypress" command is one-shot, but the app's held-key shaping
-    // (speed ramp / coalesced rewind) ends on key-up — forward the release on
-    // the direct-IPC path too. QML gets its release as a posted key event.
+    // (coalesced seeks) ends on key-up — forward the release on the direct-IPC
+    // path too. QML gets its release as a posted key event.
     if (windowActive()) {
         postKey(qtKeyForAction(a), QEvent::KeyRelease, false);
     } else {

@@ -61,16 +61,16 @@ public:
     // post-connect they are sent as a byte-identical "keypress" (preserving the lua
     // menu-esc/screensaver dismiss semantics); pre-connect they call forceStop()
     // instead of being dropped, so an early Back can never orphan the spawned mpv
-    // (R-2). Directional keys are shaped by SeekHoldPolicy (taps -> exact seeks,
-    // holds -> speed ramp / coalesced rewind); other keys pass through as keypress.
+    // (R-2). Directional keys are shaped by SeekHoldPolicy (taps and holds ->
+    // coalesced exact seeks); other keys pass through as keypress.
     // LEFT/RIGHT holds are owned here (#124): the first keydown is the tap and a
-    // private timer synthesizes the repeat ticks, so the ramp dwell is deterministic
+    // private timer synthesizes the repeat ticks, so the seek cadence is deterministic
     // even when OS/EGLFS autorepeat is absent, mislabeled as fresh presses, or
     // variable-rate (the remote's default key path). Further keydowns for a key
     // already held are ignored; sendKeyUp ends the hold.
     Q_INVOKABLE void sendKey(const QString &key, bool autoRepeat = false);
-    // Key-up for the direct-IPC path and QML alike: ends a held-key speed ramp
-    // or flushes the coalesced rewind accumulator (see SeekHoldPolicy).
+    // Key-up for the direct-IPC path and QML alike: ends a held-key seek hold
+    // or flushes the coalesced accumulator (see SeekHoldPolicy).
     Q_INVOKABLE void sendKeyUp(const QString &key);
     Q_INVOKABLE void setOscRanges(const QString &ranges);
     // mpv's own volume property, read-only: it is pinned at 100 so the system
@@ -150,7 +150,6 @@ private:
     void sendCommand(const QJsonArray &args);
     void sendCommand(const QJsonArray &args, int requestId);
     void executePolicyCommand(const SeekHoldPolicy::Command &cmd);
-    void setPlaybackSpeed(double speed);
     void syncSeekFlushTimer();
     void resetSeekHold();
     VideoProfile detectVideoProfile() const;
@@ -196,7 +195,7 @@ private:
     // Held-key repeat synthesis (#124). The remote's default directional keys
     // ride OS/EGLFS autorepeat, which is absent on some remotes, mislabeled as
     // fresh presses on others, and variable-rate where present — trusting
-    // event.isAutoRepeat made the speed ramp engage inconsistently. These
+    // event.isAutoRepeat made the seek shaping engage inconsistently. These
     // single-shot timers (400 ms first delay, then 100 ms per tick — the
     // InputManager synthesized cadence) are the sole repeat source while a
     // LEFT/RIGHT key is held; m_*Held tracks the physical hold across keydowns.

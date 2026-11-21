@@ -126,37 +126,6 @@ mp.register_script_message("240mp-volume-osd", function(level, muted)
     show_volume_bar(tonumber(level), muted == "true" or muted == true)
 end)
 
--- Held-Right fast-forward ramps playback speed (SeekHoldPolicy); the app pushes
--- the factor in so the CRT gets the same readable OSD treatment as volume.
--- Shares the bar overlay/timer: speed and volume OSDs are mutually exclusive.
-local function show_speed_text(speed)
-    mp.commandv("script-message", "240mp-osd-menu-hide")
-
-    local ww, wh = mp.get_osd_size()
-    if ww == 0 or wh == 0 then return end
-
-    local fs       = math.floor(wh * 0.0333333)
-    local lm       = math.floor(ww * 0.12)
-    local row1_y   = math.floor(wh * 0.7979166)
-    local label_fs = fs * 3
-
-    local ass = assdraw.ass_new()
-    local label = string.format("SPEED  %gx", speed or 1)
-    draw_text(ass, lm, row1_y, 1, label, label_fs, C_WHITE)
-
-    bar_overlay.res_x = ww
-    bar_overlay.res_y = wh
-    bar_overlay.data  = ass.text
-    bar_overlay:update()
-
-    if bar_timer then bar_timer:kill() end
-    bar_timer = mp.add_timeout(BAR_TIMEOUT, hide_bar)
-end
-
-mp.register_script_message("240mp-speed-osd", function(speed)
-    show_speed_text(tonumber(speed) or 1)
-end)
-
 -- Run a seek/chapter command, then open the nav menu (mpv-osc.lua) so the new
 -- position is shown.
 local function seek_with_menu(command)

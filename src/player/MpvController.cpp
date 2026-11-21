@@ -29,8 +29,8 @@ static std::atomic_int g_mpvInstanceSeq{0};
 
 // Held-key repeat cadence (#124) — mirrors InputManager's kRepeatDelayMs /
 // kRepeatIntervalMs so the synthesized gamepad/remap path and the raw remote
-// path produce the identical tick stream the SeekHoldPolicy ramp was tuned
-// for (20 ticks @ 100 ms = 2 s per speed step).
+// path produce the identical tick stream the SeekHoldPolicy coalescing was
+// tuned for (one accumulated seek per 4 ticks @ 100 ms = 400 ms).
 static constexpr int kHoldRepeatDelayMs    = 400;
 static constexpr int kHoldRepeatIntervalMs = 100;
 static constexpr int kHoldEndGraceMs       = 250;   // #133: max gap between a release and the next press
@@ -241,7 +241,7 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     // return can never leak it into the next, non-YouTube launch.
     const QString sbRanges = m_oscRanges;
     m_oscRanges.clear();
-    // A new launch starts at normal speed with no hold state carried over.
+    // A new launch starts with no hold state carried over.
     resetSeekHold();
     if (m_process) {
         m_process->disconnect();
@@ -710,14 +710,14 @@ void MpvController::sendKey(const QString &key, bool autoRepeat) {
     }
     // Both key paths converge here: QML (window active) and the direct-IPC
     // connect in main.cpp (mpv owns the screen). SeekHoldPolicy shapes taps
-    // into single exact seeks and holds into a speed ramp / coalesced rewind,
+    // into single exact seeks and holds into coalesced seeks,
     // so a 10 presses/s held key can never backlog the demuxer again.
     //
     // #124: the remote's default directional keys reach QML with whatever
     // autorepeat the OS/EGLFS supplies — absent on some remotes, mislabeled
     // as fresh presses on others, variable-rate where present. Trusting that
-    // flag made the ramp engage inconsistently (no ramp, ramp reset mid-hold,
-    // or a dwell that tracked the OS rate instead of 2 s). MpvController now
+    // flag made the seek shaping engage inconsistently (a seek machine-gun, or
+    // a coalesce cadence that tracked the OS rate). MpvController now
     // owns the hold: the FIRST keydown of a LEFT/RIGHT hold feeds the policy
     // as before, and a private timer synthesizes every repeat tick at the
     // InputManager cadence. Any further keydown for a key already held —
@@ -730,7 +730,7 @@ void MpvController::sendKey(const QString &key, bool autoRepeat) {
             return;   // the internal timer is the sole repeat source
         // #133: a keydown arriving within the grace window after a release is
         // the next pair of the SAME hold — continue it, do not restart (a
-        // restart would reset the ramp to 1x and re-arm the 400 ms delay).
+        // restart would drop the accumulated seek and re-arm the 400 ms delay).
         if (m_holdEndGraceTimer->isActive())
             m_holdEndGraceTimer->stop();
         held = true;
@@ -826,23 +826,12 @@ void MpvController::executePolicyCommand(const SeekHoldPolicy::Command &cmd) {
     case SeekHoldPolicy::Command::Seek:
         sendCommand({"seek", cmd.value, "relative+exact"});
         break;
-    case SeekHoldPolicy::Command::Speed:
-        setPlaybackSpeed(cmd.value);
-        break;
     case SeekHoldPolicy::Command::Key:
         sendCommand({"keypress", cmd.key});
         break;
     case SeekHoldPolicy::Command::None:
         break;
     }
-}
-
-void MpvController::setPlaybackSpeed(double speed) {
-    if (m_ipc->state() != QLocalSocket::ConnectedState)
-        return;   // no child owns the screen; nothing to ramp
-    sendCommand({"set_property", "speed", speed});
-    if (m_hasMediaKeysScript)
-        sendCommand({"script-message", "240mp-speed-osd", QString::number(speed)});
 }
 
 void MpvController::showOscMenu() {

@@ -1,39 +1,30 @@
-// #124 hold-Right ramp consistency: product tests against the REAL
-// MpvController + REAL mpv + the REAL YouTube Player.qml key handlers.
+// Held-key seek coalescing: product tests against the REAL MpvController +
+// REAL mpv + the REAL YouTube Player.qml key handlers.
 //
-// The defect: the remote's default directional keys reach QML through
-// InputManager::eventFilter's return-false path, carrying whatever autorepeat
-// the OS/EGLFS supplies. That stream is (a) ABSENT on some remotes, (b)
-// MISLABELED as isAutoRepeat=false fresh presses on others, and (c)
-// VARIABLE-RATE where present. sendKey trusted the flag, so SeekHoldPolicy's
-// tick-count ramp engaged inconsistently: no ramp at all, a ramp reset on
-// every mislabeled press (seek machine-gun), or a 2x dwell that tracked the
-// OS rate instead of 2 s. The #130 dwell tweak could not fix this — the
-// policy was never the problem; the stream feeding it was.
+// Owner decision (2026-11-20): the playback-speed ramp was an unrequested
+// feature and was removed. Held LEFT/RIGHT now coalesce into periodic exact
+// seeks (one accumulated seek per ~400 ms) on every key path; no playback
+// speed is ever changed and no `Set property: speed` is ever issued.
 //
-// The fix: MpvController owns the LEFT/RIGHT hold. The first keydown feeds
-// the policy as before; a private 400 ms + 100 ms timer (the InputManager
-// cadence) synthesizes every repeat tick; further keydowns for a held key
-// are ignored; sendKeyUp ends the hold. Player-scoped: InputManager and all
-// list/menu QML are untouched.
+// The defect this suite guards (#124): the remote's default directional keys
+// reach QML through InputManager::eventFilter's return-false path, carrying
+// whatever autorepeat the OS/EGLFS supplies — absent on some remotes,
+// mislabeled as isAutoRepeat=false fresh presses on others, variable-rate
+// where present. MpvController owns the LEFT/RIGHT hold: the first keydown
+// feeds SeekHoldPolicy, a private 400 ms + 100 ms timer synthesizes every
+// repeat tick, further keydowns for a held key are ignored, and sendKeyUp ends
+// the hold. These trials prove the coalesced shape is identical across remote
+// behaviors (absent / mislabeled / variable-rate / clean / press-release
+// pairs) and that no speed command ever reaches mpv.
 //
-// TWO-SIDED: MP240_HOLD_EXPECT=fixed (default) asserts the deterministic
-// ramp; MP240_HOLD_EXPECT=defective asserts the known-bad shapes, so the
-// SAME instrument proves the gate catches the pre-fix code (run it against a
-// pre-fix MpvController.cpp — it must PASS in defective mode and FAIL in
-// fixed mode). The clean-100 ms control arm passes on BOTH sides (harness
-// canary). Observation contract (probed on mpv 0.41, --msg-level=all=v):
-//   [t][v][cplayer] Set property: speed=V -> 1     (mpv-clock timestamp)
+// Observation contract (probed on mpv 0.41, --msg-level=all=v):
 //   [t][d][cplayer] Run command: seek, ... target="S" ...
+//   [t][v][cplayer] Set property: speed=V   (must NEVER appear)
 //   [t][d][cplayer] Run command: keypress, ...
-// The debug key channel is deliberately NOT used for the defect arms: it
-// injects through deliverPress (the synthesized path) and would mask the
-// bug. Raw trials post QKeyEvents straight at the QQuickWindow — exactly
-// what eventFilter's return-false path delivers to QML.
 //
-// QSKIPs when mpv/ffmpeg is unavailable (CI lanes without a media stack stay
+// QSKips when mpv/ffmpeg is unavailable (CI lanes without a media stack stay
 // green) or when the per-instance IPC socket path exceeds sun_path (macOS
-// long-TMPDIR; the ramp is observed over IPC-connected commands).
+// long-TMPDIR; the seeks are observed over IPC-connected commands).
 #include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QProcess>
@@ -68,7 +59,7 @@
 
 namespace {
 
-QString g_fixture;          // path to the generated 60 s clip
+QString g_fixture;          // path to the generated clip
 QString g_appRoot;          // worktree root (scripts/ + modules/ live here)
 
 template <typename Pred>
@@ -174,6 +165,23 @@ QString timelineBrief(const Timeline &tl) {
         s += QStringLiteral("%1@%2s ").arg(tl.seekTargets.value(i)).arg(tl.seekTimes.at(i), 0, 'f', 3);
     s += QStringLiteral("] keypresses=%1").arg(tl.keypressLines.size());
     return s;
+}
+
+// The contract: a held RIGHT produces coalesced forward seeks (one tap plus at
+// least one flush, bounded well below the 10/s machine-gun) and never a speed
+// command. Returns an empty string when the timeline matches.
+QString coalescedForwardIssue(const Timeline &tl) {
+    if (!tl.speeds.isEmpty())
+        return QStringLiteral("speed commands issued (the ramp is supposed to be gone)");
+    if (tl.seekTimes.size() < 2)
+        return QStringLiteral("expected the tap seek plus at least one coalesced flush");
+    if (tl.seekTimes.size() > 20)
+        return QStringLiteral("seek machine-gun: holds are not being coalesced");
+    for (double v : tl.seekTargets) {
+        if (!(v > 0.0))
+            return QStringLiteral("a non-positive (non-forward) seek appeared");
+    }
+    return QString();
 }
 
 // Deterministic per-trial jitter (reproducible evidence, no qrand entropy).
@@ -309,7 +317,7 @@ signals:
     void playbackResolveFailed(const QString &videoId, const QString &reason);
 };
 
-// Raw-path trial modes — the three remote behaviors + the ideal canary.
+// Raw-path trial modes — the remote behaviors + the ideal canary.
 enum class Mode { Absent, Mislabeled, Variable, Clean, PairStream };
 const char *modeName(Mode m) {
     switch (m) {
@@ -336,14 +344,16 @@ private Q_SLOTS:
         if (!gen->isValid()) QSKIP("cannot create temp dir for fixture");
         g_fixture = gen->path() + QStringLiteral("/fixture.mp4");
         QProcess ff;
+        // 600 s, not 60 s: a coalesced forward hold walks hundreds of seconds,
+        // and a short clip would hit EOF mid-trial and truncate the timeline.
         ff.start(QStringLiteral("ffmpeg"),
-                 {"-y", "-f", "lavfi", "-i", "testsrc=duration=60:size=320x240:rate=10",
-                  "-f", "lavfi", "-i", "sine=frequency=440:duration=60",
+                 {"-y", "-f", "lavfi", "-i", "testsrc=duration=600:size=320x240:rate=10",
+                  "-f", "lavfi", "-i", "sine=frequency=440:duration=600",
                   "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
                   "-shortest", g_fixture});
-        if (!ff.waitForFinished(60000) || ff.exitCode() != 0 || !QFile::exists(g_fixture))
+        if (!ff.waitForFinished(120000) || ff.exitCode() != 0 || !QFile::exists(g_fixture))
             QSKIP("ffmpeg could not generate the test fixture — skipped");
-        // sun_path guard (macOS long TMPDIR): without IPC the speed commands
+        // sun_path guard (macOS long TMPDIR): without IPC the seek commands
         // are dropped pre-connect and there is nothing to observe.
         QTemporaryDir probe;
         if (probe.isValid() && writeConfig(probe.path())) {
@@ -354,11 +364,11 @@ private Q_SLOTS:
         }
     }
 
-    // G1 defect gate 1 — MISLABELED repeats: 30 fresh-flagged RIGHT presses at
-    // 10 Hz while physically held. Fixed: exactly ONE tap seek, then the
-    // internal timer ramps 2x -> 4x -> 1x. Pre-fix: every press is a fresh tap
-    // (31 seeks, zero speed commands) — the seek machine-gun the owner saw.
-    void mislabeledFreshPressesRampOnce() {
+    // G1 — MISLABELED repeats: 30 fresh-flagged RIGHT presses at 10 Hz while
+    // physically held. Fixed: one tap seek, then the internal timer coalesces
+    // into periodic flushes. Pre-fix: every press is a fresh tap (31 seeks) —
+    // the seek machine-gun the owner saw.
+    void mislabeledFreshPressesCoalesceOnce() {
         Rig rig;
         QVERIFY(rig.launch());
         rig.mpv->sendKey(QStringLiteral("RIGHT"), false);
@@ -366,25 +376,19 @@ private Q_SLOTS:
             spinFor(100);
             rig.mpv->sendKey(QStringLiteral("RIGHT"), false);   // mislabeled
         }
-        spinFor(1200);   // internal ticks reach 4x well before release
+        spinFor(1200);
         rig.mpv->sendKeyUp(QStringLiteral("RIGHT"));
         spinFor(300);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
         std::printf("  [mislabeled-direct] %s\n", qPrintable(timelineBrief(tl)));
-        QCOMPARE(tl.seekTimes.size(), 1);
-        QCOMPARE(tl.speeds.size(), 3);
-        QCOMPARE(tl.speeds.at(0).v, 2.0);
-        QCOMPARE(tl.speeds.at(1).v, 4.0);
-        QCOMPARE(tl.speeds.at(2).v, 1.0);
-        const double dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
-        QVERIFY2(dwell >= 1.6 && dwell <= 3.4,
-                 qPrintable(QStringLiteral("2x->4x dwell %1 s outside the 2 s step band").arg(dwell)));
+        const QString issue = coalescedForwardIssue(tl);
+        QVERIFY2(issue.isEmpty(), qPrintable(issue));
     }
 
-    // G1 defect gate 2 — ABSENT autorepeat: one press, a 4 s physical hold,
-    // release. Fixed: the internal timer still ramps 2x -> 4x -> 1x. Pre-fix:
-    // no repeats ever arrive, so only the tap seek — no ramp at all.
-    void absentAutoRepeatStillRamps() {
+    // G1 — ABSENT autorepeat: one press, a 4 s physical hold, release. Fixed:
+    // the internal timer still coalesces. Pre-fix: no repeats ever arrive, so
+    // only the tap seek.
+    void absentAutoRepeatStillCoalesces() {
         Rig rig;
         QVERIFY(rig.launch());
         rig.mpv->sendKey(QStringLiteral("RIGHT"), false);
@@ -393,20 +397,13 @@ private Q_SLOTS:
         spinFor(300);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
         std::printf("  [absent-direct] %s\n", qPrintable(timelineBrief(tl)));
-        QCOMPARE(tl.seekTimes.size(), 1);
-        QCOMPARE(tl.speeds.size(), 3);
-        QCOMPARE(tl.speeds.at(0).v, 2.0);
-        QCOMPARE(tl.speeds.at(1).v, 4.0);
-        QCOMPARE(tl.speeds.at(2).v, 1.0);
-        const double dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
-        QVERIFY2(dwell >= 1.6 && dwell <= 3.4,
-                 qPrintable(QStringLiteral("2x->4x dwell %1 s outside the 2 s step band").arg(dwell)));
+        const QString issue = coalescedForwardIssue(tl);
+        QVERIFY2(issue.isEmpty(), qPrintable(issue));
     }
 
-    // G1 defect gate 3 — VARIABLE/FAST rate: flagged repeats at jittered
-    // 30-60 ms. Fixed: the OS stream is ignored while held, dwell stays ~2 s.
-    // Pre-fix: 20 ticks arrive in ~0.9 s, so 4x engages early (dwell < 1.5 s).
-    void variableRateDwellIsTimerBased() {
+    // G1 — VARIABLE/FAST rate: flagged repeats at jittered 30-60 ms. Fixed: the
+    // OS stream is ignored while held, so the coalesce cadence is unchanged.
+    void variableRateCoalescingIsTimerBased() {
         Rig rig;
         QVERIFY(rig.launch());
         Lcg rng(0x5eed);
@@ -425,19 +422,11 @@ private Q_SLOTS:
         spinFor(300);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
         std::printf("  [variable-direct] %s\n", qPrintable(timelineBrief(tl)));
-        QCOMPARE(tl.seekTimes.size(), 1);
-        QCOMPARE(tl.speeds.size(), 3);
-        QCOMPARE(tl.speeds.at(0).v, 2.0);
-        QCOMPARE(tl.speeds.at(1).v, 4.0);
-        QCOMPARE(tl.speeds.at(2).v, 1.0);
-        const double dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
-        QVERIFY2(dwell >= 1.6 && dwell <= 3.4,
-                 qPrintable(QStringLiteral("2x->4x dwell %1 s tracked the fast OS rate").arg(dwell)));
+        const QString issue = coalescedForwardIssue(tl);
+        QVERIFY2(issue.isEmpty(), qPrintable(issue));
     }
 
-    // Canary (both sides): a clean flagged-repeat hold ramps, key-up ends it,
-    // and a fresh press re-arms (held state cleared). Also proves the fix did
-    // Rearm: a GENUINE release (gap > grace window) ends the hold; a later
+    // Canary: a GENUINE release (gap > grace window) ends the hold; a later
     // keydown re-arms it fresh. With #133's 250 ms grace, we need gaps > 250 ms.
     void keyUpEndsHoldAndRearms() {
         Rig rig;
@@ -454,20 +443,16 @@ private Q_SLOTS:
         spinFor(200);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
         std::printf("  [rearm-direct] %s\n", qPrintable(timelineBrief(tl)));
-        QCOMPARE(tl.seekTimes.size(), 2);          // one tap per round
-        QCOMPARE(tl.speeds.size(), 4);             // 2x,1x,2x,1x
-        QCOMPARE(tl.speeds.at(0).v, 2.0);
-        QCOMPARE(tl.speeds.at(1).v, 1.0);
-        QCOMPARE(tl.speeds.at(2).v, 2.0);
-        QCOMPARE(tl.speeds.at(3).v, 1.0);
+        QVERIFY(tl.speeds.isEmpty());
+        QVERIFY2(tl.seekTimes.size() >= 2, "each round must seek at least once");
+        for (double v : tl.seekTargets)
+            QVERIFY2(v > 0.0, "a non-forward seek appeared");
     }
 
-    // PairStream (fixed expectation): the owner's remote autorepeats as
-    // discrete press/release pairs. A keyup between every repeat must NOT end
-    // the hold — the ramp still climbs 2x->4x deterministically and returns to
-    // 1x only after the pair stream stops. FAILS on pre-fix code (each keyup
-    // resets the ramp -> 1x<->2x flap, never 4x); PASSES with the hold-end grace.
-    void pairStreamHoldRampsDeterministically() {
+    // PairStream: the owner's remote autorepeats as discrete press/release
+    // pairs. A keyup between every repeat must NOT end the hold — the coalesced
+    // cadence is unchanged and only stops after the pair stream ends.
+    void pairStreamHoldCoalescesDeterministically() {
         Rig rig;
         QVERIFY(rig.launch());
         rig.mpv->sendKey(QStringLiteral("RIGHT"), false);
@@ -480,18 +465,12 @@ private Q_SLOTS:
         spinFor(400);
         const Timeline tl = parseMpvLog(rig.mpv->logFilePath());
         std::printf("  [pairstream-direct] %s\n", qPrintable(timelineBrief(tl)));
-        QCOMPARE(tl.seekTimes.size(), 1);
-        QCOMPARE(tl.speeds.size(), 3);
-        QCOMPARE(tl.speeds.at(0).v, 2.0);
-        QCOMPARE(tl.speeds.at(1).v, 4.0);
-        QCOMPARE(tl.speeds.at(2).v, 1.0);
-        const double dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
-        QVERIFY2(dwell >= 1.6 && dwell <= 3.4,
-                 qPrintable(QStringLiteral("pair-stream dwell %1 s outside the 2 s band").arg(dwell)));
+        const QString issue = coalescedForwardIssue(tl);
+        QVERIFY2(issue.isEmpty(), qPrintable(issue));
     }
 
-    // Canary (both sides): LEFT hold still coalesces into ~400 ms flushes of
-    // negative seeks; the repeat-source change must not disturb the rewind.
+    // Canary: LEFT hold still coalesces into ~400 ms flushes of negative seeks;
+    // the RIGHT change must not disturb the rewind.
     void leftHoldCoalescingUnchanged() {
         Rig rig;
         QVERIFY(rig.launch());
@@ -515,9 +494,8 @@ private Q_SLOTS:
                  qPrintable(QStringLiteral("LEFT hold total %1 s outside the coalesced band").arg(total)));
     }
 
-    // Canary (both sides): stop() mid-hold strands no timer — no speed/seek
-    // command may appear after the stop (post-fix this proves the hold timer
-    // is torn down with the session).
+    // Canary: stop() mid-hold strands no timer — no seek command may appear
+    // after the stop (this proves the hold timer is torn down with the session).
     void stopMidHoldStrandsNothing() {
         Rig rig;
         QVERIFY(rig.launch());
@@ -536,8 +514,8 @@ private Q_SLOTS:
         QCOMPARE(after.seekTimes.size(), atStop.seekTimes.size());
     }
 
-    // Canary (both sides): non-shaped keys are untouched — UP/ENTER taps pass
-    // through as keypress, repeats drop, no ramp/seek side effects.
+    // Canary: non-shaped keys are untouched — UP/ENTER taps pass through as
+    // keypress, repeats drop, no seek side effects.
     void verticalAndOtherKeysUnchanged() {
         Rig rig;
         QVERIFY(rig.launch());
@@ -559,8 +537,8 @@ private Q_SLOTS:
     // G5 — navigation is untouched: held UP/DOWN through the RAW path in the
     // real YouTube Items.qml menu still advances one row per event with wrap
     // (Keys.onUp/DownPressed fire on repeats). No MpvController is constructed
-    // here — the fix is player-scoped by construction; this proves the raw
-    // held-key list contract empirically. Passes identically pre/post fix.
+    // here — the shaping is player-scoped by construction; this proves the raw
+    // held-key list contract empirically.
     void listHoldScrollUnchanged() {
         QQmlEngine engine;
         engine.addImportPath(g_appRoot + "/views");
@@ -623,18 +601,13 @@ private Q_SLOTS:
 
     // G2/G3 — the RAW remote path through the REAL Player.qml. QKeyEvents are
     // posted straight at the QQuickWindow (eventFilter return-false downstream;
-    // no InputManager synthesis, no debug key channel). 21 defect-arm trials
-    // (7 per remote behavior) + 3 clean controls in fixed mode; the defective
-    // expectation mode asserts the known-bad shapes on pre-fix code.
+    // no InputManager synthesis, no debug key channel). Every remote behavior
+    // must produce the same coalesced forward seeks and never a speed command.
     void rawRemotePathTrials() {
-        const QString expect = qEnvironmentVariable("MP240_HOLD_EXPECT", QStringLiteral("fixed"));
-        QVERIFY2(expect == QLatin1String("fixed") || expect == QLatin1String("defective"),
-                 "MP240_HOLD_EXPECT must be fixed|defective");
-        const bool fixed = (expect == QLatin1String("fixed"));
         struct Arm { Mode mode; int trials; };
-        const QList<Arm> arms = fixed
-            ? QList<Arm>{{Mode::Absent, 7}, {Mode::Mislabeled, 7}, {Mode::Variable, 7}, {Mode::Clean, 3}, {Mode::PairStream, 7}}
-            : QList<Arm>{{Mode::Absent, 3}, {Mode::Mislabeled, 3}, {Mode::Variable, 3}, {Mode::Clean, 1}, {Mode::PairStream, 3}};
+        const QList<Arm> arms = {{Mode::Absent, 7}, {Mode::Mislabeled, 7},
+                                 {Mode::Variable, 7}, {Mode::Clean, 3},
+                                 {Mode::PairStream, 7}};
 
         QJsonArray evidence;
         int trialNo = 0;
@@ -701,10 +674,7 @@ private Q_SLOTS:
                     QCoreApplication::sendEvent(&window, &ev);
                 };
                 Lcg rng(quint32(trialNo) * 7919u + quint32(arm.mode));
-                // Defective mislabeled arm: keep the window short — pre-fix,
-                // every press seeks +10 s and would run the 60 s fixture to
-                // EOF mid-trial. 500 ms still lands >= 3 mislabeled seeks.
-                const int holdMs = (!fixed && arm.mode == Mode::Mislabeled) ? 500 : 4000;
+                const int holdMs = 4000;
                 QElapsedTimer wall; wall.start();
                 post(QEvent::KeyPress, false);   // the physical press
                 qint64 nextDue = -1;
@@ -717,9 +687,7 @@ private Q_SLOTS:
                     if (nextDue >= 0 && wall.elapsed() >= nextDue) {
                         if (arm.mode == Mode::PairStream) {
                             // The owner's remote autorepeats as discrete
-                            // press/release PAIRS (state log: ~7 right-delivered
-                            // transitions/s during a hold, each needing an
-                            // intervening release). A keyup between every repeat.
+                            // press/release PAIRS. A keyup between every repeat.
                             post(QEvent::KeyPress, true);
                             post(QEvent::KeyRelease, false);
                             nextDue = wall.elapsed() + rng.next(100, 140);
@@ -739,61 +707,16 @@ private Q_SLOTS:
 
                 const Timeline tl = parseMpvLog(mpv.logFilePath());
                 const QString brief = timelineBrief(tl);
-                std::printf("  [raw %s/%s #%d] %s\n", modeName(arm.mode),
-                            qPrintable(expect), trialNo, qPrintable(brief));
+                std::printf("  [raw %s #%d] %s\n", modeName(arm.mode), trialNo,
+                            qPrintable(brief));
 
-                // ── expectations ──
-                bool ok = false;
-                QString why;
-                // The clean canary's invariant is the SEQUENCE + 2 s dwell on
-                // both sides. The first-repeat delay differs by side: pre-fix
-                // the first external flagged repeat fires at ~100 ms, post-fix
-                // the internal timer's first tick at ~400 ms — so the strict
-                // first-delay band applies only to the fixed expectation.
-                const double firstDelayLo = (arm.mode == Mode::Clean && !fixed) ? 0.05 : 0.2;
-                const bool cleanShape =
-                    tl.speeds.size() == 3
-                    && tl.speeds.at(0).v == 2.0
-                    && tl.speeds.at(1).v == 4.0
-                    && tl.speeds.at(2).v == 1.0
-                    && tl.seekTimes.size() == 1
-                    && (tl.speeds.at(0).t - tl.seekTimes.at(0)) >= firstDelayLo
-                    && (tl.speeds.at(0).t - tl.seekTimes.at(0)) <= 0.9
-                    && (tl.speeds.at(1).t - tl.speeds.at(0).t) >= 1.6
-                    && (tl.speeds.at(1).t - tl.speeds.at(0).t) <= 3.4;
-                if (fixed || arm.mode == Mode::Clean) {
-                    ok = cleanShape;
-                    why = QStringLiteral("expected deterministic 1 seek + 2x@~0.4s + 4x@~2.4s + 1x on release");
-                } else if (arm.mode == Mode::Absent) {
-                    ok = tl.speeds.isEmpty() && tl.seekTimes.size() == 1;
-                    why = QStringLiteral("expected the defect: no autorepeat -> no ramp, tap seek only");
-                } else if (arm.mode == Mode::Mislabeled) {
-                    ok = tl.speeds.isEmpty() && tl.seekTimes.size() >= 3;
-                    why = QStringLiteral("expected the defect: mislabeled presses -> seek machine-gun, no ramp");
-                } else if (arm.mode == Mode::PairStream) {
-                    bool only12 = true, has4 = false;
-                    for (const auto &e : tl.speeds) {
-                        if (e.v != 1.0 && e.v != 2.0) only12 = false;
-                        if (e.v == 4.0) has4 = true;
-                    }
-                    ok = tl.seekTimes.size() == 1 && tl.speeds.size() >= 6
-                         && only12 && !has4 && !tl.speeds.isEmpty()
-                         && tl.speeds.at(0).v == 2.0;
-                    why = QStringLiteral("expected the defect: press/release pairs reset the ramp each pair -> 1x<->2x flap, never 4x");
-                } else {   // Variable
-                    double dwell = -1.0;
-                    if (tl.speeds.size() >= 2 && tl.speeds.at(0).v == 2.0 && tl.speeds.at(1).v == 4.0)
-                        dwell = tl.speeds.at(1).t - tl.speeds.at(0).t;
-                    ok = (dwell >= 0.0 && dwell < 1.5);
-                    why = QStringLiteral("expected the defect: fast OS rate -> 4x engages early (dwell < 1.5 s)");
-                }
+                const QString issue = coalescedForwardIssue(tl);
 
                 QJsonObject row;
                 row["trial"] = trialNo;
                 row["mode"] = QString::fromLatin1(modeName(arm.mode));
-                row["expect"] = expect;
                 row["hold_ms"] = holdMs;
-                row["pass"] = ok;
+                row["pass"] = issue.isEmpty();
                 QJsonArray sp;
                 for (const auto &e : tl.speeds)
                     sp.append(QJsonObject{{"t", e.t}, {"v", e.v}});
@@ -808,22 +731,21 @@ private Q_SLOTS:
                 delete qi;
                 mpv.forceStop();
                 QVERIFY(spinUntil([]{ return !anyMpvChild(); }, 3000));
-                QVERIFY2(ok, qPrintable(QStringLiteral(
-                    "raw %1 trial #%2 (%3 expectation): %4 — got %5")
-                    .arg(modeName(arm.mode)).arg(trialNo).arg(expect).arg(why).arg(brief)));
+                QVERIFY2(issue.isEmpty(), qPrintable(QStringLiteral(
+                    "raw %1 trial #%2: %3 — got %4")
+                    .arg(modeName(arm.mode)).arg(trialNo).arg(issue).arg(brief)));
             }
         }
         // Evidence file: per-trial speed/seek timelines for the card + PR.
         QString evPath = qEnvironmentVariable("MP240_HOLD_EVIDENCE");
         if (evPath.isEmpty())
-            evPath = QDir::tempPath() + QStringLiteral("/ff-ramp-evidence.json");
+            evPath = QDir::tempPath() + QStringLiteral("/hold-coalesce-evidence.json");
         QFile ev(evPath);
         if (ev.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             ev.write(QJsonDocument(evidence).toJson(QJsonDocument::Indented));
             ev.close();
         }
-        std::printf("  evidence: %s (%d trials, expect=%s)\n",
-                    qPrintable(evPath), trialNo, qPrintable(expect));
+        std::printf("  evidence: %s (%d trials)\n", qPrintable(evPath), trialNo);
     }
 };
 

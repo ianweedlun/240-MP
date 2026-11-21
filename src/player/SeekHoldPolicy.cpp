@@ -5,22 +5,11 @@ SeekHoldPolicy::Command SeekHoldPolicy::press(const QString &key, bool autoRepea
     Command cmd;
     if (key == QLatin1String("RIGHT")) {
         if (!autoRepeat) {
-            // A fresh tap ends any previous ramp and seeks one step.
-            m_ramping = false;
-            m_rampTicks = 0;
+            m_rightAccum = 0.0;
             cmd.kind = Command::Seek;
             cmd.value = kTapStepSec;
-        } else if (!m_ramping) {
-            m_ramping = true;
-            m_rampTicks = 0;
-            cmd.kind = Command::Speed;
-            cmd.value = kRampSpeedNear;
         } else {
-            ++m_rampTicks;
-            if (m_rampTicks == kRampEscalateTicks) {
-                cmd.kind = Command::Speed;
-                cmd.value = kRampSpeedFar;
-            }
+            m_rightAccum += kTapStepSec;   // flushed by the owner's timer
         }
     } else if (key == QLatin1String("LEFT")) {
         if (!autoRepeat) {
@@ -40,24 +29,19 @@ SeekHoldPolicy::Command SeekHoldPolicy::press(const QString &key, bool autoRepea
 
 SeekHoldPolicy::Command SeekHoldPolicy::release(const QString &key)
 {
-    Command cmd;
-    if (key == QLatin1String("RIGHT")) {
-        if (m_ramping) {
-            m_ramping = false;
-            m_rampTicks = 0;
-            cmd.kind = Command::Speed;
-            cmd.value = 1.0;
-        }
-    } else if (key == QLatin1String("LEFT")) {
+    if (key == QLatin1String("RIGHT") || key == QLatin1String("LEFT"))
         return flush();
-    }
-    return cmd;
+    return Command();
 }
 
 SeekHoldPolicy::Command SeekHoldPolicy::flush()
 {
     Command cmd;
-    if (m_leftAccum != 0.0) {
+    if (m_rightAccum != 0.0) {
+        cmd.kind = Command::Seek;
+        cmd.value = m_rightAccum;
+        m_rightAccum = 0.0;
+    } else if (m_leftAccum != 0.0) {
         cmd.kind = Command::Seek;
         cmd.value = m_leftAccum;
         m_leftAccum = 0.0;
@@ -67,7 +51,6 @@ SeekHoldPolicy::Command SeekHoldPolicy::flush()
 
 void SeekHoldPolicy::reset()
 {
-    m_ramping = false;
-    m_rampTicks = 0;
-    m_leftAccum = 0.0;
+    m_leftAccum  = 0.0;
+    m_rightAccum = 0.0;
 }
