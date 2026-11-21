@@ -28,9 +28,12 @@ Cases (positive side passes pre- AND post-fix; negative side FAILS pre-fix):
   oversize-token         8 MiB filler, token at tail: ok=0 size-cap + HWM
                          delta <= 1024 KiB vs a zero-filler control run
                          (pre-fix: ok=1 and ~5.2x amplification, +42,908 KiB).
-  no-token-under-cap     small tokenless page: preserved semantics — Player
-                         request with synthetic visitor, bot wall,
-                         exception:LOGIN_REQUIRED (passes pre- and post-fix).
+  no-token-under-cap     small tokenless page: preserved continuation shape —
+                         Player request with synthetic visitor, bot wall fires,
+                         but the failure is tagged synthetic-vd:exception:
+                         LOGIN_REQUIRED so ytneg never negative-caches it
+                         (NEG-01 flip arm: pre-fix this was a permanent
+                         LOGIN_REQUIRED verdict that poisoned the 24h cache).
   real-size-early-exit   873,632 B page at the live capture geometry, token at
                          byte 60,651, 16 KiB drip: ok=1, exact token, homepage
                          bytes_sent <= 262,144 + connection reset (early exit;
@@ -478,14 +481,21 @@ def check_round(rd, cap, timeout_ms, violations):
                     f"'visitorData homepage exceeded size cap ... cap={cap}' in "
                     "probe stderr")
     elif spec["expect"] == "bot-wall":
-        if ev and not (ev["ok"] == 0 and ev["reason"].startswith("exception:")
+        # NEG-01 (issue #131): a bot wall earned by a synthetic visitor id is a
+        # visitorData condition, NOT a permanent video verdict. The resolver
+        # tags the reason `synthetic-vd:` so ytneg::permanentFailureClass()
+        # skips it and no 24h negative-cache entry is written. The Player
+        # still receives the synthetic visitor and the wall still fires.
+        if ev and not (ev["ok"] == 0 and ev["reason"].startswith("synthetic-vd:exception:")
                        and "LOGIN_REQUIRED" in ev["reason"]):
-            violate("preserved-bot-wall", f"expected ok=0 reason=exception:"
-                    f"LOGIN_REQUIRED (today's no-token semantics), got "
+            violate("synthetic-vd-bot-wall",
+                    f"expected ok=0 reason=synthetic-vd:exception:...LOGIN_REQUIRED "
+                    f"(NEG-01 tagged no-token semantics), got "
                     f"ok={ev['ok'] if ev else '?'} reason={(ev['reason'] if ev else '?')!r}")
         if len(players) != 1:
-            violate("no-token-still-reaches-player", f"expected exactly 1 Player "
-                    f"request (synthetic-visitor continuation), got {len(players)}")
+            violate("no-token-still-reaches-player",
+                    f"expected exactly 1 Player request (synthetic-visitor "
+                    f"continuation), got {len(players)}")
         elif not players[0].get("visitor") or players[0]["visitor"] == spec["token"]:
             violate("synthetic-visitor", "Player request must carry a synthetic "
                     "visitor id when the homepage had no token")

@@ -114,6 +114,12 @@ private:
     // with m_vdDone unset so finished() applies EOF/error semantics.
     void drainVisitorData(QNetworkReply *reply);
     void emitResult(const YtResolveResult &result);
+    // NEG-01: whether a visitorData refetch is allowed right now (budget left
+    // and cooldown elapsed). Called where a failed fetch would otherwise chain
+    // Player against synthetic VD.
+    bool refetchEligible() const;
+    QString failureReason(const QString &base, bool syntheticVd) const;
+    void markVisitorDataFailed();
 
     InnerTube *m_it = nullptr;
     QTimer *m_timeout = nullptr;
@@ -142,9 +148,27 @@ private:
     // VISIONOS is bot-walled unless visitorData came from a real YouTube page.
     // The vendored client's generateVisitorData() synthesises one and YouTube
     // rejects it (LOGIN_REQUIRED), so fetch it once per process and reuse it.
+    // A failed/empty fetch must NOT be treated as a permanent video failure:
+    // the resolver hits Player with synthetic VD, YouTube answers
+    // LOGIN_REQUIRED, and that is a visitorData problem, not a video problem
+    // (NEG-01). resolve() therefore emits synthetic-VD failure reasons with a
+    // `synthetic-vd:` prefix that ytneg::permanentFailureClass() skips, and a
+    // bounded cooldown refetch budget keeps the session from staying broken.
     QString m_visitorData;
     bool    m_vdStarted = false;
     bool    m_vdDone = false;
+    // NEG-01 refetch budget: an absent visitorData is a transient network
+    // condition (EOF-no-token / reset / oversized page), not a permanent one.
+    // Allow a bounded number of refetches, spaced by a cooldown, so a
+    // mid-session network recovery heals the resolve chain without a restart
+    // and without a fetch storm. Budget exhaustion leaves the resolve to run
+    // against synthetic VD — which is then tagged `synthetic-vd:` and never
+    // negative-cached — so playback is broken only for that attempt, not
+    // durably for 24 h.
+    static constexpr int kMaxVdRefetches = 3;
+    static constexpr qint64 kVdRefetchCooldownMs = 5000;
+    int     m_vdRefetchCount = 0;
+    qint64  m_vdLastFailMs = 0;
     bool    m_pendingStart = false;
     // Generation of the attempt waiting on the visitorData fetch. The fetch is
     // one-shot per process, so a re-resolve while it is in flight re-arms the
