@@ -130,3 +130,20 @@ void IdleTracker::setScriptActive(bool active)
         resetIdleState();
     }
 }
+
+void IdleTracker::setGameActive(bool active)
+{
+    if (m_gameActive == active)
+        return;
+    m_gameActive = active;
+    emit gameActiveChanged();
+
+    // As in setMpvActive/setScriptActive: only clear once nothing owns the
+    // screen. The frozen idle count itself is reset by the QML writer's paired
+    // resetActivity() on game end (Main.qml), exactly like the mpv/script
+    // writers, so the keyless return gets a full fresh threshold.
+    if (!blocked() && m_active) {
+        m_active = false;
+        emit activeChanged();
+    }
+}

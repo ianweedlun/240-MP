@@ -289,6 +289,23 @@ Window {
         }
     }
 
+    // RetroArch gameplay suppresses the screen saver too (IDLE-02): the game
+    // child owns the whole console and InputManager drops every key while it
+    // runs, so nothing reaches the idle tracker's event filter — without this
+    // flag the count ticks straight through the game and the saver is either
+    // already up at exit (long games) or fires early on return (short games).
+    // Same shape as the script writer above: block for the duration, pair
+    // resetActivity() so the keyless return gets a full fresh threshold.
+    Connections {
+        target: retroarchBackend
+        function onGameRunningChanged() {
+            idleTracker.gameActive = retroarchBackend.gameRunning
+            idleTracker.resetActivity()
+            if (!retroarchBackend.gameRunning)
+                root.dismissScreenSaver()
+        }
+    }
+
     // --- MODULE LOADER ---
     Loader {
         id: moduleLoader;
