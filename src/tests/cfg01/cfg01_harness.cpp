@@ -47,8 +47,10 @@ using namespace cfg01;
 
 static bool hasBoolSave()
 {
-    // Compile-time surface probe mirrored at runtime for conditional asserts.
-    if constexpr (requires(AppCore &c) { { c.save_setting(QString(), QString(), QVariant()) } -> std::same_as<bool>; })
+    // C++17 surface probe: FIX save_setting returns bool, PRE returns void.
+    if constexpr (std::is_same_v<decltype(std::declval<AppCore &>().save_setting(
+                                       std::declval<QString>(), std::declval<QString>(),
+                                       std::declval<QVariant>())), bool>)
         return true;
     else
         return false;
@@ -373,7 +375,7 @@ static int runArmB(const QString &rundir)
             foundTemp = true;
         }
         // O_TMPFILE: symlink target is "/path/#inode (deleted)" — unnamed.
-        if (link.contains(dataDir) && link.contains("deleted")) {
+        if (link.contains(dataDir.toUtf8()) && link.contains("deleted")) {
             sameFs = true;
             foundTemp = true;
         }

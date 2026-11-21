@@ -107,10 +107,12 @@ inline QString setupDataDir(const QString &rundir, const QByteArray &liveBytes)
 
 // Tier-1 shim: FIX save_setting returns bool; PRE returns void. The instrument
 // asserts the RETURN where the surface has one, and the disk observable always.
+// C++17 detection: decltype of the call expression (both branches parse for
+// either surface; the discarded one is never instantiated).
 template <typename Core>
 inline bool saveSettingShim(Core &core, const QString &m, const QString &k, const QVariant &v)
 {
-    if constexpr (requires { { core.save_setting(m, k, v) } -> std::same_as<bool>; }) {
+    if constexpr (std::is_same_v<decltype(core.save_setting(m, k, v)), bool>) {
         return core.save_setting(m, k, v);
     } else {
         core.save_setting(m, k, v);
