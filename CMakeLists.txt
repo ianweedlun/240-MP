@@ -502,6 +502,21 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME input-manager-telemetry COMMAND input-manager-telemetry-tests)
 
+    # IdleTracker blocking flags (IDLE-02): gameActive must freeze the idle
+    # count exactly like mpvActive/scriptActive, and the game-end reset pairing
+    # must give the keyless return a full fresh threshold. Accelerated 2 s
+    # threshold with real 1 s ticks; no display, no processes (QtGui only for
+    # the QKeyEvent type the event filter handles).
+    add_executable(idle-tracker-tests
+        src/tests/IdleTrackerTest.cpp
+        src/input/IdleTracker.cpp)
+    set_target_properties(idle-tracker-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(idle-tracker-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(idle-tracker-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME idle-tracker COMMAND idle-tracker-tests)
+
     # System-volume mixer abstraction: exercises the factory's backend
     # detection (PipeWire > ALSA > no-op) and the no-op fallback's contract.
     # No real audio hardware needed — the factory picks a no-op on WSL/CI, and
