@@ -93,9 +93,12 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
             finishUrlResolve(r.key);
             return;
         }
-        m_resolveStartMs.insert(r.key,
-                                QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
-        launchYtdlpResolve(r.videoId, r.resolution, r.key);
+        // No yt-dlp ladder (removed, NEG-01 convergence): a transient innertube
+        // failure surfaces to the caller and the next warm/focus/press triggers
+        // a fresh resolve. The resolver's bounded visitorData refetch budget
+        // heals mid-session network recoveries without a subprocess fallback.
+        emit playbackResolveFailed(r.videoId, r.reason);
+        finishUrlResolve(r.key);
     });
 }
 
@@ -1546,18 +1549,21 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
         finishUrlResolve(key);
         return;
     }
-    // One Innertube attempt per key: a spent key belongs to the fallback, so a
-    // failed resolve never retries in-process and never runs two resolvers.
+    // One Innertube attempt per key. A spent key or a busy resolver means this
+    // key never resolves in-process — surface a transient failure rather than
+    // spawning yt-dlp (ladder removed, NEG-01 convergence).
     if (m_itTried.contains(key)) {
-        launchYtdlpResolve(videoId, resolution, key);
+        emit playbackResolveFailed(videoId, QStringLiteral("RESOLVE_BUSY"));
+        finishUrlResolve(key);
         return;
     }
     m_itTried.insert(key);
     if (!m_itResolver->resolve(videoId, resolution, key)) {
         // Resolver busy with another key: this key never got a completion
-        // signal, so hand it straight to the fallback rather than stalling.
+        // signal. Surface a transient failure instead of stalling or spawning.
         m_itTried.remove(key);
-        launchYtdlpResolve(videoId, resolution, key);
+        emit playbackResolveFailed(videoId, QStringLiteral("RESOLVE_BUSY"));
+        finishUrlResolve(key);
     }
 }
 
@@ -1600,14 +1606,15 @@ void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &res
         }
 
         if (playlistPath.isEmpty()) {
-            // One release of redundancy, same ladder as the progressive path:
-            // yt-dlp resolves live HLS too. Backdate so ms covers the ladder.
+            // One release of redundancy removed with the yt-dlp ladder: a live
+            // HLS master that failed to shape surfaces a transient failure and
+            // the next warm/focus/press re-resolves natively.
             qWarning("[Youtube] live-hls-fail vid=%s ms=%lld err=%d",
                      qPrintable(videoId), static_cast<long long>(ms),
                      static_cast<int>(reply->error()));
             emit resolveTelemetry(videoId, QStringLiteral("live-hls-fail"), ms);
-            m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch() - ms);
-            launchYtdlpResolve(videoId, resolution, key);
+            emit playbackResolveFailed(videoId, QStringLiteral("LIVE_WAITING"));
+            finishUrlResolve(key);
             return;
         }
 
@@ -1619,104 +1626,6 @@ void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &res
         emit playbackUrlReady(videoId);
         finishUrlResolve(key);
     });
-}
-
-void YouTubeBackend::launchYtdlpResolve(const QString &videoId, const QString &resolution,
-                                        const QString &key)
-{
-    m_resolveStartMs.insert(key, QDateTime::currentMSecsSinceEpoch());
-    const QString fmt = ytdlFormatForResolution(resolution);
-    const QString bin = ytdlp::locate(m_dataRoot);
-    if (bin.isEmpty()) {
-        const qint64 ms = QDateTime::currentMSecsSinceEpoch()
-                          - m_resolveStartMs.remove(key);
-        qWarning("[Youtube] resolve fail vid=%s err=no-ytdlp", qPrintable(videoId));
-        emit resolveTelemetry(videoId, QStringLiteral("ytdlp-fail:no-ytdlp"), ms);
-        finishUrlResolve(key);
-        return;
-    }
-
-    auto *proc = new QProcess(this);
-    qWarning("[Youtube] resolve start (ytdlp) vid=%s fmt=%s", qPrintable(videoId), qPrintable(fmt));
-    QStringList args{
-        QStringLiteral("-g"),
-        QStringLiteral("--no-playlist"),
-        QStringLiteral("--no-warnings"),
-        QStringLiteral("-f"), fmt,
-        QStringLiteral("--"),
-        watchUrlFor(videoId),
-    };
-    if (QFile::exists(m_dataRoot + QStringLiteral("/cookies.txt")))
-        args << QStringLiteral("--cookies") << (m_dataRoot + QStringLiteral("/cookies.txt"));
-    connect(proc, &QProcess::finished, this, [this, proc, key, videoId]() {
-        const QList<QByteArray> lines = proc->readAllStandardOutput().split('\n');
-        QStringList urls;
-        for (const QByteArray &line : lines) {
-            const QString u = QString::fromUtf8(line).trimmed();
-            if (!u.isEmpty())
-                urls << u;
-        }
-        // #128: a not-yet-started live event is not a permanent failure and
-        // not an empty resolve — yt-dlp says so explicitly. Surface the wait
-        // instead of the generic "unavailable" text; never negative-cache it.
-        const QString stderrText = QString::fromUtf8(proc->readAllStandardError());
-        if (urls.isEmpty()
-            && stderrText.contains(QLatin1String("will begin in a few moments"))) {
-            const qint64 waitStartedMs = m_resolveStartMs.take(key);
-            const qint64 waitMs = QDateTime::currentMSecsSinceEpoch() - waitStartedMs;
-            emit resolveTelemetry(videoId, QStringLiteral("live-waiting"), waitMs);
-            emit playbackResolveFailed(videoId, QStringLiteral("LIVE_WAITING"));
-            finishUrlResolve(key);
-            proc->deleteLater();
-            return;
-        }
-        bool stored = false;
-        if (!urls.isEmpty()) {
-            const QString videoUrl = urls.value(0);
-            const QString audioUrl = urls.value(1);
-            // #128: live HLS URLs carry no expire param; give them the same
-            // short TTL as the shaped-master path so the fallback plays
-            // instead of dying at the expiry gate.
-            const bool isHls = videoUrl.contains(QLatin1String(".m3u8"))
-                || videoUrl.contains(QLatin1String("hls_playlist"));
-            qint64 expire = isHls
-                ? QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS
-                : yturl::expireEpochFromUrl(videoUrl);
-            if (!audioUrl.isEmpty() && !isHls) {
-                const qint64 audioExpire = yturl::expireEpochFromUrl(audioUrl);
-                if (audioExpire > 0 && (expire <= 0 || audioExpire < expire))
-                    expire = audioExpire;
-            }
-            if (expire > QDateTime::currentSecsSinceEpoch()) {
-                storeUrlCacheEntry(key, videoUrl, audioUrl, urls.size() == 1, expire);
-                emit playbackUrlReady(videoId);
-                stored = true;
-            }
-        }
-        const qint64 startedMs = m_resolveStartMs.take(key);
-        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startedMs;
-        qWarning("[Youtube] resolve done (ytdlp) vid=%s ms=%lld urls=%d stored=%d",
-               qPrintable(videoId), static_cast<long long>(ms),
-               urls.size(), stored ? 1 : 0);
-        emit resolveTelemetry(videoId,
-                              stored ? QStringLiteral("ytdlp") : QStringLiteral("ytdlp-empty"),
-                              ms);
-        finishUrlResolve(key);
-        proc->deleteLater();
-    });
-    connect(proc, &QProcess::errorOccurred, this,
-            [this, proc, key, videoId](QProcess::ProcessError processError) {
-                if (processError == QProcess::FailedToStart) {
-                    const qint64 ms = QDateTime::currentMSecsSinceEpoch()
-                                      - m_resolveStartMs.remove(key);
-                    qWarning("[Youtube] resolve fail err=failed-to-start");
-                    emit resolveTelemetry(videoId, QStringLiteral("ytdlp-fail:start"), ms);
-                    finishUrlResolve(key);
-                    proc->deleteLater();
-                }
-            });
-    QTimer::singleShot(kYtdlResolveTimeoutMs, proc, [proc]() { proc->kill(); });
-    proc->start(bin, args);
 }
 
 void YouTubeBackend::finishUrlResolve(const QString &key)

@@ -380,8 +380,6 @@ private:
     QSet<QString> m_itTried;
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
                                           const QString &key);
-    void                launchYtdlpResolve(const QString &videoId, const QString &resolution,
-                                            const QString &key);
     void                launchHlsResolve(const QString &videoId, const QString &resolution,
                                          const QString &key, const QString &hlsUrl);
     void                finishUrlResolve(const QString &key);
@@ -420,7 +418,6 @@ private:
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
     static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
     static constexpr int    kUrlCacheMaxEntries = 80;
-    static constexpr int    kYtdlResolveTimeoutMs = 30000; // outer bound on the fallback spawn
     // The in-process resolver is ~20x cheaper than a yt-dlp spawn, so one warm
     // pass can cover a whole list page instead of the front dozen rows.
     static constexpr int    kWarmListMax  = 50;  // entries warmed per list view
