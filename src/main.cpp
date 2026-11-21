@@ -334,10 +334,13 @@ int main(int argc, char *argv[]) {
                          rootWindow, [rootWindow, &displayHandoff] {
                              rootWindow->setVisible(true);
                              rootWindow->requestUpdate();
-                             QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
-                                              &displayHandoff,
-                                              &DisplayHandoff::completeRestore,
-                                              Qt::SingleShotConnection);
+                             // Hand the handle to DisplayHandoff so completeRestore()
+                             // can drop it on the timer-wins path (VT-01).
+                             displayHandoff.setFrameSwappedConnection(
+                                 QObject::connect(rootWindow, &QQuickWindow::frameSwapped,
+                                                  &displayHandoff,
+                                                  &DisplayHandoff::completeRestore,
+                                                  Qt::SingleShotConnection));
                          });
     }
 

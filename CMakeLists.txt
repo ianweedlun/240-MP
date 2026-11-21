@@ -1215,6 +1215,33 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME display-handoff-signal COMMAND display-handoff-tests)
 
+    # VT-01 regression gate: armed-connection + no-premature-restore contract.
+    # Linux-only (VT ioctls / linux/vt.h); needs libdrm for the interposed capture
+    # path. One executable, one ctest case per arm; RUN_SERIAL because the arms
+    # wait on the real 800 ms restore timer and CI runs ctest -j4.
+    if(UNIX AND NOT APPLE)
+        add_executable(display-handoff-connection-gate
+            src/util/tests/DisplayHandoffConnectionGate.cpp
+            src/util/DisplayHandoff.cpp)
+        set_target_properties(display-handoff-connection-gate PROPERTIES AUTOMOC ON)
+        target_include_directories(display-handoff-connection-gate PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/util ${Libdrm_INCLUDE_DIRS})
+        target_link_libraries(display-handoff-connection-gate PRIVATE
+            Qt6::Core Qt6::Gui Qt6::Quick ${Libdrm_LIBRARIES})
+        target_compile_options(display-handoff-connection-gate PRIVATE -Wall -Wextra)
+        foreach(gate_arm
+            sanity timer-wins frame-wins stale-frame-keepwindow inflight-hide
+            inflight-after-accumulation benign-after-return idempotence
+            ordering-hide ordering-keepwindow)
+            add_test(NAME display-handoff-gate-${gate_arm}
+                COMMAND display-handoff-connection-gate ${gate_arm})
+            set_tests_properties(display-handoff-gate-${gate_arm} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen;DISPLAY=;WAYLAND_DISPLAY="
+                TIMEOUT 180
+                RUN_SERIAL TRUE)
+        endforeach()
+    endif()
+
     # R-2 (issue #109): YouTube launch-guard routing. Loads the real Player.qml
     # with stub backends and asserts a Back in each launch phase routes to
     # sendKey (post-launch) vs goBack (pre-launch) — the launchDone flag, not the
