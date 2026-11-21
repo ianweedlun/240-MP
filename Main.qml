@@ -255,8 +255,10 @@ Window {
 
     // --- MPV PLAYBACK TRACKING ---
     // Block the screen saver while mpv is playing so it never flashes during or
-    // immediately after playback. The core guard is in IdleTracker (mpvActive
-    // property), which also resets the idle timer on transitions.
+    // immediately after playback. IdleTracker's mpvActive property freezes the
+    // idle count while blocked and resets it on the blocking->unblocked edge;
+    // the paired resetActivity() calls here additionally treat playback start
+    // as activity and are kept as defense in depth.
     Connections {
         target: mpvController
         function onPositionChanged(ms) {
@@ -283,6 +285,23 @@ Window {
             idleTracker.scriptActive = scriptsBackend.scriptBusy
             idleTracker.resetActivity()
             if (!scriptsBackend.scriptBusy)
+                root.dismissScreenSaver()
+        }
+    }
+
+    // RetroArch gameplay suppresses the screen saver too (IDLE-02): the game
+    // child owns the whole console and InputManager drops every key while it
+    // runs, so nothing reaches the idle tracker's event filter — without this
+    // flag the count ticks straight through the game and the saver is either
+    // already up at exit (long games) or fires early on return (short games).
+    // Same shape as the script writer above: block for the duration, pair
+    // resetActivity() so the keyless return gets a full fresh threshold.
+    Connections {
+        target: retroarchBackend
+        function onGameRunningChanged() {
+            idleTracker.gameActive = retroarchBackend.gameRunning
+            idleTracker.resetActivity()
+            if (!retroarchBackend.gameRunning)
                 root.dismissScreenSaver()
         }
     }
