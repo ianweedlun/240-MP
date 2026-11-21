@@ -1450,6 +1450,7 @@ if(BUILD_TESTS)
     # bands are wall-clock and must not race parallel ctest load.
     add_executable(mpv-hold-repeat-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
