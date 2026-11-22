@@ -1,0 +1,3 @@
+# Review is auto-requested from the owner on every new PR, any author.
+# No new merge gate: the Merge guard sets require_code_owner_review=false.
+* @ianweedlun
