@@ -277,6 +277,40 @@ private Q_SLOTS:
             QVERIFY(spinUntil([&]{ return !anyMpvChild(); }, 2000));
         }
     }
+    // RES-01: the quit intent must live in the controller (both the QML path
+    // and the Pi's direct-IPC key path converge there), be set by a guaranteed
+    // pre-connect Back and by stop(), and be cleared on the NEXT launch so a
+    // stale flag cannot clear a different video's saved marker.
+    void spec5_userStopIntentLifecycle() {
+        QTemporaryDir data; QVERIFY(data.isValid());
+        QVERIFY(writeConfig(data.path(), QStringLiteral("OFF")));
+        AppCore core(g_appRoot, data.path());
+        MpvController mpv(g_appRoot, data.path(), &core, nullptr);
+        QVERIFY(!mpv.userStopIntent());
+
+        mpv.loadAndPlay(g_fixture, 0.0f, 0, -2, {}, {}, false, -1,
+                        0.0f, QString(), false, QString(), false, {},
+                        0.0f, false, {});
+        mpv.sendKey(QStringLiteral("ESC"));      // pre-connect -> forceStop
+        QVERIFY2(mpv.userStopIntent(), "pre-connect Back did not set quit intent");
+        QVERIFY(spinUntil([&]{ return !anyMpvChild(); }, 3000));
+
+        mpv.loadAndPlay(g_fixture, 0.0f, 0, -2, {}, {}, false, -1,
+                        0.0f, QString(), false, QString(), false, {},
+                        0.0f, false, {});
+        QVERIFY2(!mpv.userStopIntent(), "new launch inherited a stale quit intent");
+
+        mpv.stop();
+        QVERIFY2(mpv.userStopIntent(), "explicit stop() did not set quit intent");
+        QVERIFY(spinUntil([&]{ return !anyMpvChild(); }, 3000));
+
+        mpv.loadAndPlay(g_fixture, 0.0f, 0, -2, {}, {}, false, -1,
+                        0.0f, QString(), false, QString(), false, {},
+                        0.0f, false, {});
+        QVERIFY2(!mpv.userStopIntent(), "quit intent survived a second launch");
+        mpv.stop();
+        QVERIFY(spinUntil([&]{ return !anyMpvChild(); }, 3000));
+    }
 };
 
 QTEST_MAIN(MpvQuitIntentTest)

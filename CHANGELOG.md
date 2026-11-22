@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: early mpv death wiped the saved resume position (RES-01)
+- Root cause: mpv's exit taxonomy maps a crash, kill, or missing binary to the same `"stopped"` reason as a deliberate Back/stop. The YouTube view treated every early `"stopped"` with an existing marker as a user stop and wrote `0` over it. A view-side flag would miss the Pi's direct-IPC key path, where `sendKey()` drives quit without QML.
+- Fix (direction c): `MpvController` now exposes `userStopIntent`, set by `stop()`, `forceStop()`, and mpv's `end-file` reason `quit`/`stop`, and reset on every `loadAndPlay()`. The YouTube view clears a saved marker only when `reason === "stopped"` **and** `userStopIntent` is true; a spontaneous early death writes nothing. Other modules keep the generic `"stopped"` semantics.
+- Gates: `youtube-player-smoke` case 6 still proves a genuine user stop persists zero; new case 9 proves an intent-less early death leaves the 30 s marker intact (RED with the gate removed). `mpv-quit-intent` spec 5 proves the flag is set by pre-connect Back and `stop()`, and cleared on the next launch (RED with intent recording disabled).
+
 ### Fixed — YouTube: "Play from beginning" on a finished live event fell into mpv's ytdl hook
 - Root cause (owner CRT, `RajKCoxA-x4`): a cold live-HLS resolve lands in ~400 ms while the resume overlay is still open. `onPlaybackUrlReady` dropped that success because only sync *failures* were remembered; choosing a resume option armed a 4 s wait with nothing pending, then `yt-fallback` handed the watch URL to mpv's ytdl hook — system yt-dlp reports "This live event has ended" → `Failed to recognize file format` → `PLAYBACK FAILED`. Backing out and retrying worked only because the cache was then warm.
 - Second half of the same failure: the shaped live-HLS entry cached at `now + 180 s`, but every read applies a 120 s safety margin — a 60 s usable window. Choosing after that window made even a remembered success find no cached pair and fall through to ytdl. Finished broadcasts (`post_live`, `isLive=0` + `source/yt_live_broadcast`) are fixed snapshots, so their cache entry now expires at the shaped playlist's own manifest `expire/` instead (`minExpiryInPlaylist`), leaving rolling live events on the short TTL.
