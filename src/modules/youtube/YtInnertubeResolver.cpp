@@ -329,6 +329,7 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
             r.elapsedMs = m_timer.elapsed();
             r.ok = true;
             r.hlsManifestUrl = sd.hlsManifestUrl;
+            r.postLive = !player.response.videoDetails.isLive;
             emitResult(r);
             return;
         }

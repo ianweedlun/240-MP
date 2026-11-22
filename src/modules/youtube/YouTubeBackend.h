@@ -396,7 +396,8 @@ private:
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
                                           const QString &key);
     void                launchHlsResolve(const QString &videoId, const QString &resolution,
-                                         const QString &key, const QString &hlsUrl);
+                                         const QString &key, const QString &hlsUrl,
+                                         bool postLive);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
