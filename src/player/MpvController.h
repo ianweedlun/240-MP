@@ -15,6 +15,10 @@ class MpvController : public QObject {
     Q_PROPERTY(int position    READ position    NOTIFY positionChanged)
     Q_PROPERTY(int duration    READ duration    NOTIFY durationChanged)
     Q_PROPERTY(int playlistPos READ playlistPos NOTIFY playlistPosChanged)
+    // RES-01: true from an explicit user quit/stop until the next launch. Lives
+    // in the controller because both QML key delivery and the Pi's direct-IPC
+    // path converge on sendKey()/stop(); a view-side flag misses the latter.
+    Q_PROPERTY(bool userStopIntent READ userStopIntent NOTIFY userStopIntentChanged)
 
 public:
     explicit MpvController(const QString &appRoot, const QString &dataRoot,
@@ -26,6 +30,7 @@ public:
     int position()    const { return m_position;    }
     int duration()    const { return m_duration;    }
     int playlistPos() const { return m_playlistPos; }
+    bool userStopIntent() const { return m_userStopIntent; }
 
     // Per-instance IPC socket / mpv log paths (T2, issue #111). Published so
     // tooling and the regression harness can discover this instance's socket
@@ -119,6 +124,7 @@ signals:
     void volumeChanged(int percent);
     void durationChanged(int ms);
     void playlistPosChanged(int pos);
+    void userStopIntentChanged();
     // Emitted exactly once when mpv exits, with the reason it ended:
     //   "eof"     — file played to its natural end. (What a module does with this
     //               is its own concern.  as an example: Plex may autoplay the next episode)
@@ -229,6 +235,9 @@ private:
     int           m_position     = 0;
     int           m_duration     = 0;
     int           m_playlistPos  = -1;
+    // RES-01: explicit quit/stop this session. Reset at each loadAndPlay; never
+    // inferred from mpv's exit code (a crash and a user stop both say "stopped").
+    bool          m_userStopIntent = false;
     int           m_volume       = 100;
     bool          m_headlessMode = false;
     int           m_displayIndex = 0;   // see setTargetDisplay()

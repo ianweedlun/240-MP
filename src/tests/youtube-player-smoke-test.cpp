@@ -145,6 +145,8 @@ signals:
 
 class StubMpv : public QObject {
     Q_OBJECT
+    Q_PROPERTY(bool userStopIntent READ userStopIntent WRITE setUserStopIntent
+               NOTIFY userStopIntentChanged)
 public:
     struct Play {
         QString url;
@@ -174,10 +176,20 @@ public:
     }
     Q_INVOKABLE void setOscRanges(const QString &) {}
     Q_INVOKABLE void sendKey(const QString &) {}
+    bool userStopIntent() const { return m_userStopIntent; }
+    void setUserStopIntent(bool value) {
+        if (m_userStopIntent == value) return;
+        m_userStopIntent = value;
+        emit userStopIntentChanged();
+    }
 signals:
     void positionChanged(int);
     void durationChanged(int);
     void playbackEnded(int, int, const QString &);
+    void userStopIntentChanged();
+
+private:
+    bool m_userStopIntent = false;
 };
 
 static int failures = 0;
@@ -423,6 +435,7 @@ int main(int argc, char **argv) {
         check(mpv.plays.size() == 1 && mpv.plays[0].startSeconds == 0.0f,
               "case6: fresh playback starts at zero");
         emit mpv.positionChanged(0);
+        mpv.setUserStopIntent(true);   // genuine Back/ESC quit, direct-IPC path included
         emit mpv.playbackEnded(0, 533000, QStringLiteral("stopped"));
         QTest::qWait(50);
         check(yt.savedPositionWrites == QList<int>{0},
@@ -518,6 +531,44 @@ int main(int argc, char **argv) {
         }
         check(QQmlProperty::read(view, "waitingForResolve").toBool() == false,
               "case8: consumed success cancels the resolve wait");
+        delete view;
+    }
+
+    // --- Case 9: early mpv death without quit intent preserves the marker ----
+    // RES-01: a video that dies a second in also reports "stopped" (crash,
+    // kill, missing binary), but the user never chose to stop. Only a real
+    // quit may clear the saved position; this case must never write one.
+    {
+        StubYoutube yt;
+        StubMpv mpv;
+        yt.warmPair = true;
+        yt.savedPosition = {{QStringLiteral("pos"), 30000},
+                            {QStringLiteral("title"), QStringLiteral("SMOKE VIDEO")},
+                            {QStringLiteral("channelName"), QStringLiteral("SMOKE CHANNEL")}};
+        bool loadError = false;
+        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                   QStringLiteral("VID9"), repoRoot, &loadError);
+        check(!loadError && view != nullptr, "case9: Player.qml loads with a saved marker");
+        if (!view) return 1;
+        QTest::qWait(50);
+        const bool invoked = QMetaObject::invokeMethod(
+            view, "playAt", Qt::DirectConnection, Q_ARG(QVariant, QVariant(0.0)));
+        check(invoked, "case9: START FROM THE BEGINNING invokes playAt(0)");
+        int waitMs = 0;
+        while (mpv.plays.isEmpty() && waitMs < 1000) {
+            QTest::qWait(20);
+            waitMs += 20;
+        }
+        check(mpv.plays.size() == 1 && mpv.plays[0].startSeconds == 0.0f,
+              "case9: fresh playback starts at zero");
+        emit mpv.positionChanged(0);
+        check(!mpv.userStopIntent(), "case9: a crash carries no controller quit intent");
+        emit mpv.playbackEnded(0, 0, QStringLiteral("stopped"));
+        QTest::qWait(50);
+        check(yt.savedPositionWrites.isEmpty(),
+              "case9: early mpv death writes no position at all");
+        check(yt.savedPosition.value(QStringLiteral("pos")).toInt() == 30000,
+              "case9: the 30 s resume marker survives intact");
         delete view;
     }
 

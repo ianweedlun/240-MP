@@ -487,11 +487,18 @@ FocusScope {
                 youtubeBackend.savePosition(videoId, 0, item.title || "", item.channelName || "")
             else if (pos > 5000)
                 youtubeBackend.savePosition(videoId, pos, item.title || "", item.channelName || "")
-            else if (reason === "stopped" && savedPositionMs > 0)
+            else if (reason === "stopped" && mpvController.userStopIntent
+                     && savedPositionMs > 0)
+                // RES-01: only a genuine user quit/stop clears the old marker.
+                // The controller sets userStopIntent on stop()/forceStop() and
+                // on mpv's end-file "quit"/"stop" — both the QML key path and
+                // the Pi's direct-IPC path converge there. An early mpv death
+                // (crash/kill/missing binary) also says "stopped" but carries
+                // no intent, so it must preserve the saved position.
                 // START FROM THE BEGINNING leaves savedPositionMs at the old
-                // marker. If the user exits before the 5 s save threshold,
-                // clear that marker instead of resurrecting it on re-entry.
-                // Failed launches take the branch above and must preserve it.
+                // marker; a real user stop inside 5 s clears it instead of
+                // resurrecting it on re-entry. Failed launches take the branch
+                // above and must preserve it.
                 youtubeBackend.savePosition(videoId, 0, item.title || "", item.channelName || "")
             var nextItemEnabled = appCore.get_setting(moduleRoot.moduleId, "autoplay_playlist_items")
             if (reason === "eof" && (nextItemEnabled === true || nextItemEnabled === "ON")
