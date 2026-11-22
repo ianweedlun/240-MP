@@ -35,6 +35,13 @@ public:
     QString socketPath()  const { return m_socketPath;  }
     QString logFilePath() const { return m_logFilePath; }
 
+    // ffmpeg restricts nested protocols to file,crypto,data when the top-level
+    // playlist is a local file. The YouTube live resolver writes a shaped
+    // local .m3u8 whose variants are https, so mpv demuxes zero streams and
+    // the player reports launch-failed unless the whitelist is widened.
+    // Static so the mpv regression gate can build the exact production args.
+    static QStringList extraArgsForLocalHls(const QString &url);
+
     Q_INVOKABLE void loadAndPlay(const QString &url, float startSeconds,
                                   int audioTrack, int subTrack,
                                   const QStringList &subFiles = {},

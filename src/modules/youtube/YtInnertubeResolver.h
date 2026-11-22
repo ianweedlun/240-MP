@@ -53,6 +53,11 @@ struct YtResolveResult {
     // playlist, shape it (ythls::filterMaster) and play it as a single URL.
     // Progressive pairs from live responses are not demuxable by mpv.
     QString hlsManifestUrl;
+    // Finished live event (post_live): isLive=0 but the manifest still carries
+    // source/yt_live_broadcast. Its shaped playlist is a snapshot of a
+    // completed broadcast, so it can be cached until the manifest's own
+    // expire= instead of the short rolling-live TTL.
+    bool    postLive = false;
 };
 
 Q_DECLARE_METATYPE(YtResolveResult)

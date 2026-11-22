@@ -474,6 +474,53 @@ int main(int argc, char **argv) {
         delete view;
     }
 
+    // --- Case 8: cold resolve lands while the resume overlay is open --------
+    // Owner CRT 2026-11-22 (RajKCoxA-x4): re-entered a finished live event with
+    // a saved marker, picked "Play from beginning" and got PLAYBACK FAILED.
+    // The fast HLS resolve landed while the overlay was still up, before
+    // playAt() armed the 4 s wait. The success was dropped; the choice then
+    // timed out into mpv's ytdl hook, which cannot play an ended live event.
+    // Warm retries worked only because the cache was already populated.
+    {
+        StubYoutube yt;
+        StubMpv mpv;
+        yt.warmPair = false;
+        yt.savedPosition = {{QStringLiteral("pos"), 30000},
+                            {QStringLiteral("title"), QStringLiteral("SMOKE VIDEO")},
+                            {QStringLiteral("channelName"), QStringLiteral("SMOKE CHANNEL")}};
+        bool loadError = false;
+        QObject *view = loadPlayer(engine, &core, &root, &module, &yt, &mpv,
+                                   QStringLiteral("VID8"), repoRoot, &loadError);
+        check(!loadError && view != nullptr, "case8: cold Player.qml loads with a resume marker");
+        if (!view) return 1;
+        QTest::qWait(50);
+        check(QQmlProperty::read(view, "overlayVisible").toBool(),
+              "case8: resume overlay holds playback");
+        check(mpv.plays.isEmpty(), "case8: nothing launches while overlay is open");
+        yt.warmPair = true;                              // resolve lands, cache fills
+        emit yt.playbackUrlReady(QStringLiteral("VID8"));
+        QTest::qWait(50);
+        check(mpv.plays.isEmpty(), "case8: early success is remembered, not launched early");
+        const bool invoked = QMetaObject::invokeMethod(
+            view, "playAt", Qt::DirectConnection, Q_ARG(QVariant, QVariant(0.0)));
+        check(invoked, "case8: START FROM THE BEGINNING invokes playAt(0)");
+        int waited = 0;
+        while (mpv.plays.isEmpty() && waited < 1000) {
+            QTest::qWait(20);
+            waited += 20;
+        }
+        check(mpv.plays.size() == 1,
+              "case8: remembered success launches at once (no 4 s ytdl fallback)");
+        if (!mpv.plays.isEmpty()) {
+            check(mpv.plays[0].extraArgs.contains(QStringLiteral("--ytdl=no")),
+                  "case8: direct cached URL, never mpv's ytdl hook");
+            check(mpv.plays[0].startSeconds == 0.0f, "case8: begins at zero");
+        }
+        check(QQmlProperty::read(view, "waitingForResolve").toBool() == false,
+              "case8: consumed success cancels the resolve wait");
+        delete view;
+    }
+
     std::printf(failures == 0 ? "ALL PASS\n" : "%d FAILURE(S)\n", failures);
     return failures == 0 ? 0 : 1;
 }

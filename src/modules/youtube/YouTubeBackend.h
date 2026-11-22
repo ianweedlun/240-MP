@@ -15,6 +15,7 @@
 #include "../../util/YtSponsorEdl.h"
 #include "../../util/YtSponsorTtl.h"
 #include "../../util/YtPendingReplay.h"
+#include "../../util/YtUrlFresh.h"
 
 class YtInnertubeResolver;
 
@@ -395,7 +396,8 @@ private:
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
                                           const QString &key);
     void                launchHlsResolve(const QString &videoId, const QString &resolution,
-                                         const QString &key, const QString &hlsUrl);
+                                         const QString &key, const QString &hlsUrl,
+                                         bool postLive);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
@@ -430,7 +432,7 @@ private:
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
     static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // browse walks are cheap; keep it parallel
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
-    static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
+    static constexpr qint64 kUrlSafetyMarginS   = yturl::kSafetyMarginS; // buffer+launch slack
     static constexpr int    kUrlCacheMaxEntries = 80;
     // The in-process resolver is ~20x cheaper than a subprocess spawn, so one
     // warm pass can cover a whole list page instead of the front dozen rows.
