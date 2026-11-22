@@ -1595,10 +1595,10 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 // #128 live route: one bounded GET of the HLS master, shaped to the resolution
 // cap, written to a per-video playlist file mpv demuxes as a single stream
 // (ffmpeg keeps A/V sync inside one HLS presentation — two independent live
-// playlists would drift). The cache entry is the FILE PATH with a 60 s TTL:
-// live segments roll, so a warm hit inside the minute reuses the just-written
-// file and anything older re-resolves a fresh master.
-static constexpr qint64 kLivePlaylistTtlS = 60;
+// playlists would drift). The cache entry is the FILE PATH. Every read path
+// checks freshness with the 120 s URL margin, so the old 60 s TTL made the
+// entry born stale: the shared live TTL leaves a ~60 s usable warm window,
+// after which the master is re-resolved.
 static constexpr qint64 kMaxHlsMasterBytes = 1024 * 1024;
 
 void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &resolution,
@@ -1644,7 +1644,7 @@ void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &res
         }
 
         storeUrlCacheEntry(key, playlistPath, QString(), true,
-                           QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS);
+                           QDateTime::currentSecsSinceEpoch() + yturl::kLivePlaylistTtlS);
         qWarning("[Youtube] resolve done (live-hls) vid=%s ms=%lld",
                  qPrintable(videoId), static_cast<long long>(ms));
         emit resolveTelemetry(videoId, QStringLiteral("live-hls"), ms);

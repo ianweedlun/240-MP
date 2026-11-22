@@ -20,6 +20,14 @@
 
 namespace yturl {
 
+// URL-cache freshness policy, shared by the backend and its pure tests. A
+// cached entry is served only while it outlives kSafetyMarginS (buffer + launch
+// slack). Live HLS entries cache a shaped playlist FILE PATH with no expire=
+// parameter, so their TTL must exceed that margin: at TTL <= margin the entry
+// is born stale and every warm hit re-resolves the master.
+inline constexpr qint64 kSafetyMarginS    = 120;
+inline constexpr qint64 kLivePlaylistTtlS = 180;  // ~60 s warm window after the margin
+
 // expire= parameter as epoch seconds; 0 when absent or malformed. Two URL
 // dialects carry it: progressive googlevideo streams use query parameters
 // (?expire= or &expire= — decoys like eexpire= can't hit because the match

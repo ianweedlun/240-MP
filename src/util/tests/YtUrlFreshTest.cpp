@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include <QDateTime>
 
 #include "../YtUrlFresh.h"
 
@@ -29,6 +30,7 @@ private slots:
     void freshVsSafetyMargin();
     void pruneDropsExpiredThenCapsByNewestWindow();
     void cacheKeyVersionInvalidatesPreFixPairs();
+    void liveHlsPlaylistWarmHitIsFresh();
 };
 
 void YtUrlFreshTest::parseExpireParamBoundaries()
@@ -128,6 +130,24 @@ void YtUrlFreshTest::cacheKeyVersionInvalidatesPreFixPairs()
     QVERIFY(cache.contains(legacyKey));
     QVERIFY(yturl::cacheKeyFor(videoId, format)
             != yturl::cacheKeyFor(videoId, QStringLiteral("bv+ba[height<=720]")));
+}
+
+void YtUrlFreshTest::liveHlsPlaylistWarmHitIsFresh()
+{
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    // launchHlsResolve writes expire = now + kLivePlaylistTtlS; every cache
+    // read applies kSafetyMarginS. A live playlist entry must be usable on
+    // the warm hit, not born stale because its TTL was shorter than the margin.
+    QVERIFY2(yturl::kLivePlaylistTtlS > yturl::kSafetyMarginS,
+             "live HLS TTL must outlive the URL freshness safety margin");
+    const qint64 expire = now + yturl::kLivePlaylistTtlS;
+    QVERIFY2(yturl::urlFresh(expire, now, yturl::kSafetyMarginS),
+             "live HLS playlist entry is stale on arrival — warm hits re-resolve");
+    // The 60 s pre-fix TTL was always stale; the usable window afterwards is
+    // TTL - margin (~60 s), matching the original "warm hit inside the minute".
+    QVERIFY(!yturl::urlFresh(now + 60, now, yturl::kSafetyMarginS));
+    QVERIFY(yturl::urlFresh(expire, now + 59, yturl::kSafetyMarginS));
+    QVERIFY(!yturl::urlFresh(expire, now + 61, yturl::kSafetyMarginS));
 }
 
 QTEST_MAIN(YtUrlFreshTest)
