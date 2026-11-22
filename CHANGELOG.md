@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: "Play from beginning" after a fast cold resolve fell into the ytdl fallback
+- Root cause (owner CRT, `RajKCoxA-x4`): opening a video with a saved resume marker starts the cold resolve in `preparePlayback()` while the resume overlay stays open. A live-HLS resolve lands in ~350 ms — before `playAt()` arms `waitingForResolve` — and `onPlaybackUrlReady` dropped that success (only sync *failures* were remembered). Picking "Play from beginning" then armed a 4 s wait with no pending success, timed out into `yt-fallback`, and handed the watch URL to mpv's ytdl hook; system yt-dlp reports "This live event has ended" for a post_live video → `Failed to recognize file format`, exit 2 → `PLAYBACK FAILED / launch-failed`. Backing out and retrying worked because the cache was then warm.
+- Fix: remember an unarmed success in `pendingResolveReadyId` (mirror of `pendingResolveFailure`) and consume it in `playAt()` via the shared `launchFromReadyUrl()` helper. The direct cached URL path is used immediately; no ytdl fallback.
+- Gate: `youtube-player-smoke` case 8 reproduces the overlay timing with a stub resolve landing before `playAt(0)`; asserts an immediate direct launch with `--ytdl=no`. RED with consumption disabled, GREEN with the fix.
+
 ### Fixed — YouTube: finished live events reached mpv but still failed at launch (issue #145)
 - Root cause: the post_live routing fix hands mpv a shaped LOCAL `/tmp/240mp-yt-hls-<id>.m3u8` whose variants are `https`. ffmpeg restricts nested protocols to `file,crypto,data` when the top-level playlist is a file, so every variant was rejected (`Protocol 'https' not on whitelist 'file,crypto,data'`), mpv demuxed zero streams, and Player.qml surfaced `PLAYBACK FAILED / reason=launch-failed`. The resolver contract cases proved only the routing decision with a canned response — they never launched mpv, so they stayed green while the owner's CRT failed.
 - Fix: `MpvController::extraArgsForLocalHls` adds the bracketed `--demuxer-lavf-o=protocol_whitelist=[...]` to local `.m3u8` launches (mpv issue #9912 syntax). The flag is shared with the test so it exercises production code.

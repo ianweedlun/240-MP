@@ -144,6 +144,7 @@ FocusScope {
         lastOpenWasWarm = false
         appCore.note_state("yt-play", "vid=" + videoId + " path=cold res=" + resolution)
         pendingResolveFailure = ""   // fresh sequence: a remembered failure is stale
+        pendingResolveReadyId = ""
         resolveArmedForPlay = true    // the resolve below may fail synchronously
         youtubeBackend.resolvePlayback(videoId, resolution)
         return false
@@ -178,6 +179,11 @@ FocusScope {
     // view would sit on LOADING until the 4 s watchdog. The handler remembers
     // it here instead; playAt() consumes it right after arming.
     property string pendingResolveFailure: ""
+    // Mirror for a SUCCESS that lands before playAt() arms the wait — the
+    // resume-overlay case. Without it, picking "Play from beginning" after a
+    // fast cold resolve times out into mpv's ytdl fallback, which cannot play
+    // an ended live event (post_live) at all.
+    property string pendingResolveReadyId: ""
     // true only between the cold-path resolvePlayback() call and the playAt()
     // that follows it: the window in which an un-armed failure belongs to a
     // launch sequence (warm-up and warm-queue resolve failures must NOT be
@@ -188,6 +194,30 @@ FocusScope {
     // The in-process Innertube resolve answers in well under a second, so 4 s
     // covers its timeout with margin; past it we take the ytdl path (mpv's
     // ytdl hook) as the always-works fallback.
+    // Consume a resolved URL from the cache and launch. Shared by the ready
+    // handler and by playAt() when the success landed while the resume overlay
+    // was still open (no wait armed yet).
+    function launchFromReadyUrl() {
+        var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
+        const direct = youtubeBackend.cachedPlaybackUrl(playerRoot.videoId, resolution)
+        const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
+        const single = youtubeBackend.cachedPlaybackSingle(playerRoot.videoId, resolution)
+        if (direct !== "" && (directAudio !== "" || single)) {
+            appCore.note_state("yt-resolve", "vid=" + playerRoot.videoId + " ok pair-ready")
+            playerRoot.directPlayUrl = direct
+            playerRoot.directAudioUrl = directAudio
+            playerRoot.ytdlArgs = ["--ytdl=no"]
+            // Launch depends ONLY on the stream URL pair. Segments are a
+            // prefetch side-channel: whatever is cached at doPlay is what
+            // this play gets, and a dead sponsor.ajay.app adds zero wait.
+            playerRoot.play(playerRoot.pendingPlayStartMs)
+            return true
+        }
+        // No pair: let the wait timer's ytdl fallback handle it rather than
+        // racing a second resolve.
+        return false
+    }
+
     Timer {
         id: resolveWaitTimer
         interval: 4000
@@ -207,28 +237,22 @@ FocusScope {
     Connections {
         target: youtubeBackend
         function onPlaybackUrlReady(readyVideoId) {
-            if (!playerRoot.waitingForResolve || readyVideoId !== playerRoot.videoId)
+            if (!playerRoot.waitingForResolve || readyVideoId !== playerRoot.videoId) {
+                // A cold resolve can land while the resume overlay is still open
+                // (playAt has not armed the wait). Remember the SUCCESS the same
+                // way sync failures are remembered, or the user's next choice
+                // falls through to the 4 s ytdl watchdog — which cannot play an
+                // ended live event and shows PLAYBACK FAILED on the CRT.
+                if (playerRoot.resolveArmedForPlay && readyVideoId === playerRoot.videoId
+                    && playerRoot.directPlayUrl === "")
+                    playerRoot.pendingResolveReadyId = readyVideoId
                 return
-            playerRoot.pendingResolveFailure = ""   // success supersedes a remembered sync failure
+            }
+            playerRoot.pendingResolveFailure = ""
+            playerRoot.pendingResolveReadyId = ""
             playerRoot.waitingForResolve = false
             resolveWaitTimer.stop()
-            // The cache now holds the fresh pair — re-arm the direct path.
-            var resolution = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
-            const direct = youtubeBackend.cachedPlaybackUrl(playerRoot.videoId, resolution)
-            const directAudio = youtubeBackend.cachedPlaybackAudioUrl(playerRoot.videoId, resolution)
-            const single = youtubeBackend.cachedPlaybackSingle(playerRoot.videoId, resolution)
-            if (direct !== "" && (directAudio !== "" || single)) {
-                appCore.note_state("yt-resolve", "vid=" + playerRoot.videoId + " ok pair-ready")
-                playerRoot.directPlayUrl = direct
-                playerRoot.directAudioUrl = directAudio
-                playerRoot.ytdlArgs = ["--ytdl=no"]
-                // Launch depends ONLY on the stream URL pair. Segments are a
-                // prefetch side-channel: whatever is cached at doPlay is what
-                // this play gets, and a dead sponsor.ajay.app adds zero wait.
-                playerRoot.play(playerRoot.pendingPlayStartMs)
-            }
-            // If the pair somehow isn't there, let the wait timer's ytdl
-            // fallback handle it rather than racing a second resolve.
+            playerRoot.launchFromReadyUrl()
         }
         function onPlaybackResolveFailed(failedVideoId, reason) {
             if (failedVideoId !== playerRoot.videoId)
@@ -291,6 +315,13 @@ FocusScope {
             errorMessage = failureReason === "LIVE_WAITING"
                           ? "LIVE EVENT HASN'T STARTED YET\n\nCHECK BACK SOON"
                           : "PLAYBACK FAILED\n\nTHIS VIDEO IS UNAVAILABLE"
+        } else if (pendingResolveReadyId !== "") {
+            // Resolve already landed while the resume overlay was open.
+            pendingResolveReadyId = ""
+            if (launchFromReadyUrl()) {
+                waitingForResolve = false
+                resolveWaitTimer.stop()
+            }
         }
     }
 
