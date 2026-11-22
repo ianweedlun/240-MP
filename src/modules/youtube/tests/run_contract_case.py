@@ -64,6 +64,17 @@ CASES = {
     # Pre-fix code serves the pair (vod=1) and mpv fails to demux it.
     "live-hls-with-pair": {"delay_ms": 0, "observe_ms": 1500, "expect": "live-hls",
                            "player_mode": "live-hls-with-pair"},
+    # 2026-11-22 defect: a FINISHED live event (post_live) is isLive=0 with a
+    # live-broadcast manifest and dead live-ingest pair URLs. The resolver
+    # must take the HLS route off the manifest's source/yt_live_broadcast
+    # marker. Pre-fix code takes the pair (vod=1) and mpv cannot demux it.
+    "post-live-hls":     {"delay_ms": 0, "observe_ms": 1500, "expect": "live-hls",
+                          "player_mode": "post-live"},
+    # Negative control: premiered-live VOD (isLiveContent=1, manifest with
+    # source/youtube, working pair). Must stay on the pair route — this is
+    # what catches an isLiveContent-based misclassification.
+    "premiered-vod-pair": {"delay_ms": 0, "observe_ms": 1500, "expect": "success",
+                           "player_mode": "premiered-vod"},
 }
 
 

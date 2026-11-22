@@ -308,7 +308,20 @@ void YtInnertubeResolver::startPlayer(qint64 generation)
             emitResult(r);
             return;
         }
-        if (player.response.videoDetails.isLive && !sd.hlsManifestUrl.isEmpty()) {
+        // Live-origin content is HLS-only. A running event (isLive) carries
+        // an HLS master. A FINISHED live event (post_live: was_live,
+        // isLive=0) is served through the same live-broadcast pipeline: its
+        // manifest carries source/yt_live_broadcast and its progressive
+        // "pair" URLs are live-ingest URLs mpv cannot demux ("Failed to
+        // recognize file format", owner CRT 2026-11-22). Route both through
+        // the HLS master. Normal VODs also carry a manifest now, but with
+        // source/youtube and a working pair — the manifest's source marker,
+        // not isLiveContent (which is 1 for ordinary premiered-live VODs
+        // whose pairs play fine), is the live-pipeline signal.
+        const bool liveBroadcastManifest = !sd.hlsManifestUrl.isEmpty()
+            && (player.response.videoDetails.isLive
+                || sd.hlsManifestUrl.contains(QLatin1String("source/yt_live_broadcast")));
+        if (liveBroadcastManifest) {
             YtResolveResult r;
             r.videoId = m_videoId;
             r.resolution = m_resolution;

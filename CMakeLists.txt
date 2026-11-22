@@ -1214,7 +1214,8 @@ if(BUILD_TESTS)
         target_compile_options(yt-resolver-contract-probe PRIVATE -Wall -Wextra)
     endif()
     foreach(contract_case delayed-abandoned near-deadline fast-healthy
-                         live-waiting live-hls live-hls-with-pair)
+                         live-waiting live-hls live-hls-with-pair
+                         post-live-hls premiered-vod-pair)
         add_test(NAME yt-resolver-contract-${contract_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_contract_case.py

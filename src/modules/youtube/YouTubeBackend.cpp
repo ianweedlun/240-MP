@@ -1498,7 +1498,8 @@ bool YouTubeBackend::cachedPlaybackSingle(const QString &videoId,
 }
 
 void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
-                                         const QString &resolution)
+                                         const QString &resolution,
+                                         bool allowRetry)
 {
     if (videoId.isEmpty())
         return;
@@ -1507,10 +1508,11 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
     if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
         return; // nothing stored for this pair: the cold path is already in effect
     // A cached URL that failed to PLAY must not be re-minted by the same
-    // resolver. invalidateCachedUrl is only called on a playback failure, so
-    // mark the key's in-process attempt spent: the key surfaces RESOLVE_BUSY
-    // rather than looping resolve -> 403 -> evict -> resolve on the same client.
-    m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
+    // resolver — unless the caller is the warm-403 cure, whose whole point
+    // is a same-session re-resolve (see header). Spending the key on that
+    // path made every cure an instant RESOLVE_BUSY.
+    if (!allowRetry)
+        m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
     QFile f(urlCacheFilePath());
     if (!f.open(QIODevice::WriteOnly))
         return;
@@ -1565,6 +1567,10 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
                                          const QString &key)
 {
     if (negativeCacheBlocks(videoId)) {
+        // A blocked video is a failure terminal like any other. Emitting
+        // nothing here left the player view waiting on LOADING until the
+        // 4 s watchdog fell back (same family as the 2026-11-22 defect).
+        emit playbackResolveFailed(videoId, QStringLiteral("NEGATIVE_CACHE"));
         finishUrlResolve(key);
         return;
     }

@@ -134,6 +134,7 @@ FocusScope {
             // dies before first position can take the reactive warm-403 cure.
             lastOpenWasWarm = true
             appCore.note_state("yt-play", "vid=" + videoId + " path=warm res=" + resolution)
+            resolveArmedForPlay = false   // warm-up resolve failure never gates this launch
             youtubeBackend.resolvePlayback(videoId, resolution)
             return true
         }
@@ -142,6 +143,8 @@ FocusScope {
         ytdlArgs = []
         lastOpenWasWarm = false
         appCore.note_state("yt-play", "vid=" + videoId + " path=cold res=" + resolution)
+        pendingResolveFailure = ""   // fresh sequence: a remembered failure is stale
+        resolveArmedForPlay = true    // the resolve below may fail synchronously
         youtubeBackend.resolvePlayback(videoId, resolution)
         return false
     }
@@ -169,6 +172,17 @@ FocusScope {
     // keeps a dead network or a yt-dlp hang from trapping the view on LOADING —
     // past it we take the ytdl path as the always-works fallback.
     property bool   waitingForResolve: false
+    // A sync resolve rejection (RESOLVE_BUSY / NEGATIVE_CACHE) fires DURING
+    // preparePlayback()'s resolvePlayback() — before playAt() arms
+    // waitingForResolve, so the Connections handler would drop it and the
+    // view would sit on LOADING until the 4 s watchdog. The handler remembers
+    // it here instead; playAt() consumes it right after arming.
+    property string pendingResolveFailure: ""
+    // true only between the cold-path resolvePlayback() call and the playAt()
+    // that follows it: the window in which an un-armed failure belongs to a
+    // launch sequence (warm-up and warm-queue resolve failures must NOT be
+    // remembered — their failure never gates a launch).
+    property bool   resolveArmedForPlay: false
     property int    pendingPlayStartMs: 0
 
     // The in-process Innertube resolve answers in well under a second, so 4 s
@@ -195,6 +209,7 @@ FocusScope {
         function onPlaybackUrlReady(readyVideoId) {
             if (!playerRoot.waitingForResolve || readyVideoId !== playerRoot.videoId)
                 return
+            playerRoot.pendingResolveFailure = ""   // success supersedes a remembered sync failure
             playerRoot.waitingForResolve = false
             resolveWaitTimer.stop()
             // The cache now holds the fresh pair — re-arm the direct path.
@@ -216,8 +231,21 @@ FocusScope {
             // fallback handle it rather than racing a second resolve.
         }
         function onPlaybackResolveFailed(failedVideoId, reason) {
-            if (!playerRoot.waitingForResolve || failedVideoId !== playerRoot.videoId)
+            if (failedVideoId !== playerRoot.videoId)
                 return
+            if (!playerRoot.waitingForResolve) {
+                // Sync rejections (RESOLVE_BUSY / NEGATIVE_CACHE) arrive during
+                // preparePlayback()'s resolvePlayback(), before playAt() arms
+                // the wait. Only a cold-path launch sequence may remember one;
+                // a warm launch (directPlayUrl set) or a background warm-queue
+                // resolve must drop it — their failure never gates this play.
+                if (playerRoot.resolveArmedForPlay && playerRoot.directPlayUrl === "") {
+                    playerRoot.pendingResolveFailure = reason
+                    appCore.note_state("yt-resolve",
+                                       "vid=" + playerRoot.videoId + " sync-fail reason=" + reason)
+                }
+                return
+            }
             playerRoot.waitingForResolve = false
             resolveWaitTimer.stop()
             playerRoot.directPlayUrl = ""
@@ -251,6 +279,19 @@ FocusScope {
         waitingForResolve = true
         pendingPlayStartMs = startMs
         resolveWaitTimer.restart()
+        resolveArmedForPlay = false   // armed window over: later failures take the wait path
+        // A sync rejection fired inside preparePlayback() landed while the
+        // wait was still un-armed — consume it now instead of timing out to
+        // the ytdl fallback after 4 s of LOADING.
+        if (pendingResolveFailure !== "") {
+            var failureReason = pendingResolveFailure
+            pendingResolveFailure = ""
+            waitingForResolve = false
+            resolveWaitTimer.stop()
+            errorMessage = failureReason === "LIVE_WAITING"
+                          ? "LIVE EVENT HASN'T STARTED YET\n\nCHECK BACK SOON"
+                          : "PLAYBACK FAILED\n\nTHIS VIDEO IS UNAVAILABLE"
+        }
     }
 
     function playNextPlaylistItem() {
@@ -389,14 +430,22 @@ FocusScope {
                 if (lastOpenWasWarm && !retryWarm403) {
                     retryWarm403 = true
                     var res = appCore.get_setting(moduleRoot.moduleId, "playback_resolution") || "480p"
-                    youtubeBackend.invalidateCachedUrl(videoId, res)
+                    // allowRetry=true: the cure's whole point is a same-session
+                    // re-resolve; the default would spend the Innertube key and
+                    // turn the cure into an instant RESOLVE_BUSY.
+                    youtubeBackend.invalidateCachedUrl(videoId, res, true)
                     appCore.note_state("yt-warm403",
                                        "vid=" + videoId + " evicted; re-entering cold from " + lastStartMs)
                     preparePlayback()
                     playAt(lastStartMs)
                     return
                 }
-                playerRoot.errorMessage = "PLAYBACK FAILED\n\nPLEASE CHECK THAT YT-DLP IS INSTALLED AND UP TO DATE"
+                appCore.note_state("yt-playback-failed",
+                                   "vid=" + videoId + " reason=launch-failed")
+                // The watch-URL ytdl fallback died too (yt-dlp is no longer the
+                // app's resolver — this is the last-resort path, not a setup
+                // instruction). Honest message, no yt-dlp blame.
+                playerRoot.errorMessage = "PLAYBACK FAILED\n\nTHIS VIDEO COULD NOT BE PLAYED"
                 return
             }
             var pos = lastKnownPositionMs || finalPositionMs

@@ -109,7 +109,7 @@ public:
     }
     Q_INVOKABLE bool cachedPlaybackSingle(const QString &, const QString &) const { return false; }
     Q_INVOKABLE void resolvePlayback(const QString &, const QString &) {}
-    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &) {}
+    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &, bool = false) {}
     QVariantMap savedPosition;
     QList<int> savedPositionWrites;
     Q_INVOKABLE void savePosition(const QString &, int positionMs,

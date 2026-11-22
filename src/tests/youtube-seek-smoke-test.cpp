@@ -93,7 +93,7 @@ public:
     Q_INVOKABLE QVariantMap buildPlaybackEdl(const QString &, const QString &, const QVariantMap &) const { return {}; }
     Q_INVOKABLE void requestSponsorSegments(const QString &) {}
     Q_INVOKABLE void resolvePlayback(const QString &, const QString &) {}
-    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &) {}
+    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &, bool = false) {}
     Q_INVOKABLE void savePosition(const QString &, int, const QString &, const QString &) {}
     Q_INVOKABLE bool hasSponsorSegments(const QString &) const { return false; }
     Q_INVOKABLE bool sponsorFetchInFlight(const QString &) const { return false; }
