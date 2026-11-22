@@ -226,6 +226,18 @@ void MpvController::setOscRanges(const QString &ranges)
     m_oscRanges = ranges;
 }
 
+QStringList MpvController::extraArgsForLocalHls(const QString &url)
+{
+    // A local HLS master written by the YouTube resolver references https
+    // variants. ffmpeg's whitelist for a file:// top-level URL is only
+    // file,crypto,data, so every variant is rejected and mpv reports
+    // "No video or audio streams selected" -> Player.qml shows launch-failed.
+    // mpv's key/value parser needs the list bracketed (mpv issue #9912).
+    if (!url.startsWith(QLatin1Char('/')) || !url.endsWith(QLatin1String(".m3u8")))
+        return {};
+    return { QStringLiteral("--demuxer-lavf-o=protocol_whitelist=[file,crypto,data,http,https,tcp,tls]") };
+}
+
 void MpvController::loadAndPlay(const QString &url, float startSeconds,
                                  int audioTrack, int subTrack,
                                  const QStringList &subFiles,
@@ -301,6 +313,10 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 
     QStringList args;
     args << url;
+    // Local HLS masters (YouTube live/post_live) carry remote variants. Without
+    // this the ffmpeg demuxer rejects every variant and the player reports
+    // launch-failed — the exact CRT failure this gate reproduces.
+    args << extraArgsForLocalHls(url);
     // Additional playlist entries, straight after the primary url — mpv builds its
     // playlist from every non-option argument. These must be absolute paths or URLs
     // (so they can't be mistaken for flags); pass mpv options via extraArgs instead.

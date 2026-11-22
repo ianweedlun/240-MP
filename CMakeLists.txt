@@ -1435,6 +1435,40 @@ if(BUILD_TESTS)
     file(MAKE_DIRECTORY "${_failedtostart_tmp}")
     set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_failedtostart_tmp}")
 
+    # #145 CRT repro: real mpv against the shaped local HLS master. The mpv
+    # resolver contract proved classification but never launched mpv, so the
+    # whitelist failure reached the owner's CRT. This gate reproduces it with
+    # a loopback HLS origin and the production arg helper. Needs real mpv +
+    # ffmpeg; QSKIPs on lanes missing either.
+    add_executable(yt-live-hls-local-tests
+        src/AppCore.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/YtLiveHlsLocalPlaylistTest.cpp)
+    set_target_properties(yt-live-hls-local-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-live-hls-local-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(yt-live-hls-local-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(yt-live-hls-local-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(yt-live-hls-local-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(yt-live-hls-local-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-live-hls-local COMMAND yt-live-hls-local-tests)
+    string(MD5 _lhl_tmp_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${_lhl_tmp_hash}" 0 8 _lhl_tmp_hash)
+    set(_lhl_tmp "${_failedtostart_tmp_base}/240mp-lhl-${_lhl_tmp_hash}")
+    file(MAKE_DIRECTORY "${_lhl_tmp}")
+    set_tests_properties(yt-live-hls-local PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_lhl_tmp}")
+
     # T2 (issue #111): real MpvController per-instance socket contract.
     # No mpv spawning — constructs the controller and checks socketPath()/logFilePath().
     add_executable(mpv-instance-socket-tests

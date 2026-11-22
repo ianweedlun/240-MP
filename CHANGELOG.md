@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — YouTube: finished live events reached mpv but still failed at launch (issue #145)
+- Root cause: the post_live routing fix hands mpv a shaped LOCAL `/tmp/240mp-yt-hls-<id>.m3u8` whose variants are `https`. ffmpeg restricts nested protocols to `file,crypto,data` when the top-level playlist is a file, so every variant was rejected (`Protocol 'https' not on whitelist 'file,crypto,data'`), mpv demuxed zero streams, and Player.qml surfaced `PLAYBACK FAILED / reason=launch-failed`. The resolver contract cases proved only the routing decision with a canned response — they never launched mpv, so they stayed green while the owner's CRT failed.
+- Fix: `MpvController::extraArgsForLocalHls` adds the bracketed `--demuxer-lavf-o=protocol_whitelist=[...]` to local `.m3u8` launches (mpv issue #9912 syntax). The flag is shared with the test so it exercises production code.
+- Gate: new `yt-live-hls-local` test builds a real local master plus a loopback HLS origin (real mpv + ffmpeg-generated TS) and asserts `playback restart complete`. Its control case asserts the exact `not on whitelist` failure with no flag. Proven RED with the production helper disabled and GREEN with the fix; full suite 91/91. **This is the gate that was missing when the first post_live fix was shipped.**
+
 ### Fixed — YouTube: live HLS playlist cache entries are no longer born stale
 - Root cause: `launchHlsResolve` stored the shaped live master under a 60 s TTL, but every cache read (`cachedPlaybackUrl`, `cachedPlaybackAudioUrl`, `cachedPlaybackSingle`, `hasFreshUrlPair`) checks freshness with the 120 s URL safety margin. `now + 120 < now + 60` is never true, so a live playlist entry was stale on arrival and every warm open re-resolved the master — the cache was dead weight and the Pi paid a full Innertube + master fetch per open.
 - Fix: the margin and live TTL are now defined together in `util/YtUrlFresh.h` as the single source of truth; the live TTL is 180 s, which restores the intended ~60 s usable warm window (TTL − margin) while keeping the original rolling-segment behavior. `YouTubeBackend` uses the shared constants instead of a duplicate local literal.
