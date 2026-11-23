@@ -529,10 +529,18 @@ void WeatherBackend::stopMusic() {
         m_music = nullptr;          // cleared first: terminate() can re-enter
         p->disconnect(this);        // this slot via the finished signal
         if (p->state() != QProcess::NotRunning) {
+            // Non-blocking teardown: never stall the Qt GUI thread with waitForFinished().
+            connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    p, [p](int, QProcess::ExitStatus) {
+                        p->deleteLater();
+                    });
             p->terminate();
-            p->waitForFinished(1000);
+            QTimer::singleShot(300, p, [p]() {
+                if (p->state() != QProcess::NotRunning) p->kill();
+            });
+        } else {
+            p->deleteLater();
         }
-        p->deleteLater();
     }
     m_musicPaused = false;
     emit musicStateChanged();
