@@ -1,0 +1,13 @@
+# ── crt-validation case: playback-loop ──
+# Play a video: play/pause toggle, fine seek, capture evidence at each step.
+keys:
+  - shot play01
+  - playpause
+  - shot play02
+  - right
+  - shot seek01
+expect:
+  - "^view: player"
+  - "^shot play01"
+  - "^shot play02"
+  - "^shot seek01"

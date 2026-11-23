@@ -142,11 +142,20 @@ bool ALSAVolumeMixer::parseSwitchMuted(const QString &amixerGetOutput, bool *ok)
 }
 
 int ALSAVolumeMixer::parseLevelPercent(const QString &amixerGetOutput) {
-    // "Front Left: Playback 50 [71%] [-10.00dB] [on]" -> 71
+    // "Front Left: Playback 50 [71%] [-10.00dB] [on]" -> 71; -1 when absent.
+    // Must match Playback rows specifically: on cards where Capture rows
+    // appear before Playback (BAD_ARM case), the first \d+% would be capture.
     static const QRegularExpression re(QStringLiteral("\\[?(\\d+)%\\]?"));
-    auto m = re.match(amixerGetOutput);
-    if (!m.hasMatch()) return -1;
-    return m.captured(1).toInt();
+    const QStringList lines = amixerGetOutput.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        // Only playback rows carry the level we care about; skipping other
+        // rows keeps a capture level from answering for playback.
+        if (!line.contains(QLatin1String("Playback"), Qt::CaseInsensitive))
+            continue;
+        auto m = re.match(line);
+        if (m.hasMatch()) return m.captured(1).toInt();
+    }
+    return -1;
 }
 
 QString ALSAVolumeMixer::muteTarget() const {

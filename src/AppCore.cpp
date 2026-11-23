@@ -759,9 +759,44 @@ QString AppCore::takeScreenshot()
     return captureScreenshot();
 }
 
+// Screen-tag generator. Returns e.g. "retroarch-Games" from the active view
+// source; stable across runs so evidence filenames are comparable.
+QString AppCore::screenshotTag() const
+{
+    const QStringList seg = m_activeViewSource.split(QLatin1Char('/'));
+    QString module;
+    QString view;
+    const int i = seg.indexOf("views");
+    if (i > 0) {
+        module = seg[i - 1];
+        module.remove("com.240mp.");
+    }
+    if (!seg.isEmpty()) {
+        view = seg.last();
+        view.remove(".qml");
+    }
+    QString tag = module.isEmpty() ? view : (module + '-');
+    tag.remove(QRegularExpression("[^A-Za-z0-9_-]"));
+    return tag.isEmpty() ? "app" : tag;
+}
+
+// Named capture during scripted walks: `shot <id>` on the debug key channel
+// writes 240mp_screenshot_<view-tag>_<id>.png so a walk can be replayed and
+// compared frame-by-frame with evidence named in the case card.
+QString AppCore::takeScreenshotWithLabel(const QString &id)
+{
+    const QString path = QStringLiteral("/tmp/240mp_screenshot_") + screenshotTag()
+                         + QLatin1Char('_') + id + QStringLiteral(".png");
+    return captureScreenshot(path);
+}
+
 void AppCore::note_view(const QString &source)
 {
     m_activeViewSource = source;
+    // Machine-readable view-change marker for scripted walks: the agent asserts
+    // "view:<tag>" in the state log when it reaches a screen. Companion to the
+    // takeScreenshotWithLabel() capture.
+    note_state("view", screenshotTag());
 }
 
 void AppCore::note_state(const QString &event, const QString &detail)
