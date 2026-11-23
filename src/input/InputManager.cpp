@@ -785,7 +785,7 @@ void InputManager::pollDebugKeyChannel()
         }
         if (cmd.startsWith(QLatin1String("shot "))) {
             // named capture during scripted walks -> 240mp_screenshot_<tag>_<id>.png
-            const QString rawId = cmd.mid(5).trimmed();
+            QString rawId = cmd.mid(5).trimmed();
             if (m_appCore && !rawId.isEmpty()) {
                 QMetaObject::invokeMethod(m_appCore, "takeScreenshotWithLabel",
                                            Q_RETURN_ARG(QString, rawId));
