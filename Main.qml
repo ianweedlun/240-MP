@@ -199,6 +199,15 @@ Window {
         }
     }
     
+    // LIFECYCLE-01: explicit root teardown. main.cpp declares the QML engine
+    // after the C++ singletons, so they are still alive here — the old order
+    // nulled every context property before this handler ran. Keeping this at
+    // the root makes teardown observable even with no module view instantiated.
+    Component.onDestruction: {
+        if (screenSaverActive) screenSaverActive = false
+        logState("root-teardown", "complete")
+    }
+
     FontLoader {
         id: font; source: "assets/fonts/VCR_OSD_MONO_1.001.ttf"
     }
