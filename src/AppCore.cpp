@@ -786,7 +786,7 @@ QString AppCore::screenshotTag() const
 QString AppCore::takeScreenshotWithLabel(const QString &id)
 {
     const QString path = QStringLiteral("/tmp/240mp_screenshot_") + screenshotTag()
-                         + QLatin1Char('_') + id + QLatin1Char(".png");
+                         + QLatin1Char('_') + id + QStringLiteral(".png");
     return captureScreenshot(path);
 }
 
