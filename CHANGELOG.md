@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Ambient Mode: stopping companion audio no longer freezes the GUI (AMBIENT-STOP-WAIT-01)
+- Root cause: `AmbientModeBackend::stopAudio()` called `waitForFinished(1000)` on the Qt GUI thread. A companion mpv that ignored SIGTERM stalled the UI for the full second (1000–1002 ms measured), then `~QProcess` tore down a still-running child and logged `QProcess: Destroyed while process (...) is still running`.
+- Fix: the process is detached and retired asynchronously — `terminate()` now, with a 300 ms single-shot `QTimer` escalating to `kill()` if the child ignores it; cleanup runs on `finished` / `errorOccurred(FailedToStart)`, and the destructor does a bounded reap. Mirrors `VirtualChannelsBackend::stop_preview_video()`.
+- Gate: the two-sided `ambient-stop-wait-*` CTest suite (6 cases driving a real SIGTERM-ignoring fake mpv) measures `call_wall_ms=0`, 0 destroyed-while-running warnings, and child reaped in ~290–315 ms; plain and ASan/UBSan arms green, full suite 91/91. Owner CRT validation pending.
+
 ### Fixed — YouTube: early mpv death wiped the saved resume position (RES-01)
 - Root cause: mpv's exit taxonomy maps a crash, kill, or missing binary to the same `"stopped"` reason as a deliberate Back/stop. The YouTube view treated every early `"stopped"` with an existing marker as a user stop and wrote `0` over it. A view-side flag would miss the Pi's direct-IPC key path, where `sendKey()` drives quit without QML.
 - Fix (direction c): `MpvController` now exposes `userStopIntent`, set by `stop()`, `forceStop()`, and mpv's `end-file` reason `quit`/`stop`, and reset on every `loadAndPlay()`. The YouTube view clears a saved marker only when `reason === "stopped"` **and** `userStopIntent` is true; a spontaneous early death writes nothing. Other modules keep the generic `"stopped"` semantics.
