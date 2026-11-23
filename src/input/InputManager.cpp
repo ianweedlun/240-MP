@@ -783,6 +783,15 @@ void InputManager::pollDebugKeyChannel()
                 QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
             continue;
         }
+        if (cmd.startsWith(QLatin1String("shot "))) {
+            // named capture during scripted walks -> 240mp_screenshot_<tag>_<id>.png
+            const QString rawId = cmd.mid(5).trimmed();
+            if (m_appCore && !rawId.isEmpty()) {
+                QMetaObject::invokeMethod(m_appCore, "takeScreenshotWithLabel",
+                                           Q_RETURN_ARG(QString, rawId));
+            }
+            continue;
+        }
         if (cmd == QLatin1String("volup") || cmd == QLatin1String("volumeup")
             || cmd == QLatin1String("voldown") || cmd == QLatin1String("volumedown")
             || cmd == QLatin1String("volmute") || cmd == QLatin1String("volumemute")) {

@@ -106,6 +106,15 @@ public:
     void registerModule(const QString &moduleId, const QString &contextProperty,
                         QObject *backend, QQmlContext *ctx);
 
+    // Screen-tag generator for named screenshot capture. Returns e.g. "retroarch-Games"
+    // from the active view source; stable across runs so evidence filenames are comparable.
+    QString screenshotTag() const;
+
+    // Named capture during scripted walks: `shot <id>` on the debug key channel
+    // writes 240mp_screenshot_<view-tag>_<id>.png so a walk can be replayed and
+    // compared frame-by-frame with evidence named in the case card.
+    Q_INVOKABLE QString takeScreenshotWithLabel(const QString &id);
+
 signals:
     void modulesLoaded(const QVariantList &modules);
     void appSettingChanged(const QString &key, const QString &value);
