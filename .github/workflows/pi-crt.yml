@@ -39,9 +39,10 @@ jobs:
     name: Agent CRT wheel
     runs-on: ubuntu-latest
     env:
+      # Use input if provided (workflow_dispatch), else fall back to secrets (push events)
       CRT_CASE: ${{ github.event.inputs.case || 'navigation-walk' }}
-      CRT_HOST: ${{ github.event.inputs.host }}
-      CRT_USER: ${{ github.event.inputs.user || secrets.PI_USER }}
+      CRT_HOST: ${{ github.event.inputs.host || secrets.PI_SSH_HOSTNAME }}
+      CRT_USER: ${{ github.event.inputs.user || secrets.PI_SSH_USERNAME }}
 
     steps:
       - uses: actions/checkout@v4.2.2
