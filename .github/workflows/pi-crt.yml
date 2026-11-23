@@ -1,0 +1,82 @@
+name: CRT agent validation
+
+# One-shot circuit: after a branch tip builds and deploys to the Pi, drive a
+# named CRT case through the debug key channel and collect evidence on the
+# runner. Results become runner-state; the DoD (item 5) consumes the evidence
+# bundle to close the card.
+#
+# Prereqs (owner setup): GitHub Secrets PI_SSH_IDENTITY (RSA private key),
+# PI_HOST (reach the Pi over the WAN path), PI_USER.
+# The wheel is idempotent and safe: it only taps navigation/playback keys,
+# never writes config. Read the verdict line; do not treat "PASS" as "deploy"
+# or "CI green" as validation.
+
+on:
+  push:
+    branches: [dev, 'feature/**']
+    paths-ignore: ['**.md','**.yml','docs/crt-validation-cases.md']
+  # Owner dispatch to replay an ad-hoc case after a push with no code change.
+  workflow_dispatch:
+    inputs:
+      case:
+        description: 'Case name to drive'
+        required: true
+        default: navigation-walk
+      host:
+        description: 'Pi host override'
+        required: false
+        default: ''
+      user:
+        description: 'Pi user override'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  crt-agent-validation:
+    name: Agent CRT wheel
+    runs-on: ubuntu-latest
+    env:
+      CRT_CASE: ${{ github.event.inputs.case || 'navigation-walk' }}
+      CRT_HOST: ${{ github.event.inputs.host }}
+      CRT_USER: ${{ github.event.inputs.user || secrets.PI_USER }}
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Stage the SSH identity
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.PI_SSH_IDENTITY }}" > ~/.ssh/id_pi_agent
+          ssh-keyscan -T 10 -H ${{ secrets.PI_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Rebase the Pi to this tip
+        # The deploy step rebuilds and reinstalls the tarball for this sha, then
+        # restarts the service. The two-state + md5 gate is part of that deploy.
+        run: bash scripts/deploy-pi.sh --latest
+
+      - name: Drive the CRT case on the Pi
+        run: |
+          set -o pipefail
+          # The wheel drives via the debug key channel over SSH and collects
+          # evidence (state-log tail + screenshots) into the sandbox.
+          mkdir -p evidence/${CRT_CASE}
+          ssh -i ~/.ssh/id_pi_agent -o StrictHostKeyChecking=accept-new \
+              ${CRT_USER}@${CRT_HOST} \
+              "bash -c 'source ~/.bashrc 2>/dev/null; cd ${GITHUB_WORKSPACE}; scripts/crt-validate.sh ${CRT_CASE}'" \
+              > evidence/${CRT_CASE}/wheel.txt 2>&1 || true
+
+      - name: Upload CRT evidence
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: crt-${{ github.run_id }}-${CRT_CASE}
+          path: evidence/${CRT_CASE}
+
+      - name: Trace summary
+        run: |
+          echo "CRT case: ${{ env.CRT_CASE }}" >> $GITHUB_STEP_SUMMARY
+          echo "Result: see wheel.txt and evidence bundle above." >> $GITHUB_STEP_SUMMARY
