@@ -838,17 +838,18 @@ if(BUILD_CFG01_TESTS)
             --classify $<TARGET_FILE:cfg01-classify>
             --evdir ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/sweep
             --golden-dir ${CFG01_DIR}/golden
+            --max-us 12000
             --variant FIX --qt-version ${Qt6Core_VERSION})
     set_tests_properties(cfg01-kill-sweep PROPERTIES TIMEOUT 900)
     foreach(_m healthy corrupt-refusal storm missing-unreadable open-failure)
         add_test(NAME cfg01-${_m}
             COMMAND cfg01-harness ${_m} ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/${_m})
-        set_tests_properties(cfg01-${_m} PROPERTIES TIMEOUT 120)
+        set_tests_properties(cfg01-${_m} PROPERTIES TIMEOUT 120 ENVIRONMENT QT_QPA_PLATFORM=offscreen)
     endforeach()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_test(NAME cfg01-armB
             COMMAND cfg01-harness armB ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/armB)
-        set_tests_properties(cfg01-armB PROPERTIES TIMEOUT 60)
+        set_tests_properties(cfg01-armB PROPERTIES TIMEOUT 60 ENVIRONMENT QT_QPA_PLATFORM=offscreen)
     endif()
 endif()
 

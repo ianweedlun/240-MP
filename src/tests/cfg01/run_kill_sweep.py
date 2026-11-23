@@ -39,6 +39,8 @@ def sha256(b):
 
 def run(cmd, **kw):
     print("+ " + " ".join(str(c) for c in cmd), flush=True)
+    kw.setdefault('env', dict(os.environ))
+    kw['env'].setdefault('QT_QPA_PLATFORM', 'offscreen')
     return subprocess.run([str(c) for c in cmd], **kw)
 
 
