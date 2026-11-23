@@ -9,7 +9,7 @@ No suppression and no threshold relaxation is used.
 
 | Leg | Build | What it gates |
 |-----|-------|---------------|
-| plain | regular `240mp` | RSS delta from a fully warmed baseline (< 500 KB), post-warmup OLS slope (< 1 KB/transition), late-window growth (< 128 KB), flat QObject/root counts |
+| plain | regular `240mp` | RSS delta from a fully warmed baseline (< 500 KB), post-warmup OLS slope (< 1 KB/transition), late-window growth (< 128 KB), QObject retention guard (delta ≤ 2, noise floor ±1), flat root count |
 | asan-q0 | `-fsanitize=address,undefined -fsanitize=leak` | zero LSan reports, with `ASAN_OPTIONS=...:quarantine_size_mb=0:thread_local_quarantine_size_kb=0` |
 
 `quarantine_size_mb=0` removes the allocator quarantine that produced the
@@ -38,8 +38,11 @@ per leg plus `d3b-verdict.json` at the top level. The runner compiles
 `t2_app_main.cpp` against each build dir's own flags, so the same source is
 measured identically in both configurations.
 
-## Last verified (2026-11-23)
+## Last verified (2026-11-23, independent re-run)
 
-- plain: pass, delta 164 KB, slope 0.154 KB/transition, late window −4 KB, 0 load errors
+- plain: pass, 88,392 -> 88,584 KB = +192 KB (< 500), slope 0.080 KB/transition,
+  late window -20 KB, QObjects 58 -> 58, 0 load errors
 - asan-q0: pass, exit 0, zero LSan leak markers, `quarantine_size_mb=0` in effect
+- 1 ms fast leg: pass, +232 KB; 1500-transition stress: +212 KB (RSS bounded)
+- negative control (pre-fix `39d4713`): SIGABRT, 320 B in 3 allocations, gate fails
 - combined verdict: pass

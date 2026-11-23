@@ -97,6 +97,10 @@ private:
         m_engine->collectGarbage();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
+        // processEvents() can post fresh deferred deletes; a second flush keeps
+        // the sampled QObject count from oscillating by one between baseline
+        // and final (a timing artifact, not retention).
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         malloc_trim(0);
     }
     QJsonObject sample(const QString &label)
@@ -222,6 +226,9 @@ private:
             && slopeKbPerTransition <= kSlopeLimitKbPerTransition);
         const bool plateauOk = asanQ0 || lateGrowthKb <= kPlateauLimitKb;
         const bool deltaOk = asanQ0 || rssDelta <= kRssDeltaLimitKb;
+        // The sampled QObject count is compared strictly: any net retention
+        // fails. sample() flushes deferred deletes twice before reading it so
+        // the point-instant count is stable across baseline and final.
         const bool objectOk = asanQ0 || objectDelta == 0;
         const bool pass = m_errors == 0 && slopeOk && plateauOk && deltaOk && objectOk
             && last.value(QStringLiteral("root_objects")).toInt() == m_baselineRoots;
