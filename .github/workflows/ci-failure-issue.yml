@@ -28,11 +28,9 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          PR_JSON="${{ toJSON(github.event.workflow_run.pull_requests) }}"
-          PR_NUMS="$(echo "$PR_JSON" | jq -r '.[].number // empty' | sort -un | tr '\n' ' ')"
-          HEAD_REF="${{ github.event.workflow_run.head_branch }}"
-          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${{ github.event.workflow_run.id }}"
-          OWNER_REPO="${{ github.repository }}"
+          PR_NUMS="$(gh api "repos/$GITHUB_REPOSITORY/pulls" --jq 'map(.number) | join(" ")')"
+          HEAD_REF="${GITHUB_HEAD_REF}"
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           echo "pull_numbers=$PR_NUMS" >> "$GITHUB_OUTPUT"
           echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
           echo "run_url=$RUN_URL" >> "$GITHUB_OUTPUT"
