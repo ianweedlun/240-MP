@@ -1532,6 +1532,8 @@ if(BUILD_TESTS)
     # ffmpeg; QSKIPs on lanes missing either.
     add_executable(yt-live-hls-local-tests
         src/AppCore.cpp
+        # CFG-01: AppCore now calls cfgfile::load/save/reset; link the impl.
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
