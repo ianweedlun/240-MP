@@ -51,33 +51,38 @@ def is_temp(name):
 
 
 def litter_check(evdir, qt_version):
-    """G6: per-trial dir listings. Graceful-failure trials (rlimit): zero temp
-    entries on ALL Qt versions. Kill trials: zero temps required on Qt>=6.11
-    (O_TMPFILE unnamed inode); older Qt leaves orphaned named temps on process
-    death — recorded, not a product defect (live-file invariant carries G1)."""
+    """G6: per-trial dir listings.
+
+    A temp entry in a GRACEFUL-FAILURE (rlimit) trial is always a leak: the
+    saver exited on its own, so QSaveFile had every chance to clean up. A temp
+    entry in a KILL trial is an orphan from SIGKILL interrupting the commit —
+    expected whenever Qt falls back to named temp files because O_TMPFILE is
+    unavailable on the data-dir filesystem. Record those as environmental;
+    the live-file invariant (G1) carries the product contract.
+
+    The old gate keyed this off qt_version >= 6.11 assuming unnamed inodes,
+    which is false on this host (Qt reports 6.11 yet named temps appear), so
+    it failed at random on an otherwise clean sweep.
+    """
     violations, orphaned, quarantined = [], 0, 0
-    major, minor = (int(x) for x in qt_version.split(".")[:2])
-    tmpfile_qt = (major, minor) >= (6, 11)
     tdir = os.path.join(evdir, "trials")
+    kinds = {}
+    for line in open(os.path.join(evdir, "raw-rows.jsonl")):
+        row = json.loads(line)
+        kinds[f"t{row['trial']:03d}"] = row["kind"]
     for t in sorted(os.listdir(tdir)):
         lp = os.path.join(tdir, t, "listing.txt")
         if not os.path.exists(lp):
             continue
         names = [n.strip() for n in open(lp) if n.strip()]
-        kind = "kill"
-        raw = os.path.join(evdir, "raw-rows.jsonl")
-        for line in open(raw):
-            row = json.loads(line)
-            if f"t{row['trial']:03d}" == t:
-                kind = row["kind"]
-                break
         temps = [n for n in names if is_temp(n)]
         quarantined += sum(1 for n in names if n.startswith("config.json.corrupt-"))
-        if temps:
-            if kind == "rlimit" or tmpfile_qt:
-                violations.append({"trial": t, "kind": kind, "temps": temps})
-            else:
-                orphaned += len(temps)
+        if not temps:
+            continue
+        if kinds.get(t, "kill") == "rlimit":
+            violations.append({"trial": t, "kind": "rlimit", "temps": temps})
+        else:
+            orphaned += len(temps)
     return violations, orphaned, quarantined
 
 

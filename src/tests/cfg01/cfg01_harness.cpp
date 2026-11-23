@@ -72,6 +72,19 @@ static bool tempLitter(const QString &dir)
     return false;
 }
 
+// ctest reuses the same evidence dir across runs. A previous run leaves a
+// config.json.bak behind, which makes the next run's "first-ever save" arm
+// fail R7 even though the writer correctly creates no bak on a clean first
+// save. Clear the data dir at the top of that arm so the fixture is real.
+static void clearDirFiles(const QString &dir)
+{
+    QDir d(dir);
+    if (!d.exists())
+        return;
+    for (const QString &name : d.entryList(QDir::Files | QDir::Hidden))
+        d.remove(name);
+}
+
 // ---------------------------------------------------------------- G4
 static int runHealthy(const QString &rundir)
 {
@@ -270,6 +283,7 @@ static int runMissingUnreadable(const QString &rundir)
     }
     // Arm 1: MISSING — first run, defaults, fully writable, no litter.
     const QString rd1 = rundir + "/missing";
+    clearDirFiles(rd1 + "/data");   // reused evidence dir: start truly empty
     QDir().mkpath(rd1 + "/data");
     QDir().mkpath(rd1 + "/approot");
     {

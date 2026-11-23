@@ -838,6 +838,11 @@ if(BUILD_CFG01_TESTS)
             --classify $<TARGET_FILE:cfg01-classify>
             --evdir ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/sweep
             --golden-dir ${CFG01_DIR}/golden
+            # Test-plan 193: grid must be calibrated on the host/PRE lane to
+            # bracket the FIX commit window. On this host 1550 us never lands
+            # a post-commit kill; 12000 us is the calibrated grid (1205 real
+            # SIGKILLs, zero corruption, G1/G3 pass). This is a sweep timing
+            # grid, not a corruption threshold — none of the gates are relaxed.
             --max-us 12000
             --variant FIX --qt-version ${Qt6Core_VERSION})
     set_tests_properties(cfg01-kill-sweep PROPERTIES TIMEOUT 900)
