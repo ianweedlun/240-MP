@@ -24,6 +24,7 @@
 #include <cstring>
 #include <string>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -134,7 +135,29 @@ Cls classify(const QByteArray &live, const QByteArray &before, const QByteArray 
     return Cls::Partial;
 }
 
-void testKillSweep()
+// Spawn this same binary in a child mode via fork()+execv(). Calling Qt/CF
+// APIs directly in a bare fork() child after QCoreApplication construction
+// aborts on macOS (CoreFoundation/ObjC fork safety), so the child performs
+// ONLY async-signal-safe execv()/_exit().
+pid_t spawnSelf(const QByteArray &selfExe, const char *mode,
+                const char *arg1, const char *arg2 = nullptr)
+{
+    const pid_t pid = ::fork();
+    if (pid == 0) {
+        char *const argv[] = {
+            const_cast<char *>(selfExe.constData()),
+            const_cast<char *>(mode),
+            const_cast<char *>(arg1),
+            const_cast<char *>(arg2),
+            nullptr
+        };
+        ::execv(selfExe.constData(), argv);
+        ::_exit(127);
+    }
+    return pid;
+}
+
+void testKillSweep(const QByteArray &selfExe)
 {
     QTemporaryDir td;
     check(td.isValid(), "kill: temp dir");
@@ -157,19 +180,13 @@ void testKillSweep()
         for (int off : offsets) {
             if (!writeAll(p, before)) { ++rig; continue; }
             ::unlink(readyBytes.constData());
-            const pid_t pid = ::fork();
+            const pid_t pid = spawnSelf(
+                selfExe, "--child-write", pathBytes.constData(), readyBytes.constData());
             if (pid < 0) { ++rig; continue; }
-            if (pid == 0) {
-                const int fd = ::open(readyBytes.constData(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-                if (fd >= 0) { ::write(fd, "1", 1); ::close(fd); }
-                const bool ok = mpvopts::setUiValue(
-                    QString::fromUtf8(pathBytes), QStringLiteral("replaygain"),
-                    QStringLiteral("Track"));
-                ::_exit(ok ? 0 : 1);
-            }
-            // Poll the ready marker with 100 us granularity (ready-mark race fix).
+            // Poll the ready marker written by the exec'd child right before
+            // setUiValue(), with 100 us granularity (up to 10 s for dyld load).
             bool seen = false;
-            for (int t = 0; t < 50000; ++t) {
+            for (int t = 0; t < 100000; ++t) {
                 if (::access(readyBytes.constData(), F_OK) == 0) { seen = true; break; }
                 ::usleep(100);
             }
@@ -197,30 +214,31 @@ void testKillSweep()
     check(zeroed == 0, "kill: ZEROED == 0");
     check(partial == 0, "kill: PARTIAL == 0 (never truncated or torn)");
 
-    // Deterministic coverage proof, independent of commit timing: an UN-killed
-    // child in this same harness commits the new document. A timing-based
-    // COMPLETE canary is unreliable across filesystems (macOS fsync is ~20x
-    // slower than Linux), and a false pass where children never reached the
-    // writer is exactly what this control rules out.
-    writeAll(p, before);
-    const pid_t ctl = ::fork();
+    // Deterministic coverage proof using the exact same exec'd child path,
+    // un-killed, in a clean directory: proves the spawned child genuinely
+    // commits the new document and leaves no stray temp files on every OS.
+    QTemporaryDir ctlTd;
+    check(ctlTd.isValid(), "kill: control temp dir");
+    const QString ctlPath = ctlTd.path() + QStringLiteral("/mpv.conf");
+    const QByteArray ctlPathBytes = QFile::encodeName(ctlPath);
+    check(writeAll(ctlPath, before), "kill: control fixture written");
+    const pid_t ctl = spawnSelf(selfExe, "--child-write", ctlPathBytes.constData(), "");
     if (ctl < 0) {
-        check(false, "kill: control fork");
-    } else if (ctl == 0) {
-        mpvopts::setUiValue(QString::fromUtf8(pathBytes), QStringLiteral("replaygain"),
-                            QStringLiteral("Track"));
-        ::_exit(0);
+        check(false, "kill: control fork+exec");
     } else {
-        ::waitpid(ctl, nullptr, 0);
-        check(readAll(p) == intended, "kill: un-killed control child committed the new doc");
+        int status = 0;
+        ::waitpid(ctl, &status, 0);
+        check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+              "kill: un-killed control child exited 0");
+        check(readAll(ctlPath) == intended,
+              "kill: un-killed control child committed the new doc");
+        check(onlyFile(ctlTd.path(), QStringLiteral("mpv.conf")),
+              "kill: no stray QSaveFile temp beside the live file");
     }
-    check(onlyFile(td.path(), QStringLiteral("mpv.conf")) ||
-              QDir(td.path()).entryList(QDir::Files).contains(QStringLiteral("ready")),
-          "kill: no stray QSaveFile temp beside the live file");
 }
 
 // ---- RLIMIT_FSIZE: checked short write, live file untouched -------------
-void testRlimit()
+void testRlimit(const QByteArray &selfExe)
 {
     QTemporaryDir td;
     check(td.isValid(), "rlimit: temp dir");
@@ -229,21 +247,12 @@ void testRlimit()
     check(writeAll(p, before), "rlimit: fixture written");
     const QByteArray pathBytes = QFile::encodeName(p);
 
-    const pid_t pid = ::fork();
-    if (pid < 0) { check(false, "rlimit: fork"); return; }
-    if (pid == 0) {
-        ::signal(SIGXFSZ, SIG_IGN); // write() must return EFBIG, not kill us
-        const struct rlimit lim = { 1024, 1024 };
-        ::setrlimit(RLIMIT_FSIZE, &lim);
-        const bool ok = mpvopts::setUiValue(
-            QString::fromUtf8(pathBytes), QStringLiteral("replaygain"),
-            QStringLiteral("Track"));
-        ::_exit(ok ? 0 : 1);
-    }
+    const pid_t pid = spawnSelf(selfExe, "--child-rlimit", pathBytes.constData());
+    if (pid < 0) { check(false, "rlimit: fork+exec"); return; }
     int status = 0;
     ::waitpid(pid, &status, 0);
-    const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    check(exitCode != 0, "rlimit: setUiValue reported failure (non-zero child exit)");
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 1,
+          "rlimit: setUiValue reported failure (clean child exit 1)");
     check(readAll(p) == before, "rlimit: live file byte-identical to template");
     check(onlyFile(td.path(), QStringLiteral("mpv.conf")), "rlimit: no temp litter");
 }
@@ -304,10 +313,40 @@ void testMissing()
 
 int main(int argc, char **argv)
 {
+    if (argc == 4 && std::strcmp(argv[1], "--child-write") == 0) {
+        const char *confPath = argv[2];
+        const char *readyPath = argv[3];
+        if (readyPath[0] != '\0') {
+            const int fd = ::open(readyPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (fd >= 0) {
+                const ssize_t n = ::write(fd, "1", 1);
+                (void)n;
+                ::close(fd);
+            }
+        }
+        const bool ok = mpvopts::setUiValue(
+            QFile::decodeName(confPath), QStringLiteral("replaygain"),
+            QStringLiteral("Track"));
+        return ok ? 0 : 1;
+    }
+    if (argc == 3 && std::strcmp(argv[1], "--child-rlimit") == 0) {
+        ::signal(SIGXFSZ, SIG_IGN); // write() must return EFBIG, not kill us
+        const struct rlimit lim = { 1024, 1024 };
+        if (::setrlimit(RLIMIT_FSIZE, &lim) != 0)
+            return 2;
+        const bool ok = mpvopts::setUiValue(
+            QFile::decodeName(argv[2]), QStringLiteral("replaygain"),
+            QStringLiteral("Track"));
+        return ok ? 0 : 1;
+    }
+
     QCoreApplication app(argc, argv);
+    const QByteArray selfExe = QFile::encodeName(QCoreApplication::applicationFilePath());
+    check(!selfExe.isEmpty() && ::access(selfExe.constData(), X_OK) == 0,
+          "harness: resolved self executable for fork+exec");
     testHealthy();
-    testKillSweep();
-    testRlimit();
+    testKillSweep(selfExe);
+    testRlimit(selfExe);
     testSeamFailures();
     testMissing();
     qInfo().noquote() << QStringLiteral("mpvconf-atomic: %1 checks, %2 failures")
