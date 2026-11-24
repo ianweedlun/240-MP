@@ -292,14 +292,25 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
         const QString systemId = systemFromPlaylist(pl.filePath());
         if (systemId.isEmpty()) continue;
 
+        // PERF-TRANSITION-01 lab A/B: count changes only when the file does.
+        const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
+        const qint64 size = pl.size();
+        auto it = m_playlistCountCache.constFind(pl.filePath());
+        if (it != m_playlistCountCache.constEnd()
+            && it->mtime == mtime && it->size == size) {
+            playlists.append(it->entry);
+            continue;
+        }
         QVariantList games = parsePlaylist(pl.filePath(), systemId);
-        playlists.append(QVariantMap{
+        QVariantMap entry{
             { "path", pl.filePath() },
             { "name", pl.baseName() },
             { "count", games.size() },
             { "systemId", systemId },
             { "shortName", shortNameForSystem(systemId) }
-        });
+        };
+        m_playlistCountCache.insert(pl.filePath(), PlaylistCountCache{mtime, size, entry});
+        playlists.append(entry);
     }
 
     // Order playlists according to playlist_sort setting:
