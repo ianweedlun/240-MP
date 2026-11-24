@@ -44,6 +44,9 @@ private slots:
     void missingThumbnailYieldsEmptyString();
     void thumbnailDbUsesPlaylistBasenameOriginalCase();
     void sanitizedLabelMatchesSanitizedDbName();
+    void perNavigationScanStopsOnWarmCache();
+    void thumbnailCacheClearForcesRebuild();
+    void thumbnailCacheInvalidatesOnDirChange();
     void signalsFireAlongsideReturnValues();
     void archiveRomPathChecksArchiveOnly();
     void archiveRomPathRelativeResolvesAgainstRomDir();
@@ -388,6 +391,65 @@ void RetroArchBackendTest::sanitizedLabelMatchesSanitizedDbName() {
     QVERIFY(!games.isEmpty());
     QCOMPARE(be->resolveThumbnail("F/Z Quest [T/S]", "nes_libretro"),
              thumbs + "/nes_libretro/Named_Boxarts/F_Z Quest _T_S_.png");
+}
+
+void RetroArchBackendTest::perNavigationScanStopsOnWarmCache() {
+    // Two-sided shape: the shipped findThumbnail() relisted the type dir on
+    // EVERY resolve. Here 20 distinct misses across two navigation passes make
+    // that 40 listings; the cache must list once and then never again.
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/scan_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    for (int i = 0; i < 50; ++i) {
+        QFile f(dir + QStringLiteral("/filler-%1.png").arg(i));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < 20; ++i)
+            QVERIFY(be->resolveThumbnail(QStringLiteral("missing-%1").arg(i),
+                                         QStringLiteral("scan_libretro")).isEmpty());
+    }
+
+    // Only the one existing type dir is ever listed; the other four do not
+    // exist and are not scanned. One warm-up miss, then 19 + 20 hits — the
+    // second pass adds zero scans.
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+    QCOMPARE(be->thumbnailCacheHitCount(), 39);
+}
+
+void RetroArchBackendTest::thumbnailCacheClearForcesRebuild() {
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/clear_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "clear_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    be->clearThumbnailCache();
+    QCOMPARE(be->thumbnailCacheScanCount(), 0);
+    QCOMPARE(be->resolveThumbnail("Old", "clear_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+}
+
+void RetroArchBackendTest::thumbnailCacheInvalidatesOnDirChange() {
+    // Real-filesystem counterpart to the deterministic key-provider cases: a
+    // newly added thumbnail bumps the dir mtime+size and is visible on the
+    // next resolve (one extra listing), not stranded behind a stale manifest.
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/invalidate_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "invalidate_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    QTest::qSleep(20);   // key uses msecs; clear the same-millisecond window
+    { QFile f(dir + "/New.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+    QCOMPARE(be->resolveThumbnail("New", "invalidate_libretro"), dir + "/New.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 2);
 }
 
 void RetroArchBackendTest::signalsFireAlongsideReturnValues() {
