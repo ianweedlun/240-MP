@@ -86,8 +86,11 @@ jobs:
           # Diagnostics printed plainly: the job log is the evidence channel.
           echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent)"
           echo "KEY first_line=$(head -n 1 ~/.ssh/id_pi_agent)"
-          echo "KEY literal_backslash_n=$(grep -c '\\n' ~/.ssh/id_pi_agent || true)"
+          echo "KEY lines=$(wc -l < ~/.ssh/id_pi_agent)"
+          echo "KEY begin_headers=$(grep -c 'BEGIN' ~/.ssh/id_pi_agent || true)"
           echo "KEY ends_with_newline=$([ "$(tail -c 1 ~/.ssh/id_pi_agent | od -An -c | tr -d ' \n')" = "\\n" ] && echo yes || echo no)"
+          echo 'KEY od_head:'
+          head -c 96 ~/.ssh/id_pi_agent | od -An -c | tr -s ' ' ' ' | head -6
           ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
           ls -la ~/.ssh/id_pi_agent
 
