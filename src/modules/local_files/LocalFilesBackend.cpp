@@ -1,4 +1,5 @@
 #include "LocalFilesBackend.h"
+#include "../../util/ConfigFile.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -24,14 +25,12 @@ LocalFilesBackend::LocalFilesBackend(const QString &appRoot, const QString &data
     : QObject(parent), m_appRoot(appRoot), m_dataRoot(dataRoot), m_mediaRoot(dataRoot + "/media")
 {
     // Resolve the configured media directory (falls back to the dataRoot/media default).
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonObject cfg = QJsonDocument::fromJson(f.readAll()).object();
-        QString dir = cfg["modules"].toObject()["com.240mp.local_files"].toObject()
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    const QJsonObject cfg = cfgfile::load(m_dataRoot).doc;
+    const QString dir = cfg["modules"].toObject()["com.240mp.local_files"].toObject()
                           ["media_directory"].toString();
-        if (!dir.isEmpty())
-            setMediaRoot(dir);
-    }
+    if (!dir.isEmpty())
+        setMediaRoot(dir);
 }
 
 bool LocalFilesBackend::isImage(const QString &path) const {

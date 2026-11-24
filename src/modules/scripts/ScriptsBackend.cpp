@@ -1,4 +1,5 @@
 #include "ScriptsBackend.h"
+#include "../../util/ConfigFile.h"
 #include "ScriptLauncher.h"
 #include <QDir>
 #include <QFile>
@@ -30,9 +31,9 @@ ScriptsBackend::ScriptsBackend(const QString &appRoot, const QString &dataRoot,
     // available to backends at construction time. Same approach as
     // AmbientModeBackend / NfcReaderBackend.
     QString configured;
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        const QJsonObject cfg = QJsonDocument::fromJson(f.readAll()).object();
+    {
+        // CFG-01: shared policy reader (was a silent-fallback config.json read).
+        const QJsonObject cfg = cfgfile::load(m_dataRoot).doc;
         configured = cfg["modules"].toObject()[QLatin1String(kModuleId)].toObject()
                         ["scripts_directory"].toString();
     }

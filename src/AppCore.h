@@ -22,6 +22,11 @@ struct ModuleEntry {
 class AppCore : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
+    // CFG-01 config-health surface: true when config.json is corrupt with no
+    // usable backup (degraded — all settings writes refused until a confirmed
+    // reset). configNotice carries the transient "recovered from backup" line.
+    Q_PROPERTY(bool configCorrupted READ configCorrupted NOTIFY configHealthChanged)
+    Q_PROPERTY(QString configNotice READ configNotice NOTIFY configHealthChanged)
 public:
     explicit AppCore(const QString &appRoot, const QString &dataRoot, QObject *parent = nullptr);
 
@@ -37,7 +42,13 @@ public:
     Q_INVOKABLE void scan_for_modules();
     Q_INVOKABLE QVariant get_settings();
     Q_INVOKABLE QVariant get_setting(const QString &moduleId, const QString &key);
-    Q_INVOKABLE void save_setting(const QString &moduleId, const QString &key, const QVariant &value);
+    Q_INVOKABLE bool save_setting(const QString &moduleId, const QString &key, const QVariant &value);
+    // CFG-01: explicit user-confirmed reset of a damaged config.json. The ONLY
+    // path that writes over a corrupt live file (quarantines it first). Returns
+    // false — changing nothing — when the config is healthy or missing.
+    Q_INVOKABLE bool resetCorruptedConfig();
+    bool configCorrupted() const { return m_configCorrupted; }
+    QString configNotice() const { return m_configNotice; }
     Q_INVOKABLE QVariant get_module_info(const QString &moduleId);
     Q_INVOKABLE QVariant get_module_settings_schema(const QString &moduleId);
     Q_INVOKABLE void invoke_module_action(const QString &moduleId, const QString &slotName);
@@ -122,6 +133,7 @@ signals:
     void dynamicOptionsReady(const QString &moduleId, const QString &key, const QVariant &options);
     void moduleAuthStateChanged(const QString &moduleId);
     void moduleActionStatus(const QString &moduleId, const QString &message);
+    void configHealthChanged();
 
 private slots:
     // Receive a backend's signal and re-emit it with the module ID prepended, recovering
@@ -133,7 +145,11 @@ private slots:
 
 private:
     QJsonObject loadConfig() const;
-    void saveConfig(const QJsonObject &config) const;
+    bool saveConfig(const QJsonObject &config) const;
+    // Update the cached config-health surface from a load result; emits
+    // configHealthChanged only on change. const because loadConfig is const
+    // (called from const accessors) — the health cache is mutable UI state.
+    void applyConfigHealth(bool corrupted, bool recovered) const;
     QString moduleIdForBackend(QObject *backend) const;
     // Extra top-level menu rows a module's backend wants to contribute. Probed,
     // not connected — see the comment at the call site in scan_for_modules.
@@ -150,4 +166,6 @@ private:
     QString m_activeViewSource;              // last QML source loaded (screenshot filename tag)
     QList<ModuleEntry> m_modules;
     QMap<QString, QObject*> m_backends;
+    mutable bool m_configCorrupted = false;
+    mutable QString m_configNotice;
 };

@@ -1,4 +1,5 @@
 #include "WeatherBackend.h"
+#include "../../util/ConfigFile.h"
 #include "WeatherCodes.h"
 #include "../../util/MpvLocator.h"
 
@@ -268,14 +269,8 @@ QString WeatherBackend::music_file_path() const {
 }
 
 QJsonObject WeatherBackend::loadConfig() const {
-    QFile f(m_dataRoot + QStringLiteral("/config.json"));
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    return {};
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    return cfgfile::load(m_dataRoot).doc;
 }
 
 QJsonObject WeatherBackend::moduleConfig() const {
