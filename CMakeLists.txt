@@ -1032,6 +1032,19 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-negative-cache COMMAND yt-negative-cache-tests)
 
+    # Shared atomic JSON state files (media auth + module config): four-way
+    # load status, quarantine before any rewrite, owner-only mode on POSIX,
+    # and the routine-save refusal that blocks corrupt-read clobber.
+    add_executable(json-state-file-tests
+        src/util/tests/JsonStateFileTest.cpp)
+    set_target_properties(json-state-file-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(json-state-file-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(json-state-file-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(json-state-file-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME json-state-file COMMAND json-state-file-tests)
+
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.
     add_executable(yt-negative-cache-backend-tests
