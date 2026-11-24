@@ -1,4 +1,5 @@
 #include "RetroArchBackend.h"
+#include "../../util/ConfigFile.h"
 #include "../../util/DisplayHandoff.h"
 #include <QBuffer>
 #include <QDir>
@@ -27,12 +28,16 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
 RetroArchBackend::~RetroArchBackend() = default;
 
 void RetroArchBackend::loadSettings() {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            QJsonObject root = doc.object();
+    // CFG-01: shared policy reader. Missing keeps the pre-fix first-run shape
+    // (ctor defaults, no migration write); corrupt is already warned/quarantined
+    // by the policy and every write below would be refused by the intrinsic
+    // guard anyway — so only a usable document runs the settings/migration body.
+    const cfgfile::LoadResult r = cfgfile::load(m_dataRoot);
+    if (r.status == cfgfile::Status::Missing || r.status == cfgfile::Status::Corrupt)
+        return;
+    {
+        QJsonObject root = r.doc;
+        {
             QJsonObject mod = root["modules"].toObject()["com.240mp.retroarch"].toObject();
 
             m_playlistDir = mod["playlist_directory"].toString();
@@ -84,14 +89,12 @@ void RetroArchBackend::loadSettings() {
                 QJsonObject modules = root["modules"].toObject();
                 modules.insert("com.240mp.retroarch", mod);
                 root["modules"] = modules;
-                // Close the read handle first, then write with a fresh QFile.
-                f.close();
-                QFile fw(m_dataRoot + "/config.json");
-                if (fw.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                    fw.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-                    qInfo("[RetroArch] Config migration written to %s", qPrintable(fw.fileName()));
+                // CFG-01: guarded atomic write (was QFile WriteOnly|Truncate —
+                // a constructor-time wipe window on the migration path).
+                if (cfgfile::save(m_dataRoot, root)) {
+                    qInfo("[RetroArch] Config migration written to %s/config.json", qPrintable(m_dataRoot));
                 } else {
-                    qWarning("[RetroArch] Failed to write migrated config: %s", qPrintable(fw.errorString()));
+                    qWarning("[RetroArch] Failed to write migrated config (see cfgfile warning)");
                 }
             }
         }

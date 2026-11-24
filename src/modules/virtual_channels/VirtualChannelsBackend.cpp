@@ -1,4 +1,5 @@
 #include "VirtualChannelsBackend.h"
+#include "../../util/ConfigFile.h"
 
 #include "Catalog.h"
 #include "ChannelTuner.h"
@@ -274,10 +275,8 @@ void VirtualChannelsBackend::ensureLibraryFolders() const {
 }
 
 QString VirtualChannelsBackend::resolveMediaRoot() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::ReadOnly))
-        return {};
-    const QJsonObject modules = QJsonDocument::fromJson(f.readAll()).object()
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    const QJsonObject modules = cfgfile::load(m_dataRoot).doc
                                     .value(QLatin1String("modules")).toObject();
 
     // This module's own setting wins, so a viewer can point channels somewhere
@@ -3539,9 +3538,8 @@ void VirtualChannelsBackend::plexEnumFinish() {
 // ---------------------------------------------------------------------------
 
 QVariant VirtualChannelsBackend::settingValue(const QString &key) const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::ReadOnly)) return {};
-    const QJsonObject cfg = QJsonDocument::fromJson(f.readAll()).object();
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    const QJsonObject cfg = cfgfile::load(m_dataRoot).doc;
     const QJsonObject mod = cfg["modules"].toObject()[kModuleId].toObject();
 
     const QStringList parts = key.split(QLatin1Char('.'));
@@ -4180,9 +4178,9 @@ void VirtualChannelsBackend::repairSpecialNumbers() {
 }
 
 bool VirtualChannelsBackend::setSpecialNumber(const QString &which, int number) {
-    QFile f(m_dataRoot + "/config.json");
-    QJsonObject cfg;
-    if (f.open(QIODevice::ReadOnly)) { cfg = QJsonDocument::fromJson(f.readAll()).object(); f.close(); }
+    // CFG-01: shared policy reader + guarded atomic writer (was an unchecked
+    // QSaveFile::commit — the fifth config.json writer implementation).
+    QJsonObject cfg = cfgfile::load(m_dataRoot).doc;
 
     QJsonObject modules = cfg["modules"].toObject();
     QJsonObject mine    = modules[kModuleId].toObject();
@@ -4192,10 +4190,7 @@ bool VirtualChannelsBackend::setSpecialNumber(const QString &which, int number) 
     modules[kModuleId] = mine;
     cfg["modules"] = modules;
 
-    QSaveFile out(m_dataRoot + "/config.json");
-    if (!out.open(QIODevice::WriteOnly)) return false;
-    out.write(QJsonDocument(cfg).toJson(QJsonDocument::Indented));
-    return out.commit();
+    return cfgfile::save(m_dataRoot, cfg);
 }
 
 bool VirtualChannelsBackend::moveScheduleFile(int fromNumber, int toNumber) {

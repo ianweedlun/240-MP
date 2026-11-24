@@ -198,7 +198,7 @@ private:
 
     // Config file helpers (shared with AppCore)
     QJsonObject loadConfig() const;
-    void saveConfig(const QJsonObject &cfg) const;
+    bool saveConfig(const QJsonObject &cfg) const;
 
     // Plex HTTP helpers
     QNetworkRequest plexRequest(const QUrl &url, const QString &token) const;

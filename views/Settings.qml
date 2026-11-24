@@ -19,6 +19,12 @@ FocusScope {
     property bool quitOverlayVisible: false
     property int quitChoiceIndex: 0
 
+    // CFG-01: two-step reset confirmation for a damaged settings file.
+    // Step 1 (Enter on the reset row) opens the overlay — NO write happens.
+    // Step 2 (Enter on Yes) performs the reset. Default choice is No.
+    property bool resetOverlayVisible: false
+    property int resetChoiceIndex: 1
+
     // Quit overlay choices. Under the autostart service (headless RPi) the quit menu has an
     // "Reboot" option and an "Exit to Terminal" option that drops to a tty1 login without
     // powering off; those options are not needed on macOS/Desktop or when run by hand, so
@@ -39,6 +45,19 @@ FocusScope {
         autostartSession = appCore.isAutostartSession()
 
         var items = []
+
+        // CFG-01: while the settings file is damaged, every write is refused;
+        // the explicit reset is the only way to make changes again, so it goes
+        // at the top of the list. The description carries the wipe semantics;
+        // the overlay carries the pinned confirmation wording.
+        if (appCore.configCorrupted) {
+            items.push({
+                type: "action",
+                key: "reset_settings",
+                label: "Reset Settings File",
+                description: "Erases saved settings and signs out of media servers. The damaged file is kept for recovery."
+            })
+        }
 
         // APPLICATION section
         var colorOpts = ["Video 1","Late Night","Synthwave","Terminal","T-120","Amber","Kinescope","SMPTE ECR 1-1978","Dracula","Tokyo Night","Nord","Solarized Dark","Monokai"] // names must match Main.qml themes keys exactly; picker shows this order
@@ -209,16 +228,51 @@ FocusScope {
         rightPadding: root.sw * 0.00625 //4
     }
 
+    // ── CFG-01 config-health banner ──
+    // Degraded: settings file damaged, writes refused until a confirmed reset.
+    // Recovery notice: transient, after a successful backup restore. Sits in
+    // the gap between AppBar and list; the list shifts down while visible so
+    // nothing overlaps (CRT-safe, root.sh-relative).
+    Rectangle {
+        id: configBanner
+        anchors.top: parent.top
+        anchors.topMargin: root.sh * 0.235
+        anchors.left: parent.left
+        anchors.leftMargin: root.sw * 0.115625 //74
+        width: root.sw * 0.76875 //492
+        height: root.sh * 0.095
+        visible: appCore.configCorrupted || appCore.configNotice.length > 0
+        color: appCore.configCorrupted ? "#3A2A00" : "#0A2A10"
+        border.color: appCore.configCorrupted ? "#FFB000" : "#40C060"
+        border.width: 1
+        radius: 4
+        z: 50
+
+        Text {
+            anchors.fill: parent
+            anchors.margins: root.sh * 0.008
+            text: appCore.configCorrupted
+                  ? "Settings file is damaged. Your saved settings are protected and will not be overwritten. Reset to defaults to make changes."
+                  : appCore.configNotice
+            font.family: root.globalFont
+            font.pixelSize: root.sh * 0.025 //12
+            color: appCore.configCorrupted ? "#FFB000" : "#40C060"
+            wrapMode: Text.WordWrap
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
     RowTrackingListView {
         id: settingsList
         model: settingsItems
 
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.topMargin: root.sh * 0.25 //120
+        anchors.topMargin: configBanner.visible ? root.sh * 0.345 : root.sh * 0.25 //120
         anchors.leftMargin: root.sw * 0.115625 //74
         width: root.sw * 0.76875 //492
-        height: root.sh * 0.525 //252
+        height: root.sh * 0.525 - (configBanner.visible ? root.sh * 0.095 : 0) //252
         clip: true
         focus: true
 
@@ -250,12 +304,16 @@ FocusScope {
                 var newVal = opts[newIdx]
                 // Display the label; persist the parallel value when one exists.
                 var savedVal = row.values ? row.values[newIdx] : newVal
-                var updated = settingsItems.slice()
-                updated[currentIndex] = Object.assign({}, row, { value: newVal })
-                var savedIndex = currentIndex
-                settingsItems = updated
-                currentIndex = savedIndex
-                appCore.save_setting(row.moduleId, row.key, savedVal)
+                // CFG-01: only show the new value when the write actually
+                // landed — a refused (degraded) save keeps the real value on
+                // screen instead of lying about a change that never persisted.
+                if (appCore.save_setting(row.moduleId, row.key, savedVal)) {
+                    var updated = settingsItems.slice()
+                    updated[currentIndex] = Object.assign({}, row, { value: newVal })
+                    var savedIndex = currentIndex
+                    settingsItems = updated
+                    currentIndex = savedIndex
+                }
             }
         }
 
@@ -268,12 +326,14 @@ FocusScope {
                 var newVal = opts[newIdx]
                 // Display the label; persist the parallel value when one exists.
                 var savedVal = row.values ? row.values[newIdx] : newVal
-                var updated = settingsItems.slice()
-                updated[currentIndex] = Object.assign({}, row, { value: newVal })
-                var savedIndex = currentIndex
-                settingsItems = updated
-                currentIndex = savedIndex
-                appCore.save_setting(row.moduleId, row.key, savedVal)
+                // CFG-01: see onLeftPressed — refused saves don't change the UI.
+                if (appCore.save_setting(row.moduleId, row.key, savedVal)) {
+                    var updated = settingsItems.slice()
+                    updated[currentIndex] = Object.assign({}, row, { value: newVal })
+                    var savedIndex = currentIndex
+                    settingsItems = updated
+                    currentIndex = savedIndex
+                }
             }
         }
 
@@ -291,6 +351,10 @@ FocusScope {
             } else if (row && row.type === "quit") {
                 settingsRoot.quitChoiceIndex = 0
                 settingsRoot.quitOverlayVisible = true
+            } else if (row && row.type === "action" && row.key === "reset_settings") {
+                // CFG-01 step 1: open the confirmation. No write happens here.
+                settingsRoot.resetChoiceIndex = 1   // default No
+                settingsRoot.resetOverlayVisible = true
             }
         }
 
@@ -488,6 +552,100 @@ FocusScope {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: modelData.label
                                 color: index === quitChoiceIndex ? root.surfaceColor : root.primaryColor
+                                font.family: root.globalFont
+                                font.capitalization: Font.AllUppercase
+                                topPadding: root.sh * 0.0041667 //2
+                                leftPadding: root.sw * 0.009375 //6
+                                rightPadding: root.sw * 0.009375 //6
+                                bottomPadding: root.sh * 0.00625 //3
+                                font.pixelSize: root.sh * 0.05 //24
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    text: root.hints.back + ":BACK " + root.hints.navigate + ":NAVIGATE " + root.hints.select + ":SELECT"
+                    color: root.tertiaryColor
+                    font.family: root.globalFont
+                    font.pixelSize: root.sh * 0.0333333 //16
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+        }
+    }
+
+    // --- CFG-01 RESET CONFIRMATION OVERLAY ---
+    // Step 2 of the damaged-file reset. Wording is pinned by the gate plan;
+    // Yes performs the reset (quarantine + fresh defaults), No/Back cancels
+    // without touching anything. Default selection is No.
+    Rectangle {
+        anchors.fill: parent
+        color: root.surfaceColor
+        visible: resetOverlayVisible
+        focus: resetOverlayVisible
+
+        Keys.onUpPressed:   { resetChoiceIndex = Math.max(0, resetChoiceIndex - 1) }
+        Keys.onDownPressed: { resetChoiceIndex = Math.min(1, resetChoiceIndex + 1) }
+        Keys.onReturnPressed: {
+            if (resetChoiceIndex === 0) {
+                // The ONLY path that writes over the corrupt file.
+                if (appCore.resetCorruptedConfig())
+                    settingsRoot.buildModel()
+            }
+            resetOverlayVisible = false
+            settingsList.forceActiveFocus()
+        }
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                resetOverlayVisible = false
+                settingsList.forceActiveFocus()
+                event.accepted = true
+            }
+        }
+
+        Rectangle {
+            color: root.surfaceColor
+            anchors.centerIn: parent
+            width: root.sw * 0.76875   //492
+            height: root.sh * 0.40
+
+            Column {
+                id: resetDialogColumn
+                anchors.fill: parent
+                anchors.margins: root.sh * 0.02
+                spacing: root.sh * 0.03 //14
+
+                Text {
+                    width: resetDialogColumn.width
+                    text: "Reset all settings to defaults? Your damaged file will be kept for recovery."
+                    color: root.secondaryColor
+                    font.family: root.globalFont
+                    font.pixelSize: root.sh * 0.0333333 //16
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                }
+
+                Column {
+                    width: resetDialogColumn.width
+                    Repeater {
+                        model: [{ label: "Yes" }, { label: "No" }]
+                        delegate: Item {
+                            width: resetDialogColumn.width
+                            height: root.sh * 0.0583333 //28
+
+                            Rectangle {
+                                anchors.fill: resetOptionText
+                                color: root.accentColor
+                                visible: index === resetChoiceIndex
+                            }
+
+                            Text {
+                                id: resetOptionText
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: modelData.label
+                                color: index === resetChoiceIndex ? root.surfaceColor : root.primaryColor
                                 font.family: root.globalFont
                                 font.capitalization: Font.AllUppercase
                                 topPadding: root.sh * 0.0041667 //2

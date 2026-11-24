@@ -155,7 +155,7 @@ private:
     void clearAuthState();
 
     QJsonObject loadConfig() const;
-    void saveConfig(const QJsonObject &cfg) const;
+    bool saveConfig(const QJsonObject &config) const;
 
     int videoQualityBitrate() const;
     int videoQualityMaxHeight() const;
