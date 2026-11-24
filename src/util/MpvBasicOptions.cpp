@@ -6,9 +6,18 @@
 #include "MpvBasicOptions.h"
 #include <initializer_list>
 #include <QByteArray>
+#include <QDebug>
+#include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QDir>
 #include <QChar>
+// POSIX includes come AFTER Qt: qsavefile.h refuses to be included after a
+// header that defines open(2).
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace mpvopts {
 namespace {
@@ -17,6 +26,104 @@ static QString confDir(const QString &path)
 {
     const int sep = path.lastIndexOf('/');
     return sep > 0 ? path.left(sep) : QStringLiteral(".");
+}
+
+// ---- CFG-01 N4b: atomic mpv.conf persistence -----------------------------
+// Mirrors cfgfile::atomicWrite (the shared CFG-01 shape, fix-decision D1):
+// QSaveFile with EVERY return checked, file fsync before commit and containing
+// directory fsync after commit. Any pre-commit failure leaves the live file
+// byte-identical and discards the temp; a directory-fsync failure returns
+// false with the NEW COMPLETE file already in place (never a partial). The
+// fault seam is compiled ONLY into the two-sided gate target, never the app.
+static bool mpvconfSeamFail(const char *stage)
+{
+#ifdef MPVCONF_TEST_SEAM
+    const QByteArray want = qgetenv("MPVCONF_SEAM_FAIL");
+    if (!want.isEmpty() && want == stage) {
+        qWarning("[mpvopts] seam %s injected", stage);
+        return true;
+    }
+#else
+    Q_UNUSED(stage);
+#endif
+    return false;
+}
+
+static bool mpvconfFsyncDir(const QString &path)
+{
+    const QString dir = QFileInfo(path).absolutePath();
+    int flags = O_RDONLY;
+#ifdef O_DIRECTORY
+    flags |= O_DIRECTORY;
+#endif
+    const int fd = ::open(QFile::encodeName(dir).constData(), flags);
+    if (fd < 0) {
+        qWarning("[mpvopts] dir-fsync open failed for %s: %s",
+                 qPrintable(dir), strerror(errno));
+        return false;
+    }
+    const int result = ::fsync(fd);
+    const int savedErrno = errno;
+    ::close(fd);
+    if (result != 0) {
+        qWarning("[mpvopts] dir-fsync failed for %s: %s",
+                 qPrintable(dir), strerror(savedErrno));
+        return false;
+    }
+    return true;
+}
+
+static bool atomicWriteText(const QString &path, const QByteArray &content)
+{
+    if (mpvconfSeamFail("open"))
+        return false;
+    QSaveFile out(path);
+    out.setDirectWriteFallback(false); // never truncate the live file
+    if (!out.open(QIODevice::WriteOnly)) {
+        qWarning("[mpvopts] atomic write open failed for %s: %s",
+                 qPrintable(path), qPrintable(out.errorString()));
+        return false;
+    }
+    const qint64 written = out.write(content.constData(), content.size());
+    const bool seamWrite = mpvconfSeamFail("write");
+    if (written != content.size() || seamWrite) {
+        qWarning("[mpvopts] atomic write failed for %s (%lld of %lld bytes): %s",
+                 qPrintable(path), static_cast<long long>(written),
+                 static_cast<long long>(content.size()), qPrintable(out.errorString()));
+        out.cancelWriting();
+        return false;
+    }
+    const bool seamFlush = mpvconfSeamFail("flush");
+    if (!out.flush() || seamFlush) {
+        qWarning("[mpvopts] flush failed for %s: %s",
+                 qPrintable(path), qPrintable(out.errorString()));
+        out.cancelWriting();
+        return false;
+    }
+    const int fd = static_cast<int>(out.handle());
+    const bool seamFsync = mpvconfSeamFail("fsync");
+    if (seamFsync || fd < 0 || ::fsync(fd) != 0) {
+        qWarning("[mpvopts] file fsync failed for %s: %s", qPrintable(path),
+                 seamFsync ? "injected" : strerror(errno));
+        out.cancelWriting();
+        return false;
+    }
+    if (mpvconfSeamFail("commit")) {
+        qWarning("[mpvopts] commit failure injected for %s", qPrintable(path));
+        out.cancelWriting();
+        return false;
+    }
+    if (!out.commit()) {
+        qWarning("[mpvopts] commit failed for %s: %s",
+                 qPrintable(path), qPrintable(out.errorString()));
+        return false;
+    }
+    if (mpvconfSeamFail("dirfsync") || !mpvconfFsyncDir(path)) {
+        qWarning("[mpvopts] dir fsync failed for %s (live file is the new complete document)",
+                 qPrintable(path));
+        return false;
+    }
+    return true;
 }
 
 struct ChoiceRow {
@@ -229,10 +336,26 @@ bool setUiValue(const QString &mpvConfPath, const QString &key, const QString &u
     if (option.isEmpty())
         return false;
 
-    QFile f(mpvConfPath);
     QByteArray content;
-    if (f.open(QIODevice::ReadOnly)) {
+    if (QFile::exists(mpvConfPath)) {
+        // An existing file that cannot be read must NOT be treated as empty:
+        // that would rewrite the whole conf as a single line and silently
+        // destroy every other mpv setting (the text-format analogue of
+        // CFG-01's defaults-over-corrupt wipe). Refuse and leave it untouched.
+        const bool seamRead = mpvconfSeamFail("readopen");
+        QFile f(mpvConfPath);
+        if (seamRead || !f.open(QIODevice::ReadOnly)) {
+            qWarning("[mpvopts] cannot read existing mpv.conf %s; refusing to write: %s",
+                     qPrintable(mpvConfPath),
+                     seamRead ? "injected" : qPrintable(f.errorString()));
+            return false;
+        }
         content = f.readAll();
+        if (f.error() != QFileDevice::NoError) {
+            qWarning("[mpvopts] read error on %s; refusing to write: %s",
+                     qPrintable(mpvConfPath), qPrintable(f.errorString()));
+            return false;
+        }
         f.close();
     }
     const QStringList lines = content.isEmpty()
@@ -262,10 +385,11 @@ bool setUiValue(const QString &mpvConfPath, const QString &key, const QString &u
         content += (newLine + QStringLiteral("\n")).toUtf8();
     }
     QDir().mkpath(confDir(mpvConfPath));
-    QFile out(mpvConfPath);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    if (!atomicWriteText(mpvConfPath, content)) {
+        qWarning("[mpvopts] could not persist mpv.conf %s; live file left intact",
+                 qPrintable(mpvConfPath));
         return false;
-    out.write(content);
+    }
     return true;
 }
 
