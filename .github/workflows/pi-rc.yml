@@ -50,7 +50,10 @@ jobs:
          contains(github.event.pull_request.labels.*.name, 'pi-test'))
         ||
         (github.event.action == 'closed' && !github.event.pull_request.merged)
-      )
+      ) &&
+      secrets.PI_SSH_HOSTNAME != '' &&
+      secrets.PI_SSH_USERNAME != '' &&
+      secrets.PI_SSH_IDENTITY != ''
     runs-on: ubuntu-24.04-arm
     permissions:
       issues: write
@@ -258,7 +261,10 @@ jobs:
     name: Burst RC deploy (rc / restore)
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      (inputs.mode == 'rc' || inputs.mode == 'restore')
+      (inputs.mode == 'rc' || inputs.mode == 'restore') &&
+      secrets.PI_SSH_HOSTNAME != '' &&
+      secrets.PI_SSH_USERNAME != '' &&
+      secrets.PI_SSH_IDENTITY != ''
     concurrency:
       group: pi-rc-deploy
       cancel-in-progress: false
