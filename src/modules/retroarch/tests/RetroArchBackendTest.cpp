@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QElapsedTimer>
 
 // Unit tests for RetroArchBackend's playlist browsing. Everything is local
 // file I/O against a temp tree, so the suite is fast and needs no RetroArch
@@ -47,6 +48,8 @@ private slots:
     void perNavigationScanStopsOnWarmCache();
     void thumbnailCacheClearForcesRebuild();
     void thumbnailCacheInvalidatesOnDirChange();
+    void thumbnailSettingChangeBumpsGenerationAndClearsCache();
+    void prewarmBuildsOffThreadAndWarmsFirstResolve();
     void signalsFireAlongsideReturnValues();
     void archiveRomPathChecksArchiveOnly();
     void archiveRomPathRelativeResolvesAgainstRomDir();
@@ -450,6 +453,81 @@ void RetroArchBackendTest::thumbnailCacheInvalidatesOnDirChange() {
     { QFile f(dir + "/New.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
     QCOMPARE(be->resolveThumbnail("New", "invalidate_libretro"), dir + "/New.png");
     QCOMPARE(be->thumbnailCacheScanCount(), 2);
+}
+
+void RetroArchBackendTest::thumbnailSettingChangeBumpsGenerationAndClearsCache() {
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+    const QString dir = m_tmp.path() + "/thumbnails/gen_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "gen_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+    const quint64 before = be->thumbnailCacheGeneration();
+
+    // A new thumbnail root clears the manifest AND bumps the generation, so a
+    // build captured under the old root cannot install a stale index later.
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("thumbnail_directory"),
+                         m_tmp.path() + "/thumbnails/gen2");
+    QCOMPARE(be->thumbnailCacheGeneration(), before + 1);
+    QCOMPARE(be->thumbnailCacheScanCount(), 0);
+    QVERIFY(be->resolveThumbnail("Old", "gen_libretro").isEmpty());
+}
+
+void RetroArchBackendTest::prewarmBuildsOffThreadAndWarmsFirstResolve() {
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+
+    // A dedicated root keeps this test independent of type dirs other cases
+    // created under the shared <thumbnails> tree.
+    const QString root = m_tmp.path() + "/prewarm-thumbs";
+    const QString dir = root + "/prewarm_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    for (int i = 0; i < 2000; ++i) {
+        QFile f(dir + QStringLiteral("/game-%1.png").arg(i));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    QSignalSpy readySpy(be, &RetroArchBackend::thumbnailManifestReady);
+    const quint64 before = be->thumbnailCacheGeneration();
+
+    // Triggering prewarm must be cheap: the 2000-file listing is queued to a
+    // worker, not executed in onSettingChanged() on the calling thread.
+    QElapsedTimer trigger;
+    trigger.start();
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("thumbnail_directory"), root);
+    const qint64 triggerMs = trigger.elapsed();
+    QVERIFY2(triggerMs < 100, qPrintable(QStringLiteral("prewarm trigger took %1 ms")
+                                         .arg(triggerMs)));
+    readySpy.clear();                 // drop any install from construction prewarm
+
+    // Wait for exactly one install of the new root (old-generation jobs are
+    // rejected and never installed or signalled).
+    QTRY_COMPARE_WITH_TIMEOUT(be->thumbnailCacheScanCount(), 1, 10000);
+    QVERIFY(readySpy.count() >= 1);
+    QCOMPARE(be->thumbnailCacheGeneration(), before + 1);
+
+    // No dropped matches: every game in the built manifest resolves, and no
+    // further directory listing is needed.
+    for (int i = 0; i < 20; ++i) {
+        QCOMPARE(be->resolveThumbnail(QStringLiteral("game-%1").arg(i),
+                                      QStringLiteral("prewarm_libretro")),
+                 dir + QStringLiteral("/game-%1.png").arg(i));
+    }
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    QElapsedTimer firstResolve;
+    firstResolve.start();
+    QCOMPARE(be->resolveThumbnail(QStringLiteral("game-0"),
+                                  QStringLiteral("prewarm_libretro")),
+             dir + QStringLiteral("/game-0.png"));
+    const double ms = firstResolve.nsecsElapsed() / 1e6;
+    QVERIFY2(ms <= 2.0, qPrintable(QStringLiteral("first post-prewarm resolve %1 ms")
+                                   .arg(ms, 0, 'f', 4)));
 }
 
 void RetroArchBackendTest::signalsFireAlongsideReturnValues() {

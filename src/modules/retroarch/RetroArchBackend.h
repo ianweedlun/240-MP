@@ -6,6 +6,8 @@
 #include <QVariantList>
 #include <QProcess>
 #include <QHash>
+#include <QStringList>
+#include <QThread>
 
 #include "RecentGamesStore.h"
 #include "ThumbnailManifestCache.h"
@@ -79,9 +81,13 @@ public:
     // Manifest-cache observability for the per-navigation scan gate. The scan
     // count is the number of real directory listings done since the last
     // clear(); it must stop growing once the cache is warm.
-    int thumbnailCacheScanCount() const { return m_thumbManifestCache.scanCount(); }
-    int thumbnailCacheHitCount() const { return m_thumbManifestCache.hitCount(); }
+    Q_INVOKABLE int thumbnailCacheScanCount() const { return m_thumbManifestCache.scanCount(); }
+    Q_INVOKABLE int thumbnailCacheHitCount() const { return m_thumbManifestCache.hitCount(); }
     void clearThumbnailCache() { m_thumbManifestCache.clear(); }
+    // Async-prewarm observability: the generation increments on every clear
+    // (including a thumbnail_directory change); tests assert that a setting
+    // change invalidates work captured under the previous generation.
+    quint64 thumbnailCacheGeneration() const { return m_thumbManifestCache.generation(); }
     // Launch a game: hand the display to RetroArch, run it with the item's
     // core, restore the display when it exits. The map should carry the fields a
     // later "recently played" row needs (playlistPath, playlistBasename,
@@ -113,6 +119,9 @@ signals:
     void gamesReady(const QVariantList &games);
     void retroarchPathChanged();
     void gameRunningChanged();
+    // Emitted after an async prewarm manifest is installed, so a view that
+    // already resolved a row can refresh it against the now-warm cache.
+    void thumbnailManifestReady();
 
 public slots:
     // Called directly by AppCore::save_setting before moduleSettingChanged is
@@ -147,12 +156,25 @@ private:
     // resolveThumbnail()/findThumbnail() are const QML-facing calls.
     mutable retro::ThumbnailManifestCache m_thumbManifestCache;
 
+    // RETRO-THUMB-ASYNC: the first manifest build is a ~250 ms directory
+    // listing at 50k files. Prewarm it on a worker thread at startup and on
+    // thumbnail_directory change so the first QML resolve is a hash hit.
+    // `m_thumbPrewarmContext` lives in the worker thread; all cache mutation
+    // is posted back to this object's thread and generation-checked there.
+    QThread m_thumbPrewarmThread;
+    QObject *m_thumbPrewarmContext = nullptr;
+
     void loadSettings();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds
     // .lpl. Both are scanned so either install works without configuration.
     static QStringList playlistFilters();
     QVariantList parsePlaylist(const QString &path, const QString &systemId);
     QString findThumbnail(const QString &gameName, const QString &dirName) const;
+    // Shallow two-level scan of <thumbnails>/<playlist>/<type>; cheap even with
+    // 50k files because only directories are listed. Seed list for prewarm.
+    QStringList discoverThumbnailTypeDirs() const;
+    // Queue one async build per existing type dir with the current generation.
+    void prewarmThumbnailManifests();
     QString sanitizeForThumbnailDb(const QString &label) const;
     QString resolveRomPath(const QString &playlistPath, const QString &romPath) const;
     // Core .so location for an item: its core_path if present, else the cores
