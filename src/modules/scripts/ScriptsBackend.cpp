@@ -1,5 +1,6 @@
 #include "ScriptsBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/AtomicFile.h"
 #include "ScriptLauncher.h"
 #include <QDir>
 #include <QFile>
@@ -153,18 +154,9 @@ bool ScriptsBackend::parseSidecar(const QString &sidecarPath, ScriptMeta &meta) 
 // it alone — parseSidecar simply found no recognised keys and the defaults stand.
 void ScriptsBackend::writeStubSidecar(const QString &sidecarPath,
                                       const ScriptMeta &defaults) {
-    QFile file(sidecarPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        // Expected on a read-only directory (a mounted share, a git checkout the
-        // user can't write). Not fatal — the script still runs on defaults.
-        if (!m_warnedUnwritable) {
-            qWarning("[Scripts] Could not write sidecar %s: %s (using defaults; "
-                     "further sidecar-write failures will not be logged)",
-                     qPrintable(sidecarPath), qPrintable(file.errorString()));
-            m_warnedUnwritable = true;
-        }
+    // NewOnly contract: leave an existing sidecar alone (it may be hand-edited).
+    if (QFile::exists(sidecarPath))
         return;
-    }
 
     const QString scriptName = QFileInfo(sidecarPath).completeBaseName() + ".sh";
     QString out;
@@ -197,7 +189,17 @@ void ScriptsBackend::writeStubSidecar(const QString &sidecarPath,
     out += "# yes = give the script a real terminal, for one that needs typed input.\n";
     out += "tty = " + QString(defaults.tty ? "yes" : "no") + "\n";
 
-    file.write(out.toUtf8());
+    if (!atomicfile::writeBytes(sidecarPath, out.toUtf8(), /*durable=*/true,
+                                "scripts stub sidecar")) {
+        // Read-only dir (mounted share, git checkout): non-fatal, defaults stand.
+        if (!m_warnedUnwritable) {
+            qWarning("[Scripts] Could not write sidecar %s (using defaults; "
+                     "further sidecar-write failures will not be logged)",
+                     qPrintable(sidecarPath));
+            m_warnedUnwritable = true;
+        }
+        return;
+    }
     qDebug("[Scripts] Created sidecar: %s", qPrintable(QFileInfo(sidecarPath).fileName()));
 }
 
@@ -392,14 +394,13 @@ bool ScriptsBackend::setFavorite(const QString &basename, bool favorite) {
     if (!replaced)
         lines.append(QStringLiteral("favorite = ") + (favorite ? "yes" : "no"));
 
-    QFile out(sidecar);
-    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning("[Scripts] Could not update %s: %s",
-                 qPrintable(QFileInfo(sidecar).fileName()), qPrintable(out.errorString()));
+    const QByteArray payload = (lines.join(QLatin1Char('\n')) + "\n").toUtf8();
+    if (!atomicfile::writeBytes(sidecar, payload, /*durable=*/true,
+                                "scripts favorite sidecar")) {
+        qWarning("[Scripts] Could not update %s",
+                 qPrintable(QFileInfo(sidecar).fileName()));
         return false;
     }
-    out.write((lines.join(QLatin1Char('\n')) + "\n").toUtf8());
-    out.close();
 
     qDebug("[Scripts] %s favorite = %s", qPrintable(basename), favorite ? "yes" : "no");
     scanScriptsDir();

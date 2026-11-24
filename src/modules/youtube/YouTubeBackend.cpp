@@ -1,5 +1,6 @@
 #include "YouTubeBackend.h"
 #include "YtInnertubeResolver.h"
+#include "../../util/AtomicFile.h"
 #include "../../util/YtStreamSelect.h"
 #include "../../util/YtUrlFresh.h"
 #include "../../util/YtNegativeCache.h"
@@ -764,10 +765,10 @@ QVariantMap YouTubeBackend::loadHistory() const {
 }
 
 void YouTubeBackend::saveHistory(const QVariantMap &history) {
-    QFile file(historyFilePath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return;
-    file.write(QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact));
+    const QByteArray payload =
+        QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact);
+    atomicfile::writeBytes(historyFilePath(), payload, /*durable=*/true,
+                           "youtube_history.json");
 }
 
 QVariantMap YouTubeBackend::getSavedPosition(const QString &videoId) {
@@ -843,10 +844,10 @@ QVariantList YouTubeBackend::loadWatchLater() const {
 }
 
 void YouTubeBackend::saveWatchLater(const QVariantList &list) {
-    QFile file(watchLaterFilePath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return;
-    file.write(QJsonDocument(QJsonArray::fromVariantList(list)).toJson(QJsonDocument::Compact));
+    const QByteArray payload =
+        QJsonDocument(QJsonArray::fromVariantList(list)).toJson(QJsonDocument::Compact);
+    atomicfile::writeBytes(watchLaterFilePath(), payload, /*durable=*/true,
+                           "youtube_watch_later.json");
 }
 
 QVariantList YouTubeBackend::getWatchLater() const {
@@ -1088,9 +1089,9 @@ void YouTubeBackend::saveSponsorCache()
         e.insert(QStringLiteral("fetchedAt"), double(m_sponsorFetchedAt.value(vid)));
         arr.append(e);
     }
-    QFile f(sponsorCacheFilePath());
-    if (f.open(QIODevice::WriteOnly))
-        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    atomicfile::writeBytes(sponsorCacheFilePath(),
+                           QJsonDocument(arr).toJson(QJsonDocument::Compact),
+                           /*durable=*/true, "youtube_sponsor.json");
 }
 
 void YouTubeBackend::markSponsorCacheDirty()
@@ -1182,9 +1183,9 @@ void YouTubeBackend::saveKnownIds()
     // Recency order (MRU first), bounded by the index cap.
     for (const QString &id : m_knownLru)
         arr.append(id);
-    QFile f(knownIdsFilePath());
-    if (f.open(QIODevice::WriteOnly))
-        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    atomicfile::writeBytes(knownIdsFilePath(),
+                           QJsonDocument(arr).toJson(QJsonDocument::Compact),
+                           /*durable=*/true, "youtube_known_ids.json");
 }
 
 void YouTubeBackend::noteKnownVideoIds(const QStringList &videoIds)
@@ -1514,10 +1515,9 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
     // path made every cure an instant RESOLVE_BUSY.
     if (!allowRetry)
         m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
-    QFile f(urlCacheFilePath());
-    if (!f.open(QIODevice::WriteOnly))
-        return;
-    f.write(QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact));
+    atomicfile::writeBytes(urlCacheFilePath(),
+                           QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact),
+                           /*durable=*/true, "youtube_url_cache.json");
 }
 
 void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
@@ -1533,10 +1533,9 @@ void YouTubeBackend::storeUrlCacheEntry(const QString &key, const QString &url,
     m_urlCache.insert(key, entry);
     yturl::pruneUrlCache(m_urlCache, QDateTime::currentMSecsSinceEpoch() / 1000,
                         kUrlCacheMaxEntries);
-    QFile f(urlCacheFilePath());
-    if (!f.open(QIODevice::WriteOnly))
-        return;
-    f.write(QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact));
+    atomicfile::writeBytes(urlCacheFilePath(),
+                           QJsonDocument(m_urlCache).toJson(QJsonDocument::Compact),
+                           /*durable=*/true, "youtube_url_cache.json");
 }
 
 bool YouTubeBackend::hasFreshUrlPair(const QString &key) const

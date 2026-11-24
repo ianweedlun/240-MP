@@ -1,5 +1,6 @@
 #include "NfcReaderBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/AtomicFile.h"
 
 #include "../../AppCore.h"
 #include "NfcDriver.h"
@@ -421,13 +422,18 @@ void NfcReaderBackend::writeStubFile(const QString &normalizedUid) {
     name.replace(QLatin1Char(':'), QLatin1Char('-'));
     const QString path = tagsDirPath() + "/" + name + ".txt";
 
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        qWarning("[NfcReader] Could not create stub tag file %s: %s",
-                 qPrintable(path), qPrintable(file.errorString()));
+    // NewOnly contract: a stub must never clobber a tag file that already
+    // exists (it may hold a different UID). Check first, then atomic-write.
+    if (QFile::exists(path)) {
+        qWarning("[NfcReader] Refusing to overwrite existing stub tag file %s",
+                 qPrintable(path));
         return;
     }
-    file.write((normalizedUid + "\n").toUtf8());
+    if (!atomicfile::writeBytes(path, (normalizedUid + "\n").toUtf8(),
+                                /*durable=*/true, "NFC stub tag file")) {
+        qWarning("[NfcReader] Could not create stub tag file %s", qPrintable(path));
+        return;
+    }
     qDebug("[NfcReader] Created stub tag file: %s", qPrintable(path));
     // Register as known-unmapped so a lift-and-retap doesn't re-scan/re-write.
     m_mapping.insert(normalizedUid, MappingEntry{QString(), name, QString()});
@@ -521,20 +527,12 @@ bool NfcReaderBackend::writeCardFile(const QString &uid, const QString &title,
         }
     }
 
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning("[NfcReader] Could not write tag file %s: %s",
-                 qPrintable(path), qPrintable(file.errorString()));
-        return false;
-    }
     QString body = normalizedUid + "\n" + ref + "\n";
     if (!mode.isEmpty()) body += mode + "\n";
-    if (file.write(body.toUtf8()) < 0) {
-        qWarning("[NfcReader] Could not write tag file %s: %s",
-                 qPrintable(path), qPrintable(file.errorString()));
+    if (!atomicfile::writeBytes(path, body.toUtf8(), /*durable=*/true, "NFC tag file")) {
+        qWarning("[NfcReader] Could not write tag file %s", qPrintable(path));
         return false;
     }
-    file.close();
 
     qDebug("[NfcReader] Wrote tag file: %s -> %s%s", qPrintable(path), qPrintable(ref),
            mode.isEmpty() ? "" : qPrintable(" (" + mode + ")"));
@@ -567,10 +565,10 @@ QVariantMap NfcReaderBackend::loadHistory() const {
 }
 
 void NfcReaderBackend::saveHistory(const QVariantMap &history) {
-    QFile file(historyFilePath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return;
-    file.write(QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact));
+    const QByteArray payload =
+        QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact);
+    atomicfile::writeBytes(historyFilePath(), payload, /*durable=*/true,
+                           "nfc_reader_history.json");
 }
 
 QVariantMap NfcReaderBackend::getSavedPosition(const QString &videoPath) {

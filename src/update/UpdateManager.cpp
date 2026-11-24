@@ -1,5 +1,7 @@
 #include "UpdateManager.h"
 
+#include "../util/AtomicFile.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -375,7 +377,8 @@ void UpdateManager::finishDownload() {
     if (!m_downloadFile.rename(finalPath))
         return fail(QStringLiteral("Could not save the downloaded update."));
 
-    writeStagedMarkers(sha256);
+    if (!writeStagedMarkers(sha256))
+        return fail(QStringLiteral("Could not write to the updates folder."));
     setState(QStringLiteral("readyToApply"));
 }
 
@@ -384,16 +387,16 @@ void UpdateManager::finishDownload() {
 // only created at the commitment point in applyLinux(). Until then a downloaded
 // update is inert: backing out and rebooting runs the old version, and the page
 // just re-offers Install.
-void UpdateManager::writeStagedMarkers(const QString &sha256Hex) {
+bool UpdateManager::writeStagedMarkers(const QString &sha256Hex) {
     QJsonObject staged{
         {QStringLiteral("version"), m_latestVersion},
         {QStringLiteral("asset"), m_assetName},
         {QStringLiteral("sha256"), sha256Hex},
         {QStringLiteral("size"), QString::number(QFileInfo(updatesDir() + QStringLiteral("/") + m_assetName).size())},
     };
-    QFile json(stagedJsonPath());
-    if (json.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        json.write(QJsonDocument(staged).toJson());
+    return atomicfile::writeBytes(stagedJsonPath(),
+                                  QJsonDocument(staged).toJson(),
+                                  /*durable=*/true, "staged.json");
 }
 
 void UpdateManager::clearStagingFiles() {
@@ -450,13 +453,12 @@ void UpdateManager::applyLinux() {
         setState(QStringLiteral("error"), QStringLiteral("Staged update is invalid — please download again."));
         return;
     }
-    QFile sums(stagedSha256Path());
-    if (!sums.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    if (!atomicfile::writeBytes(stagedSha256Path(),
+                                QStringLiteral("%1  %2\n").arg(sha256, asset).toUtf8(),
+                                /*durable=*/true, "staged.sha256")) {
         setState(QStringLiteral("error"), QStringLiteral("Could not write to the updates folder."));
         return;
     }
-    sums.write(QStringLiteral("%1  %2\n").arg(sha256, asset).toUtf8());
-    sums.close();
 
     if (qEnvironmentVariableIsSet("MP240_AUTOSTART"))
         QTimer::singleShot(0, qApp, []() { QCoreApplication::exit(kExitCodeUpdateRestart); });
@@ -530,11 +532,9 @@ for i in $(seq 1 150); do kill -0 "$PID" 2>/dev/null || break; sleep 0.2; done
 exec "$APP"
 )HELPER";
         const QString scriptPath = updatesDir() + QStringLiteral("/apply-appimage.sh");
-        QFile script(scriptPath);
-        if (script.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            script.write(kHelper);
-            script.close();
-            script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+        if (atomicfile::writeBytes(scriptPath, kHelper, /*durable=*/true,
+                                   "apply-appimage.sh")) {
+            QFile::setPermissions(scriptPath, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
                                   | QFile::ReadGroup | QFile::ExeGroup);
             QProcess::startDetached(QStringLiteral("/bin/bash"),
                                     {scriptPath,
@@ -589,14 +589,11 @@ fi
 )HELPER";
 
     const QString scriptPath = updatesDir() + QStringLiteral("/apply-macos.sh");
-    QFile script(scriptPath);
-    if (!script.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    if (!atomicfile::writeBytes(scriptPath, kHelper, /*durable=*/true, "apply-macos.sh")) {
         setState(QStringLiteral("error"), QStringLiteral("Could not write the update helper."));
         return;
     }
-    script.write(kHelper);
-    script.close();
-    script.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+    QFile::setPermissions(scriptPath, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
                           | QFile::ReadGroup | QFile::ExeGroup);
 
     QProcess::startDetached(QStringLiteral("/bin/bash"),

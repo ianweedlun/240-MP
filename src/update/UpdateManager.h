@@ -71,7 +71,7 @@ private:
     QString updatesDir() const;
     QString stagedJsonPath() const;
     QString stagedSha256Path() const;
-    void writeStagedMarkers(const QString &sha256Hex);
+    bool writeStagedMarkers(const QString &sha256Hex);
     void clearStagingFiles();
 
     QNetworkAccessManager m_nam;

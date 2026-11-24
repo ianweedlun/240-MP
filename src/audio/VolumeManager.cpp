@@ -2,6 +2,7 @@
 
 #include "audio/NoopVolumeMixer.h"
 #include "audio/VolumeMixerFactory.h"
+#include "../util/AtomicFile.h"
 
 #include <QDir>
 #include <QFile>
@@ -24,15 +25,13 @@ bool writeVolumeJson(const QString &dataRoot, int level, bool muted)
 {
     if (dataRoot.isEmpty() || !QDir().mkpath(dataRoot))
         return false;
-    QFile f(QDir(dataRoot).filePath(QStringLiteral("volume.json")));
-    if (!f.open(QIODevice::WriteOnly))
-        return false;
     QJsonObject o;
     o.insert(QStringLiteral("level"), level);
     o.insert(QStringLiteral("muted"), muted);
-    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    f.close();
-    return true;
+    return atomicfile::writeBytes(
+        QDir(dataRoot).filePath(QStringLiteral("volume.json")),
+        QJsonDocument(o).toJson(QJsonDocument::Compact),
+        /*durable=*/true, "volume.json");
 }
 
 // One debounced write. Captures VALUES only (no VolumeManager pointer), so it

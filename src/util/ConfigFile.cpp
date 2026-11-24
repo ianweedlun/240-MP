@@ -1,4 +1,5 @@
 #include "ConfigFile.h"
+#include "AtomicFile.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -57,79 +58,18 @@ bool seamWants(const char *stage) {
 #endif
 }
 
-// Atomic write of raw bytes to `path` via QSaveFile (temp in the SAME
-// directory). `durable` = file-fsync before commit + dir-fsync after commit
-// (REQUIRED for config.json; siblings are best-effort). Every return checked;
-// any pre-commit failure leaves the live target byte-identical and discards
-// the temp. Dir-fsync failure (post-commit) returns false with the live file
-// already the NEW COMPLETE doc — never a wipe (R6).
+// Atomic writer for config.json and its siblings. The implementation lives in
+// util/AtomicFile.h so every data-dir writer shares ONE copy of the shape; this
+// wrapper only maps the compile-gated CFG01 test seam onto its runtime hook.
 bool atomicWrite(const QString &path, const QByteArray &bytes, bool durable,
                  const char *what) {
-    if (seamWants("open")) {
-        qWarning("[cfgfile] %s: open failure injected for %s", what, qPrintable(path));
-        return false;
+    static const char *const kStages[] =
+        {"open", "write", "flush", "fsync", "commit", "dirfsync"};
+    const char *forceFail = nullptr;
+    for (const char *stage : kStages) {
+        if (seamWants(stage)) { forceFail = stage; break; }
     }
-    QSaveFile f(path);
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[cfgfile] %s: open failed for %s: %s",
-                 what, qPrintable(path), qPrintable(f.errorString()));
-        return false;
-    }
-    const qint64 written = f.write(bytes);
-    if (written != bytes.size() || seamWants("write")) {
-        qWarning("[cfgfile] %s: write failed for %s (%lld of %lld bytes): %s",
-                 what, qPrintable(path), static_cast<long long>(written),
-                 static_cast<long long>(bytes.size()), qPrintable(f.errorString()));
-        f.cancelWriting();
-        return false;
-    }
-    if (!f.flush() || seamWants("flush")) {
-        qWarning("[cfgfile] %s: flush failed for %s: %s",
-                 what, qPrintable(path), qPrintable(f.errorString()));
-        f.cancelWriting();
-        return false;
-    }
-    if (durable) {
-        // fsync the temp FILE before commit: rename gives old-or-new, not
-        // durability (ext4 delayed allocation / SD volatile cache).
-        const int fd = static_cast<int>(f.handle());
-        if (seamWants("fsync") || fd < 0 || ::fsync(fd) != 0) {
-            qWarning("[cfgfile] %s: file fsync failed for %s: %s",
-                     what, qPrintable(path),
-                     seamWants("fsync") ? "injected" : strerror(errno));
-            f.cancelWriting();
-            return false;
-        }
-    }
-    if (seamWants("commit")) {
-        qWarning("[cfgfile] %s: commit failure injected for %s", what, qPrintable(path));
-        f.cancelWriting();
-        return false;
-    }
-    if (!f.commit()) {
-        qWarning("[cfgfile] %s: commit failed for %s: %s",
-                 what, qPrintable(path), qPrintable(f.errorString()));
-        return false;   // QSaveFile discards the uncommitted temp
-    }
-    if (durable) {
-        // fsync the CONTAINING DIRECTORY so the rename itself is durable.
-        const QString dirPath = QFileInfo(path).absolutePath();
-        int flags = O_RDONLY;
-#ifdef O_DIRECTORY
-        flags |= O_DIRECTORY;
-#endif
-        const int dfd = ::open(QFile::encodeName(dirPath).constData(), flags);
-        const bool failed = seamWants("dirfsync") || dfd < 0 || ::fsync(dfd) != 0;
-        if (failed) {
-            qWarning("[cfgfile] %s: directory fsync failed for %s: %s (live file is the new complete document)",
-                     what, qPrintable(dirPath),
-                     seamWants("dirfsync") ? "injected" : strerror(errno));
-            if (dfd >= 0) ::close(dfd);
-            return false;
-        }
-        ::close(dfd);
-    }
-    return true;
+    return atomicfile::writeBytes(path, bytes, durable, what, forceFail);
 }
 
 // Parse + structural guard. Returns false with a human-readable reason.

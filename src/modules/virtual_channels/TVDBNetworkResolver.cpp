@@ -2,6 +2,7 @@
 
 #include "Catalog.h"
 #include "MediaServerSource.h"
+#include "../../util/AtomicFile.h"
 
 #include <QEventLoop>
 #include <QDebug>
@@ -224,13 +225,12 @@ void TVDBNetworkResolver::loadCache(const QString &path) {
 
 void TVDBNetworkResolver::saveCache() const {
     if (m_cachePath.isEmpty()) return;
-    QFile f(m_cachePath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
     QJsonObject root;
     for (auto it = m_cache.constBegin(); it != m_cache.constEnd(); ++it)
         root.insert(it.key(), it.value());
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
-    f.close();
+    atomicfile::writeBytes(m_cachePath,
+                           QJsonDocument(root).toJson(QJsonDocument::Compact),
+                           /*durable=*/true, "TVDB resolver cache");
 }
 
 QVector<Subject> TVDBNetworkResolver::listGenres() const {

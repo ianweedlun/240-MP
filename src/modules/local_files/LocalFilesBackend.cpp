@@ -1,5 +1,7 @@
 #include "LocalFilesBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/AtomicFile.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -72,10 +74,10 @@ QVariantMap LocalFilesBackend::loadHistory() const {
 }
 
 void LocalFilesBackend::saveHistory(const QVariantMap &history) {
-    QFile file(historyFilePath());
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return;
-    file.write(QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact));
+    const QByteArray payload =
+        QJsonDocument(QJsonObject::fromVariantMap(history)).toJson(QJsonDocument::Compact);
+    atomicfile::writeBytes(historyFilePath(), payload, /*durable=*/true,
+                           "local_files_history.json");
 }
 
 QVariantMap LocalFilesBackend::getSavedPosition(const QString &filePath) {

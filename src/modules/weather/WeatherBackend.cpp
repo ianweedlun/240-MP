@@ -1,5 +1,6 @@
 #include "WeatherBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/AtomicFile.h"
 #include "WeatherCodes.h"
 #include "../../util/MpvLocator.h"
 
@@ -700,14 +701,13 @@ void WeatherBackend::applyLocationSetting(const QString &spec)
         lines.replace(0, trimmed);
 
     const QString path = location_file_path();
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    const QByteArray payload =
+        (lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8();
+    if (!atomicfile::writeBytes(path, payload, /*durable=*/true, "weather_location.txt")) {
         qWarning("[Weather] location setting not applied: %s", qPrintable(path));
         emitError(QStringLiteral("unreadable"));
         return;
     }
-    file.write((lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8());
-    file.close();
     qInfo("[Weather] LOCATION set: primary line -> \"%s\"", qPrintable(trimmed));
 
     if (m_resolved) {
