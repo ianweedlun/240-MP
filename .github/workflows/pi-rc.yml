@@ -126,7 +126,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           # APP_VERSION is set by the tested decide helper: "<PR>-pi-rc" for an
           # RC deploy, or the saved official rev for a restore. The latter is
           # what ci.yml stamps on the beta build (github.sha), so the restored
@@ -346,7 +346,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
           cmake --build build --parallel 4
@@ -490,7 +490,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="buildonly-pi-rc"
           cmake --build build --parallel 4

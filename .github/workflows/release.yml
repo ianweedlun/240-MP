@@ -140,7 +140,7 @@ jobs:
       - name: Build and test core
         uses: ./.github/actions/build-and-test
         with:
-          apt-packages: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window qt6-multimedia-dev qml6-module-qtmultimedia libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev"
+          apt-packages: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window qt6-multimedia-dev qml6-module-qtmultimedia libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev"
           install-prefix: ${{ github.workspace }}/install/usr/local
           app-version: ${{ github.ref_name }}
           run-tests: 'false'
@@ -201,6 +201,7 @@ jobs:
             build-essential \
             cmake \
             libdrm-dev \
+            libfontconfig1-dev \
             libssl-dev \
             libsdl2-dev \
             libpcsclite-dev \
