@@ -476,6 +476,26 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
 
+    # CFG-01 N4b: atomic mpv.conf persistence. Two-sided instrument — the SAME
+    # gate source compiles against a pre-fix writer by setting
+    # -DMPVCONF_ATOMIC_SRC=<pre-tree>/src/util/MpvBasicOptions.cpp, where the
+    # kill/RLIMIT/seam arms fail BY DESIGN. The MPVCONF_TEST_SEAM fault define
+    # is private to this test target, never to the app.
+    set(MPVCONF_ATOMIC_SRC "${CMAKE_SOURCE_DIR}/src/util/MpvBasicOptions.cpp"
+        CACHE FILEPATH "MpvBasicOptions.cpp under test (pre-fix tree for the red control)")
+    add_executable(mpvconf-atomic-tests
+        src/tests/mpvconf_atomic/mpvconf_gate.cpp
+        ${MPVCONF_ATOMIC_SRC})
+    target_compile_definitions(mpvconf-atomic-tests PRIVATE MPVCONF_TEST_SEAM)
+    target_link_libraries(mpvconf-atomic-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_include_directories(mpvconf-atomic-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpvconf-atomic-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpvconf-atomic COMMAND mpvconf-atomic-tests)
+    set_tests_properties(mpvconf-atomic PROPERTIES TIMEOUT 300
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
     # Raw keyboard/remote taps must be visible in the TELEMETRY state log too.
     # Uses the real InputManager event filter and AppCore log sink; no QML,
     # network, audio hardware, or physical input device is driven.
