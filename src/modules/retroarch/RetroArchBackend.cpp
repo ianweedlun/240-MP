@@ -143,6 +143,9 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
     }
     if (key == QLatin1String("thumbnail_directory")) {
         m_thumbnailDir = value.toString();
+        // Manifests are keyed by absolute path, so a new root would miss the
+        // old entries anyway — clear explicitly so counters/scans stay honest.
+        m_thumbManifestCache.clear();
         return;
     }
 }
@@ -650,33 +653,19 @@ QString RetroArchBackend::findThumbnail(const QString &gameName,
         QStringLiteral("Named_Titles"),  QStringLiteral("Boxarts"),
         QStringLiteral("Snaps")
     };
-    const QStringList extensions = { QStringLiteral(".png"), QStringLiteral(".jpg") };
-    // entryInfoList takes GLOB patterns, not bare extensions — ".png" matches
-    // nothing, which silently broke the case-insensitive fallback.
-    const QStringList globs = { QStringLiteral("*.png"), QStringLiteral("*.jpg") };
+    const QString sanitized = sanitizeForThumbnailDb(gameName);
 
+    // RETRO-THUMB-CACHE: the shipped loop did up to four QFileInfo::exists()
+    // stats plus a full entryInfoList() relist and linear case-insensitive
+    // compare on EVERY call. The cache builds that basename index at most once
+    // per type dir while its (mtime, size) is unchanged, so a warm navigation
+    // step is hash lookups only. Same three tiers, same first-match tie-break.
     for (const QString &type : thumbTypes) {
         const QDir thumbDir(m_thumbnailDir + QStringLiteral("/") + dirName + QStringLiteral("/") + type);
-        if (!thumbDir.exists()) continue;
-
-        // Exact, then RetroArcName-sanitized (thumbnail DBs mangle "/\\:*?|<>[]"
-        // etc. to "_" when generated from labels), then case-insensitive —
-        // three escalating attempts without pre-listing the directory.
-        const QString sanitized = sanitizeForThumbnailDb(gameName);
-        for (const QString &candidate : { gameName, sanitized }) {
-            for (const QString &ext : extensions) {
-                const QString exact = thumbDir.filePath(candidate + ext);
-                if (QFileInfo(exact).exists()) return exact;
-            }
-        }
-
-        const QFileInfoList files = thumbDir.entryInfoList(globs, QDir::Files);
-        for (const QFileInfo &file : files) {
-            const QString base = file.completeBaseName();
-            if (base.compare(gameName, Qt::CaseInsensitive) == 0
-                || base.compare(sanitizeForThumbnailDb(gameName), Qt::CaseInsensitive) == 0)
-                return file.absoluteFilePath();
-        }
+        const QString match = m_thumbManifestCache.resolve(
+            thumbDir.absolutePath(), gameName, sanitized);
+        if (!match.isEmpty())
+            return match;
     }
     return QString();
 }

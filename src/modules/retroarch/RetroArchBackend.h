@@ -8,6 +8,7 @@
 #include <QHash>
 
 #include "RecentGamesStore.h"
+#include "ThumbnailManifestCache.h"
 
 class DisplayHandoff;
 
@@ -74,6 +75,13 @@ public:
     // every game in it. Same rules as findThumbnail; covered by tests.
     Q_INVOKABLE QString resolveThumbnail(const QString &gameName,
                                          const QString &playlistBasename) const;
+
+    // Manifest-cache observability for the per-navigation scan gate. The scan
+    // count is the number of real directory listings done since the last
+    // clear(); it must stop growing once the cache is warm.
+    int thumbnailCacheScanCount() const { return m_thumbManifestCache.scanCount(); }
+    int thumbnailCacheHitCount() const { return m_thumbManifestCache.hitCount(); }
+    void clearThumbnailCache() { m_thumbManifestCache.clear(); }
     // Launch a game: hand the display to RetroArch, run it with the item's
     // core, restore the display when it exits. The map should carry the fields a
     // later "recently played" row needs (playlistPath, playlistBasename,
@@ -133,6 +141,11 @@ private:
     // per-file entry keyed by mtime+size so unchanged files skip the parse.
     struct PlaylistCountCache { qint64 mtime; qint64 size; QVariantMap entry; };
     QHash<QString, PlaylistCountCache> m_playlistCountCache;
+
+    // RETRO-THUMB-CACHE: one mtime+size-invalidated basename manifest per
+    // thumbnail type dir, LRU-bounded by directory count. mutable because
+    // resolveThumbnail()/findThumbnail() are const QML-facing calls.
+    mutable retro::ThumbnailManifestCache m_thumbManifestCache;
 
     void loadSettings();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds

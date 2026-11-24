@@ -352,6 +352,17 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # RETRO-THUMB-CACHE: pure mtime+size manifest cache (hit/invalidate/bounds/
+    # tie-break/timing gates). QtCore only — no backend, no QML, no display.
+    add_executable(thumbnail-manifest-cache-tests
+        src/modules/retroarch/tests/ThumbnailManifestCacheTest.cpp)
+    set_target_properties(thumbnail-manifest-cache-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(thumbnail-manifest-cache-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(thumbnail-manifest-cache-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME thumbnail-manifest-cache COMMAND thumbnail-manifest-cache-tests)
+
     # Ambient Mode backend: filesystem scans, settings fallback and companion
     # audio process lifecycle. QtCore only; a fake `mpv` on PATH stands in for
     # the real player so the suite never touches audio hardware.
