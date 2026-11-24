@@ -8,11 +8,14 @@
 #include <QHash>
 #include <QStringList>
 #include <QThread>
+#include <QMutex>
 
 #include "RecentGamesStore.h"
 #include "ThumbnailManifestCache.h"
 
 class DisplayHandoff;
+class QFileInfo;
+class QThread;
 
 // Browsing RetroArch's playlist library.
 //
@@ -122,6 +125,9 @@ signals:
     // Emitted after an async prewarm manifest is installed, so a view that
     // already resolved a row can refresh it against the now-warm cache.
     void thumbnailManifestReady();
+    // Emitted once the startup count-cache warm-up has finished merging into
+    // m_playlistCountCache. Views never need it; the lab CTest waits on it.
+    void playlistCountCacheWarmed();
 
 public slots:
     // Called directly by AppCore::save_setting before moduleSettingChanged is
@@ -150,6 +156,11 @@ private:
     // per-file entry keyed by mtime+size so unchanged files skip the parse.
     struct PlaylistCountCache { qint64 mtime; qint64 size; QVariantMap entry; };
     QHash<QString, PlaylistCountCache> m_playlistCountCache;
+    QMutex m_countCacheMutex;
+    QThread *m_countWarmThread = nullptr;
+    // Bumped when the playlist directory changes, so an in-flight warm-up
+    // cannot merge entries for the old directory into a cleared cache.
+    quint64 m_playlistDirGeneration = 0;
 
     // RETRO-THUMB-CACHE: one mtime+size-invalidated basename manifest per
     // thumbnail type dir, LRU-bounded by directory count. mutable because
@@ -165,6 +176,14 @@ private:
     QObject *m_thumbPrewarmContext = nullptr;
 
     void loadSettings();
+    // Shared cache path for the GUI refresh and the startup warm-up: return
+    // the entry for a playlist, parsing only when its mtime+size is not cached.
+    QVariantMap playlistCountEntry(const QFileInfo &pl, const QString &systemId);
+    QVariantMap makePlaylistCountEntry(const QFileInfo &pl, const QString &systemId, int count) const;
+    // Runs once on a QThread started by the constructor. Parses the same
+    // playlists refreshAllPlaylists() would, off the GUI thread, then merges
+    // into the cache under lock so the first user-visible open is a cache hit.
+    void warmPlaylistCountCache();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds
     // .lpl. Both are scanned so either install works without configuration.
     static QStringList playlistFilters();

@@ -25,7 +25,7 @@ CRT_SCREENSHOT_DIR="${CRT_SCREENSHOT_DIR:-/tmp/240mp_screenshots}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 CASE_DIR="${REPO_ROOT}/cases"
-EVIDENCE_DIR="${REPO_ROOT}/.evidence"
+EVIDENCE_DIR="${EVIDENCE_DIR:-${REPO_ROOT}/evidence}"
 
 usage() {
     echo "usage: ${0##*/} <case-name> [host]"
@@ -125,8 +125,10 @@ run_case() {
         elif [[ "$line" == expect:* ]]; then
             in_keys=0
             continue
-        elif [[ "$line" == \ -* ]]; then
+        elif [[ "$line" == -* ]]; then
             local stripped="${line#- }"
+            # YAML quotes are syntactic, not part of the expected value.
+            stripped="${stripped%\"}"; stripped="${stripped#\"}"
             if [ "$in_keys" -eq 1 ]; then
                 keys+=("$stripped")
             else
@@ -163,7 +165,7 @@ run_case() {
 
     # Verify expectations.
     for e in "${expectations[@]:-}"; do
-        if grep -qF "$e" "$EVIDENCE_DIR/$case_name/state.log" 2>/dev/null; then
+        if grep -qE "$e" "$EVIDENCE_DIR/$case_name/state.log" 2>/dev/null; then
             echo "  ok: $e"
         else
             echo "  FAIL: missing $e"

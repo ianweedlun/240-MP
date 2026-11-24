@@ -37,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   pi-gate:
@@ -72,32 +73,37 @@ jobs:
       - uses: actions/checkout@v4.2.2
 
       - name: Stage the SSH identity
+        # Multiline secrets must not be interpolated inline into a run script
+        # (documented line-collapsing/breakage path): pass through env and
+        # reference $KEY, which preserves every newline byte-for-byte.
+        env:
+          KEY: ${{ secrets.PI_SSH_IDENTITY }}
         run: |
           umask 077
           mkdir -p ~/.ssh evidence/${CRT_CASE}
-          printf '%s' "${{ secrets.PI_SSH_IDENTITY }}" > ~/.ssh/id_pi_agent
+          # GitHub Actions strips the trailing newline from secret values,
+          # and OpenSSH refuses a key file missing it ("is not a key file").
+          # printf '%s\n' restores it; the staged file is then byte-identical
+          # to the original.
+          printf '%s\n' "$KEY" > ~/.ssh/id_pi_agent
           chmod 600 ~/.ssh/id_pi_agent
           # Fail here on an empty/malformed secret instead of deep in the wheel.
-          # Diagnostics printed plainly: the job log is the evidence channel.
-          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent)"
-          echo "KEY first_line=$(head -n 1 ~/.ssh/id_pi_agent)"
-          echo "KEY literal_backslash_n=$(grep -c '\\n' ~/.ssh/id_pi_agent || true)"
-          echo "KEY ends_with_newline=$([ "$(tail -c 1 ~/.ssh/id_pi_agent | od -An -c | tr -d ' \n')" = "\\n" ] && echo yes || echo no)"
+          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent) lines=$(wc -l < ~/.ssh/id_pi_agent)"
           ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
-          ls -la ~/.ssh/id_pi_agent
 
       - name: Rebase the Pi to this tip
-        # The deploy step rebuilds and reinstalls the tarball for this sha, then
-        # restarts the service. The two-state + md5 gate is part of that deploy.
-        run: bash scripts/deploy-pi.sh --latest
-
+        # The deploy step reinstalls the latest CI tarball for this ref, then
+        # verifies service-active + md5; the two-state + md5 gate is in the script.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/deploy-pi.sh --latest "${{ github.ref_name }}" 
       - name: Drive the CRT case from the runner
         run: |
           set -o pipefail
           # The key lives on the runner, so the wheel runs here: it SSHes to the
           # Pi for key injection and pulls the evidence bundle back over scp.
           mkdir -p evidence/${CRT_CASE}
-          scripts/crt-validate.sh "${CRT_CASE}" | tee evidence/${CRT_CASE}/wheel.txt
+          bash scripts/crt-validate.sh "${CRT_CASE}" | tee evidence/${CRT_CASE}/wheel.txt
 
       - name: Upload CRT evidence
         if: always()
