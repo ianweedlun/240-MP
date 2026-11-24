@@ -147,13 +147,12 @@ void testKillSweep()
     int zeroed = 0, partial = 0, intact = 0, complete = 0, rig = 0;
     const QByteArray pathBytes = QFile::encodeName(p);
     const QByteArray readyBytes = QFile::encodeName(ready);
-    // Dense grid over the truncate/write window (0..2000 us step 25) plus a
-    // sparse tail past the commit (2500..16000 us step 500) = 109 offsets x 2
-    // repeats = 218 real SIGKILLs. The dense head reliably catches the PRE
-    // truncate window; the sparse tail guarantees a FIX COMPLETE canary.
+    // Sparse tail reaches past the commit on slower filesystems (macOS fsync
+    // is ~20x slower than this Linux host): 0..2000 us step 25 then a tail.
     QList<int> offsets;
     for (int off = 0; off <= 2000; off += 25) offsets.append(off);
     for (int off = 2500; off <= 16000; off += 500) offsets.append(off);
+    offsets << 32000 << 64000 << 128000;
     for (int rep = 0; rep < 2; ++rep) {
         for (int off : offsets) {
             if (!writeAll(p, before)) { ++rig; continue; }
@@ -194,10 +193,27 @@ void testKillSweep()
     qInfo().noquote() << QStringLiteral("kill: intact=%1 complete=%2 zeroed=%3 partial=%4 rig=%5")
                          .arg(intact).arg(complete).arg(zeroed).arg(partial).arg(rig);
     check(rig == 0, "kill: rig-valid (every trial reached the write window)");
-    check(intact + complete + zeroed + partial >= 160, "kill: >=160 valid trials");
+    check(intact + complete + zeroed + partial >= 200, "kill: >=200 valid trials");
     check(zeroed == 0, "kill: ZEROED == 0");
     check(partial == 0, "kill: PARTIAL == 0 (never truncated or torn)");
-    check(complete >= 1, "kill: COMPLETE coverage canary >=1 (writer actually ran)");
+
+    // Deterministic coverage proof, independent of commit timing: an UN-killed
+    // child in this same harness commits the new document. A timing-based
+    // COMPLETE canary is unreliable across filesystems (macOS fsync is ~20x
+    // slower than Linux), and a false pass where children never reached the
+    // writer is exactly what this control rules out.
+    writeAll(p, before);
+    const pid_t ctl = ::fork();
+    if (ctl < 0) {
+        check(false, "kill: control fork");
+    } else if (ctl == 0) {
+        mpvopts::setUiValue(QString::fromUtf8(pathBytes), QStringLiteral("replaygain"),
+                            QStringLiteral("Track"));
+        ::_exit(0);
+    } else {
+        ::waitpid(ctl, nullptr, 0);
+        check(readAll(p) == intended, "kill: un-killed control child committed the new doc");
+    }
     check(onlyFile(td.path(), QStringLiteral("mpv.conf")) ||
               QDir(td.path()).entryList(QDir::Files).contains(QStringLiteral("ready")),
           "kill: no stray QSaveFile temp beside the live file");
