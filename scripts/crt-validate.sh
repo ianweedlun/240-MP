@@ -19,6 +19,10 @@ set -euo pipefail
 CRT_HOST="${CRT_HOST:-execubot.weedlun.me}"
 CRT_USER="${CRT_USER:-ian}"
 CRT_KEY="${CRT_KEY:-$HOME/.ssh/id_pi_agent}"
+CRT_PORT="${CRT_PORT:-22}"
+# All Pi calls must use the same port as the deploy step. Omitting -p made
+# every key injection and evidence pull silently time out on port 22.
+SSH_OPTS=(-i "$CRT_KEY" -p "$CRT_PORT" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 CRT_STATE_LOG="${CRT_STATE_LOG:-/tmp/240mp_state.log}"
 CRT_SCREENSHOT_DIR="${CRT_SCREENSHOT_DIR:-/tmp/240mp_screenshots}"
 
@@ -94,7 +98,7 @@ list_cases() {
 # injected as-is.
 inject_key() {
     local line="$1"
-    ssh -i "$CRT_KEY" -T "$CRT_USER@$CRT_HOST" \
+    ssh "${SSH_OPTS[@]}" -T "$CRT_USER@$CRT_HOST" \
         "cat >> /tmp/240mp_key.in" <<<"$line" >/dev/null 2>&1 || true
     sleep 0.5
 }
@@ -153,12 +157,12 @@ run_case() {
 
     # Collect evidence.
     mkdir -p "$EVIDENCE_DIR/$case_name"
-    ssh -i "$CRT_KEY" -T "$CRT_USER@$CRT_HOST" \
+    ssh "${SSH_OPTS[@]}" -T "$CRT_USER@$CRT_HOST" \
         "tail -n 120 ${CRT_STATE_LOG}" \
         > "$EVIDENCE_DIR/$case_name/state.log" 2>/dev/null || true
-    ssh -i "$CRT_KEY" -T "$CRT_USER@$CRT_HOST" \
+    ssh "${SSH_OPTS[@]}" -T "$CRT_USER@$CRT_HOST" \
         "mkdir -p ${CRT_SCREENSHOT_DIR}" >/dev/null 2>&1 || true
-    scp -r ian@${CRT_HOST}:${CRT_SCREENSHOT_DIR}/*.png \
+    scp -r -P "$CRT_PORT" -i "$CRT_KEY" "${CRT_USER}@${CRT_HOST}:${CRT_SCREENSHOT_DIR}/*.png" \
         "$EVIDENCE_DIR/$case_name/" 2>/dev/null || true
 
     echo "evidence: $EVIDENCE_DIR/$case_name/"
