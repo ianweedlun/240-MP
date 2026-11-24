@@ -1045,6 +1045,22 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME json-state-file COMMAND json-state-file-tests)
 
+    # Emby auth-state persistence: a corrupt read must quarantine the raw bytes
+    # and stay distinguishable from a missing file; a routine save must never
+    # replace it with empty credentials or a freshly minted device id.
+    add_executable(emby-auth-state-tests
+        src/modules/emby/tests/EmbyBackendAuthStateTest.cpp
+        src/modules/emby/EmbyBackend.cpp)
+    set_target_properties(emby-auth-state-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(emby-auth-state-tests PRIVATE src)
+    target_link_libraries(emby-auth-state-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(emby-auth-state-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME emby-auth-state COMMAND emby-auth-state-tests)
+
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.
     add_executable(yt-negative-cache-backend-tests
