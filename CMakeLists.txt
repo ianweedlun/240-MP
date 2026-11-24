@@ -856,6 +856,15 @@ if(BUILD_CFG01_TESTS)
             COMMAND cfg01-harness armB ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/armB)
         set_tests_properties(cfg01-armB PROPERTIES TIMEOUT 60 ENVIRONMENT QT_QPA_PLATFORM=offscreen)
     endif()
+
+    # N4a: credential-file atomicity gates. Header-only production path +
+    # TVDBAuth.cpp (its only non-header writer). QtCore only — no app shell.
+    add_executable(cfg01-auth-atomic ${CFG01_DIR}/auth_atomic_test.cpp
+                   src/modules/virtual_channels/TVDBAuth.cpp)
+    target_include_directories(cfg01-auth-atomic PRIVATE src)
+    target_link_libraries(cfg01-auth-atomic PRIVATE Qt6::Core)
+    add_test(NAME cfg01-auth-atomic COMMAND cfg01-auth-atomic)
+    set_tests_properties(cfg01-auth-atomic PROPERTIES TIMEOUT 180)
 endif()
 
 option(BUILD_VCHAN_TESTS "Build the virtual-channels scheduling tests" OFF)

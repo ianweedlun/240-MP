@@ -1,6 +1,7 @@
 #include "YouTubeBackend.h"
 #include "YtInnertubeResolver.h"
 #include "../../util/AtomicFile.h"
+#include "../../util/CredentialFile.h"
 #include "../../util/YtStreamSelect.h"
 #include "../../util/YtUrlFresh.h"
 #include "../../util/YtNegativeCache.h"
@@ -22,7 +23,7 @@
 #include <QNetworkReply>
 #include <QCryptographicHash>
 #include <QProcess>
-#include <QSaveFile>
+
 #include <QUrlQuery>
 #include <QRegularExpression>
 #include <QTimer>
@@ -1855,7 +1856,17 @@ void YouTubeBackend::ensureAuthLoaded()
     QFile f(authFilePath());
     if (!f.open(QIODevice::ReadOnly))
         return; // no auth yet — signed-out is the default state
-    const QJsonObject doc = QJsonDocument::fromJson(f.readAll()).object();
+    const QByteArray authBytes = f.readAll();
+    QJsonParseError parseErr;
+    const QJsonDocument parsed = QJsonDocument::fromJson(authBytes, &parseErr);
+    if (parseErr.error != QJsonParseError::NoError || !parsed.isObject()) {
+        // CFG-01 N4a: damage is loud; the writer refuses to replace it with
+        // defaults. Signing out (which removes the file) is the recovery path.
+        qWarning("[Youtube] auth file corrupt at %s: %s",
+                 qPrintable(authFilePath()), qPrintable(parseErr.errorString()));
+        return;
+    }
+    const QJsonObject doc = parsed.object();
     m_accessToken         = doc.value(QStringLiteral("access")).toString();
     m_refreshToken        = doc.value(QStringLiteral("refresh")).toString();
     m_accessExpiresEpoch  = static_cast<qint64>(doc.value(QStringLiteral("expires")).toDouble());
@@ -1877,21 +1888,14 @@ void YouTubeBackend::saveAuthFile()
         doc.insert(QStringLiteral("refresh"), m_refreshToken);
     if (m_accessExpiresEpoch > 0)
         doc.insert(QStringLiteral("expires"), static_cast<double>(m_accessExpiresEpoch));
-    // QSaveFile = write to a private temp in the same directory, then commit()
-    // renames it over the target ATOMICALLY. A hand-rolled QFile tmp + QFile::
-    // rename silently failed on the Pi when the target already existed (left a
-    // .tmp next to a stale `{}` doc — the 2026-11-03 signed-but-unpersisted
-    // auth incident; the token was rescued by a manual rename on the device).
-    QSaveFile f(path);
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[Youtube] auth file open failed: %s", qPrintable(path));
-        return;
-    }
-    // QSaveFile has no text-mode setter in Qt 6; the doc is single-line
-    // compact JSON so line endings never come into play.
-    f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
-    if (!f.commit())
-        qWarning("[Youtube] auth file commit failed: %s", qPrintable(path));
+    // QSaveFile writes a private temp in the same directory and commit()s it
+    // over the target atomically (a hand-rolled tmp + rename silently failed
+    // on the Pi when the target existed — the 2026-11-03 signed-but-unpersisted
+    // auth incident). CFG-01 N4a: funnel through the shared credential writer
+    // so write()/flush()/fsync()/commit()/dir-fsync are ALL checked, 0600 is
+    // enforced, and a corrupt live file is not silently replaced with defaults.
+    credfile::write(path, QJsonDocument(doc).toJson(QJsonDocument::Compact),
+                    credfile::Shape::JsonObject, "youtube auth.json");
 }
 
 // Pair-state accessors so a freshly-opened view can re-read a pending

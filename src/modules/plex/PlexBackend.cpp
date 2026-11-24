@@ -1,5 +1,6 @@
 #include "PlexBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/CredentialFile.h"
 #include "PlaybackDecision.h"
 
 #include <QFile>
@@ -72,25 +73,30 @@ PlexBackend::PlexBackend(const QString &appRoot, const QString &dataRoot, QObjec
 // ---------------------------------------------------------------------------
 
 QJsonObject PlexBackend::loadAuth() const {
-    QFile f(m_dataRoot + "/plex_auth.json");
+    const QString path = m_dataRoot + "/plex_auth.json";
+    QFile f(path);
     if (f.open(QIODevice::ReadOnly)) {
+        const QByteArray bytes = f.readAll();
         QJsonParseError err;
-        auto doc = QJsonDocument::fromJson(f.readAll(), &err);
+        auto doc = QJsonDocument::fromJson(bytes, &err);
         if (err.error == QJsonParseError::NoError && doc.isObject())
             return doc.object();
+        // CFG-01 N4a: corruption is loud and never silently replaced. The
+        // writer refuses to overwrite this file until it is explicitly cleared
+        // (sign-out removes it), so the damaged bytes stay as evidence.
+        qWarning("[PlexBackend] plex_auth.json corrupt at %s: %s",
+                 qPrintable(path), qPrintable(err.errorString()));
+    } else if (f.exists()) {
+        qWarning("[PlexBackend] plex_auth.json unreadable at %s: %s",
+                 qPrintable(path), qPrintable(f.errorString()));
     }
     return {};
 }
 
 void PlexBackend::saveAuth(const QJsonObject &auth) const {
-    QFile f(m_dataRoot + "/plex_auth.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[PlexBackend] Could not write plex_auth.json: %s", qPrintable(f.errorString()));
-        return;
-    }
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    f.write(QJsonDocument(auth).toJson(QJsonDocument::Indented));
-    f.close();
+    credfile::write(m_dataRoot + "/plex_auth.json",
+                    QJsonDocument(auth).toJson(QJsonDocument::Indented),
+                    credfile::Shape::JsonObject, "plex_auth.json");
 }
 
 QJsonObject PlexBackend::loadConfig() const {
@@ -210,14 +216,13 @@ QByteArray PlexBackend::generateAndSaveKeyPair(const QString &keyId) {
     QByteArray pemData(bptr->data, static_cast<int>(bptr->length));
     BIO_free(bio);
 
-    QFile keyFile(m_dataRoot + "/plex_key.pem");
-    if (keyFile.open(QIODevice::WriteOnly)) {
-        keyFile.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-        keyFile.write(pemData);
-        keyFile.close();
-    } else {
-        qWarning("[PlexBackend] Could not write plex_key.pem: %s",
-                 qPrintable(keyFile.errorString()));
+    const QString keyPath = m_dataRoot + "/plex_key.pem";
+    if (!credfile::write(keyPath, pemData, credfile::Shape::PemPrivateKey,
+                         "plex_key.pem")) {
+        // Never hand back a JWK for a key we failed to persist: the device
+        // would register a public key it can never sign with after restart.
+        EVP_PKEY_free(pkey);
+        return {};
     }
 
     // Export 32-byte raw public key for JWK
@@ -448,6 +453,11 @@ void PlexBackend::migrateLegacyToken(std::function<void()> callback) {
     qDebug("[PlexBackend] Migrating legacy token to JWT");
     QString kid = QUuid::createUuid().toString(QUuid::WithoutBraces);
     QByteArray jwkBody = generateAndSaveKeyPair(kid);
+    if (jwkBody.isEmpty()) {
+        emit errorOccurred("Could not persist Plex device key — try again");
+        callback();
+        return;
+    }
 
     // Save kid immediately so refreshJwt can find it even if we restart
     QJsonObject auth = loadAuth();
@@ -1016,6 +1026,10 @@ void PlexBackend::start_pin_auth() {
     // Generate a fresh ED25519 key pair for this registration
     QString kid = QUuid::createUuid().toString(QUuid::WithoutBraces);
     QByteArray body = generateAndSaveKeyPair(kid);
+    if (body.isEmpty()) {
+        emit errorOccurred("Could not persist Plex device key — try again");
+        return;
+    }
 
     // Persist the key ID so pollPinTick can find it
     QJsonObject auth = loadAuth();

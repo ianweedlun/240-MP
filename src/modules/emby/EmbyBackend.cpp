@@ -1,5 +1,6 @@
 #include "EmbyBackend.h"
 #include "../../util/ConfigFile.h"
+#include "../../util/CredentialFile.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -93,8 +94,11 @@ void EmbyBackend::loadAuthState() {
 
     QJsonParseError err;
     QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        qWarning("[EmbyBackend] emby_auth.json corrupt at %s: %s",
+                 qPrintable(m_dataRoot + "/emby_auth.json"), qPrintable(err.errorString()));
         return;
+    }
 
     QJsonObject auth = doc.object();
     m_serverUrl  = normalizeServerUrl(auth["serverUrl"].toString());
@@ -117,14 +121,9 @@ void EmbyBackend::saveAuthState() {
     auth["serverName"]  = m_serverName;
     auth["deviceId"]    = m_deviceId;
 
-    QFile f(m_dataRoot + "/emby_auth.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[EmbyBackend] Could not write emby_auth.json: %s", qPrintable(f.errorString()));
-        return;
-    }
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    f.write(QJsonDocument(auth).toJson(QJsonDocument::Indented));
-    f.close();
+    credfile::write(m_dataRoot + "/emby_auth.json",
+                    QJsonDocument(auth).toJson(QJsonDocument::Indented),
+                    credfile::Shape::JsonObject, "emby_auth.json");
 }
 
 void EmbyBackend::clearAuthState() {

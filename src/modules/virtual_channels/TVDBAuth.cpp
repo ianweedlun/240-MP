@@ -1,5 +1,8 @@
 #include "TVDBAuth.h"
 
+#include "../../util/CredentialFile.h"
+
+#include <QDebug>
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
@@ -21,6 +24,12 @@ QString TVDBAuth::apikey() const {
     // First line only; tolerate trailing newline / surrounding whitespace.
     QByteArray raw = f.readLine();
     QString key = QString::fromUtf8(raw).trimmed();
+    if (key.isEmpty() && f.size() > 0) {
+        // CFG-01 N4a: a zero/whitespace-only key file is damage, not a first
+        // run. It is left byte-identical; the caller can supply a new key.
+        qWarning("[TVDBAuth] thetvdb_apikey is empty/corrupt at %s",
+                 qPrintable(m_path));
+    }
     return key.isEmpty() ? QString() : key;
 }
 
@@ -33,17 +42,13 @@ bool TVDBAuth::setApikey(const QString &apikey) {
         return false;
     }
 
-    QFile f(m_path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        return false;
-    }
-    f.write(apikey.toUtf8());
-    f.flush();
-    f.close();
-
-    // Owner read/write only — never world-readable. Matches PlexBackend.
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    return true;
+    // CFG-01 N4a: atomic write with checked returns, file+dir fsync, 0600.
+    // allowCorrupt=true: this is an EXPLICIT user-supplied replacement (the
+    // silent-defaults case does not apply), but credfile still warns loudly
+    // and leaves the old file byte-identical should the write fail.
+    return credfile::write(m_path, apikey.toUtf8(),
+                           credfile::Shape::ApiKeyLine, "thetvdb_apikey",
+                           /*allowCorrupt=*/true);
 }
 
 } // namespace vchan
