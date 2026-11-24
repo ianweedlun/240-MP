@@ -37,6 +37,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   pi-gate:
@@ -91,10 +92,11 @@ jobs:
           ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
 
       - name: Rebase the Pi to this tip
-        # The deploy step rebuilds and reinstalls the tarball for this sha, then
-        # restarts the service. The two-state + md5 gate is part of that deploy.
-        run: bash scripts/deploy-pi.sh --latest "${{ github.ref_name }}"
-
+        # The deploy step reinstalls the latest CI tarball for this ref, then
+        # verifies service-active + md5; the two-state + md5 gate is in the script.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/deploy-pi.sh --latest "${{ github.ref_name }}" 
       - name: Drive the CRT case from the runner
         run: |
           set -o pipefail
