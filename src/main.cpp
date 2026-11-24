@@ -40,6 +40,10 @@
 #ifdef Q_OS_MAC
 #include "util/MacosUtils.h"
 #endif
+#ifdef Q_OS_LINUX
+#include <fontconfig/fontconfig.h>
+#include <cstdlib>
+#endif
 
 static QString resolveAppRoot() {
     QString envRoot = qEnvironmentVariable("APP_ROOT");
@@ -108,6 +112,18 @@ static void redactingMessageHandler(QtMsgType type, const QMessageLogContext &ct
     if (g_priorMessageHandler) g_priorMessageHandler(type, ctx, clean);
 }
 
+#ifdef Q_OS_LINUX
+// Main.qml's FontLoaders register the bundled fonts through
+// QFontDatabase::addApplicationFont, which makes fontconfig build its global
+// config on first use. fontconfig keeps that config for the process lifetime
+// and Qt never calls FcFini(), so LSan reports the config's parse allocations
+// as leaked at exit (one-time, ~320 B in 3 blocks — not per-transition growth).
+// Release them on the way out: registered before any font is loaded, this
+// handler runs after main()'s stack objects (engine, windows, app) and Qt's
+// font database are destroyed, and before the sanitizer's leak check.
+static void releaseFontconfigGlobals() { FcFini(); }
+#endif
+
 int main(int argc, char *argv[]) {
     g_priorMessageHandler = qInstallMessageHandler(redactingMessageHandler);
     QGuiApplication app(argc, argv);
@@ -126,6 +142,10 @@ int main(int argc, char *argv[]) {
 #endif
 
     setlocale(LC_NUMERIC, "C");
+
+#ifdef Q_OS_LINUX
+    std::atexit(releaseFontconfigGlobals);
+#endif
 
     std::signal(SIGTERM, mp240HandleTerm);
     std::signal(SIGINT,  mp240HandleTerm);

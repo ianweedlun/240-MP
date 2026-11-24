@@ -65,6 +65,11 @@ FocusScope {
         plexBackend.start_pin_auth()
     }
 
+    // Leaving the view (module exit or hand-off to the next auth step) ends
+    // the device-PIN poll; a later entry starts a fresh one. On the success
+    // hand-offs the poll has already stopped, so this is a no-op there.
+    Component.onDestruction: plexBackend.stop_pin_auth()
+
     focus: true
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
