@@ -37,6 +37,12 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
 }
 
 RetroArchBackend::~RetroArchBackend() {
+    // A queued build captures `this` to post its result back. Stop and join
+    // the worker before member teardown so no job can touch a dying backend.
+    m_thumbPrewarmThread.quit();
+    m_thumbPrewarmThread.wait();
+    delete m_thumbPrewarmContext;
+    m_thumbPrewarmContext = nullptr;
     if (m_countWarmThread) {
         m_countWarmThread->wait();
         delete m_countWarmThread;
@@ -116,6 +122,9 @@ void RetroArchBackend::loadSettings() {
             }
         }
     }
+    // RETRO-THUMB-ASYNC: build the type-dir manifests on a worker right away
+    // so the first QML resolve is a hash hit, not a ~250 ms inline relist.
+    prewarmThumbnailManifests();
 }
 
 // ── Live setting changes ─────────────────────────────────────────────────────
@@ -166,9 +175,11 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
     }
     if (key == QLatin1String("thumbnail_directory")) {
         m_thumbnailDir = value.toString();
-        // Manifests are keyed by absolute path, so a new root would miss the
-        // old entries anyway — clear explicitly so counters/scans stay honest.
+        // clear() bumps the generation: any manifest already being built for
+        // the old root is discarded when its job posts back. Then seed the
+        // new root's type dirs on the worker again.
         m_thumbManifestCache.clear();
+        prewarmThumbnailManifests();
         return;
     }
 }
@@ -727,6 +738,53 @@ QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString
     }
 
     return candidate;
+}
+
+QStringList RetroArchBackend::discoverThumbnailTypeDirs() const {
+    QStringList out;
+    if (m_thumbnailDir.isEmpty())
+        return out;
+    const QDir root(m_thumbnailDir);
+    if (!root.exists())
+        return out;
+    // Only directories are listed — the 50k files live two levels down, so
+    // this discovery pass stays sub-millisecond even on the lab fixture.
+    const QDir::Filters dirsOnly = QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable;
+    for (const QFileInfo &system : root.entryInfoList(dirsOnly)) {
+        const QDir systemDir(system.absoluteFilePath());
+        for (const QFileInfo &type : systemDir.entryInfoList(dirsOnly))
+            out << type.absoluteFilePath();
+    }
+    return out;
+}
+
+void RetroArchBackend::prewarmThumbnailManifests() {
+    const QStringList dirs = discoverThumbnailTypeDirs();
+    if (dirs.isEmpty())
+        return;
+    if (!m_thumbPrewarmThread.isRunning()) {
+        m_thumbPrewarmContext = new QObject;   // no parent: lives in the worker
+        m_thumbPrewarmContext->moveToThread(&m_thumbPrewarmThread);
+        m_thumbPrewarmThread.start();
+    }
+    const quint64 generation = m_thumbManifestCache.generation();
+    for (const QString &dirPath : dirs) {
+        const auto key = m_thumbManifestCache.keyFor(dirPath);
+        // Runs on the worker: builds a standalone index, never touches the
+        // cache. The result is posted back to this object's thread where
+        // installPrewarmed() drops stale work (generation bump or a changed
+        // mtime+size) before it can enter the LRU.
+        QMetaObject::invokeMethod(m_thumbPrewarmContext,
+            [this, dirPath, key, generation]() {
+                const auto built = retro::ThumbnailManifestCache::buildManifest(dirPath, key);
+                QMetaObject::invokeMethod(this,
+                    [this, dirPath, key, generation, built]() {
+                        if (m_thumbManifestCache.installPrewarmed(
+                                dirPath, key, generation, built))
+                            emit thumbnailManifestReady();
+                    }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+    }
 }
 
 QString RetroArchBackend::findThumbnail(const QString &gameName,

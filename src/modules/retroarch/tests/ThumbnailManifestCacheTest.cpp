@@ -136,6 +136,85 @@ private slots:
         QCOMPARE(cache.size(), 3);
     }
 
+    // The prewarm path builds the index on a worker thread via buildManifest()
+    // and installs on the GUI thread. Prove the pure builder keeps the same
+    // .png-over-.jpg and first-match tiers, and that install rejects work
+    // captured under a stale generation or an obsolete directory key.
+    void asyncBuildKeepsTiersAndRejectsStaleWork() {
+        const QString dir = makeDir(QStringLiteral("async-build"));
+        writePng(dir, QStringLiteral("Exact"));
+        {   QFile jpg(dir + QStringLiteral("/Exact.jpg"));
+            QVERIFY(jpg.open(QIODevice::WriteOnly)); jpg.close(); }
+        writePng(dir, QStringLiteral("lower"));
+
+        const QString tie = makeDir(QStringLiteral("async-tie"));
+        writePng(tie, QStringLiteral("Case"));
+        writePng(tie, QStringLiteral("CASE"));
+
+        retro::ThumbnailManifestCache cache(8);
+        KeyState key;
+        cache.setKeyProvider([&key](const QString &) { return qMakePair(key.mtime, key.size); });
+
+        const auto k = cache.keyFor(dir);
+        const auto built = retro::ThumbnailManifestCache::buildManifest(dir, k);
+        QVERIFY(built.valid);
+        QCOMPARE(built.exact.value(QStringLiteral("Exact")), dir + QStringLiteral("/Exact.png"));
+        QCOMPARE(built.exact.value(QStringLiteral("lower")), dir + QStringLiteral("/lower.png"));
+
+        const auto tieBuilt = retro::ThumbnailManifestCache::buildManifest(tie, cache.keyFor(tie));
+        const QString expectedTie = QDir(tie).entryInfoList(
+            { QStringLiteral("*.png") }, QDir::Files).first().absoluteFilePath();
+        QCOMPARE(tieBuilt.folded.value(QStringLiteral("case")), expectedTie);
+
+        // Stale generation from the future (a clear raced the build): drop.
+        const quint64 capturedGen = cache.generation();
+        const quint64 stale = capturedGen + 1;
+        QVERIFY(!cache.installPrewarmed(dir, k, stale, built));
+        QCOMPARE(cache.size(), 0);
+        QCOMPARE(cache.scanCount(), 0);
+
+        // Current generation installs once; a warm resolve adds no listing.
+        QVERIFY(cache.installPrewarmed(dir, k, capturedGen, built));
+        QCOMPARE(cache.size(), 1);
+        QCOMPARE(cache.scanCount(), 1);
+        QCOMPARE(cache.resolve(dir, QStringLiteral("Exact"), QStringLiteral("Exact")),
+                 dir + QStringLiteral("/Exact.png"));
+        QCOMPARE(cache.scanCount(), 1);
+
+        // A clear bumps the generation; the job captured under the previous
+        // generation is now stale and must not install into the fresh cache.
+        cache.clear();
+        QVERIFY(!cache.installPrewarmed(dir, k, capturedGen, built));
+        QVERIFY(!cache.installPrewarmed(dir, k, stale - 2, built));
+        QCOMPARE(cache.size(), 0);
+    }
+
+    void asyncInstallRejectsChangedDirectoryKey() {
+        const QString dir = makeDir(QStringLiteral("async-key"));
+        writePng(dir, QStringLiteral("Game"));
+
+        retro::ThumbnailManifestCache cache(8);
+        KeyState key;
+        cache.setKeyProvider([&key](const QString &) { return qMakePair(key.mtime, key.size); });
+
+        const auto oldKey = cache.keyFor(dir);
+        const auto built = retro::ThumbnailManifestCache::buildManifest(dir, oldKey);
+        key.size += 1;                                // dir changed during the build
+        const auto newKey = cache.keyFor(dir);
+        QVERIFY(newKey != oldKey);
+
+        // Old-key work must not be installed even with a current generation.
+        QVERIFY(!cache.installPrewarmed(dir, oldKey, cache.generation(), built));
+        QCOMPARE(cache.size(), 0);
+        QCOMPARE(cache.scanCount(), 0);
+
+        // A fresh build with the current key installs and resolves correctly.
+        const auto rebuilt = retro::ThumbnailManifestCache::buildManifest(dir, newKey);
+        QVERIFY(cache.installPrewarmed(dir, newKey, cache.generation(), rebuilt));
+        QCOMPARE(cache.resolve(dir, QStringLiteral("Game"), QStringLiteral("Game")),
+                 dir + QStringLiteral("/Game.png"));
+    }
+
     void matchTiersPreserveShippedBehavior() {
         const QString dir = makeDir(QStringLiteral("tiers"));
         writePng(dir, QStringLiteral("Exact"));

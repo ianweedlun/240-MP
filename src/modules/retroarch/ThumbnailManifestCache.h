@@ -35,6 +35,9 @@ public:
     struct Manifest {
         qint64 mtime = 0;
         qint64 size = 0;
+        // False only when the dir was missing at build time; such a build is
+        // never installed so a dir created later is still seen on first use.
+        bool valid = false;
         // case-sensitive basename -> absolute path; ".png" wins over ".jpg"
         QHash<QString, QString> exact;
         // case-folded basename -> absolute path; first listing match wins
@@ -60,28 +63,24 @@ public:
         m_keyProvider = std::move(provider);
     }
 
-    // Return the manifest for dirPath, rebuilding ONLY when (mtime, size)
-    // changed. A hit makes no entryInfoList() call. A missing/unreadable dir
-    // returns nullptr and is not cached, so a dir created later is seen.
-    const Manifest *manifest(const QString &dirPath) {
-        const Key key = m_keyProvider ? m_keyProvider(dirPath) : defaultKey(dirPath);
+    // Current (mtime, size) key for dirPath. Production uses the real stat;
+    // tests inject a deterministic clock. An async build captures this on the
+    // GUI thread so install() can reject a key that changed while it ran.
+    Key keyFor(const QString &dirPath) const {
+        return m_keyProvider ? m_keyProvider(dirPath) : defaultKey(dirPath);
+    }
 
-        auto it = m_cache.constFind(dirPath);
-        if (it != m_cache.constEnd()
-            && it->mtime == key.first && it->size == key.second) {
-            touch(dirPath);           // recency is touched on hits too
-            ++m_hits;
-            return &(*it);
-        }
-
-        if (!QFileInfo(dirPath).isDir())
-            return nullptr;
-
-        ++m_scans;                    // exactly one real listing per rebuild
+    // Pure directory scan — never touches cache state, so it is safe to run
+    // on a worker thread. `key` is sampled by the caller and stamped on the
+    // result; the LRU/validity install stays on the GUI thread.
+    static Manifest buildManifest(const QString &dirPath, const Key &key) {
         Manifest fresh;
         fresh.mtime = key.first;
         fresh.size = key.second;
+        if (!QFileInfo(dirPath).isDir())
+            return fresh;              // valid stays false — never installed
 
+        fresh.valid = true;
         const QFileInfoList files = QDir(dirPath).entryInfoList(
             { QStringLiteral("*.png"), QStringLiteral("*.jpg") }, QDir::Files);
         for (const QFileInfo &file : files) {
@@ -106,7 +105,50 @@ public:
             if (!fresh.folded.contains(folded))
                 fresh.folded.insert(folded, path);
         }
+        return fresh;
+    }
 
+    // GUI-thread-only install of an async-built manifest. Stale work is
+    // dropped: a generation bump (clear / thumbnail_directory change) or a
+    // changed directory key means the index no longer describes the dir and
+    // must not replace a fresher one.
+    bool installPrewarmed(const QString &dirPath, const Key &key,
+                          quint64 generation, const Manifest &built) {
+        if (!built.valid || generation != m_generation)
+            return false;
+        if (built.mtime != key.first || built.size != key.second)
+            return false;
+        const Key now = keyFor(dirPath);
+        if (now.first != key.first || now.second != key.second)
+            return false;
+        ++m_scans;                     // one real listing per installed build
+        ++m_misses;
+        insertManifest(dirPath, built);
+        return true;
+    }
+
+    // Bumped by every clear() so in-flight async jobs can be discarded.
+    quint64 generation() const { return m_generation; }
+
+    // Return the manifest for dirPath, rebuilding ONLY when (mtime, size)
+    // changed. A hit makes no entryInfoList() call. A missing/unreadable dir
+    // returns nullptr and is not cached, so a dir created later is seen.
+    const Manifest *manifest(const QString &dirPath) {
+        const Key key = keyFor(dirPath);
+
+        auto it = m_cache.constFind(dirPath);
+        if (it != m_cache.constEnd()
+            && it->mtime == key.first && it->size == key.second) {
+            touch(dirPath);           // recency is touched on hits too
+            ++m_hits;
+            return &(*it);
+        }
+
+        if (!QFileInfo(dirPath).isDir())
+            return nullptr;
+
+        ++m_scans;                    // exactly one real listing per rebuild
+        Manifest fresh = buildManifest(dirPath, key);
         insertManifest(dirPath, fresh);
         ++m_misses;
         auto cached = m_cache.constFind(dirPath);
@@ -142,6 +184,7 @@ public:
         m_scans = 0;
         m_hits = 0;
         m_misses = 0;
+        ++m_generation;              // invalidate any in-flight async builds
     }
 
     int size() const { return m_cache.size(); }
@@ -172,6 +215,7 @@ private:
     int m_hits = 0;
     int m_misses = 0;
     KeyProvider m_keyProvider;
+    quint64 m_generation = 0;
 };
 
 } // namespace retro
