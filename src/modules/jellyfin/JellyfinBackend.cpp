@@ -1,6 +1,8 @@
 #include "JellyfinBackend.h"
+#include "util/JsonStateFile.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkRequest>
@@ -46,6 +48,9 @@ JellyfinBackend::JellyfinBackend(const QString &appRoot, const QString &dataRoot
 {
     loadAuthState();
     if (m_deviceId.isEmpty()) {
+        // A corrupt read never mints here: loadAuthState() recovers the old
+        // device id from the quarantined bytes when one is present. This only
+        // covers first run, or a file with no recoverable device id at all.
         m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
 }
@@ -62,28 +67,53 @@ QString JellyfinBackend::normalizeServerUrl(const QString &url) {
 }
 
 void JellyfinBackend::loadAuthState() {
-    QFile f(m_dataRoot + "/jellyfin_auth.json");
-    if (!f.open(QIODevice::ReadOnly))
-        return;
+    const QString path = m_dataRoot + "/jellyfin_auth.json";
+    const jsonstate::LoadResult loaded = jsonstate::load(path);
 
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
+    if (loaded.status == jsonstate::Status::Missing) {
+        // First run. No bytes to quarantine and no state to preserve; the
+        // constructor mints the device id.
         return;
-
-    QJsonObject auth = doc.object();
-    m_serverUrl  = normalizeServerUrl(auth["serverUrl"].toString());
-    m_accessToken = auth["accessToken"].toString();
-    m_userId     = auth["userId"].toString();
-    m_userName   = auth["userName"].toString();
-    m_serverName = auth["serverName"].toString();
-    m_deviceId   = auth["deviceId"].toString();
-    if (m_deviceId.isEmpty()) {
-        m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
+
+    if (loaded.status == jsonstate::Status::Valid) {
+        const QJsonObject &auth = loaded.object;
+        m_serverUrl  = normalizeServerUrl(auth["serverUrl"].toString());
+        m_accessToken = auth["accessToken"].toString();
+        m_userId     = auth["userId"].toString();
+        m_userName   = auth["userName"].toString();
+        m_serverName = auth["serverName"].toString();
+        m_deviceId   = auth["deviceId"].toString();
+        if (m_deviceId.isEmpty()) {
+            // Clean parse with no device id: a fresh identity is safe here.
+            m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        return;
+    }
+
+    // Parse error, non-object, or unreadable. The helper has already moved any
+    // corrupt raw bytes to <file>.corrupt, so a routine save below cannot
+    // overwrite them. Keep the device id so the server still recognises this
+    // install after the user re-authenticates, and never mint a replacement
+    // QUuid for a corrupt read.
+    m_authStateCorrupt = true;
+    m_deviceId = jsonstate::recoverStringField(loaded.raw, "deviceId");
+    qWarning("[JellyfinBackend] Auth state %s; %s; re-authentication required",
+             qPrintable(jsonstate::statusText(loaded.status)),
+             qPrintable(loaded.quarantined()
+                            ? QStringLiteral("preserved at ") + loaded.quarantinePath
+                            : loaded.errorString));
 }
 
-void JellyfinBackend::saveAuthState() {
+void JellyfinBackend::saveAuthState(AuthSaveMode mode) {
+    const QString path = m_dataRoot + "/jellyfin_auth.json";
+    const bool userInitiated = mode == AuthSaveMode::AfterUserAuth;
+
+    if (!userInitiated && m_authStateCorrupt) {
+        qWarning("[JellyfinBackend] Routine auth save refused while state is quarantined; re-authentication required");
+        return;
+    }
+
     QJsonObject auth;
     auth["serverUrl"]   = m_serverUrl;
     auth["accessToken"] = m_accessToken;
@@ -92,14 +122,25 @@ void JellyfinBackend::saveAuthState() {
     auth["serverName"]  = m_serverName;
     auth["deviceId"]    = m_deviceId;
 
-    QFile f(m_dataRoot + "/jellyfin_auth.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[JellyfinBackend] Could not write jellyfin_auth.json: %s", qPrintable(f.errorString()));
+    const jsonstate::SaveResult result = jsonstate::save(
+        path, auth,
+        userInitiated ? jsonstate::SaveMode::Explicit : jsonstate::SaveMode::Routine);
+    if (!result.ok) {
+        qWarning("[JellyfinBackend] Could not write jellyfin_auth.json: %s",
+                 qPrintable(result.errorString));
         return;
     }
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    f.write(QJsonDocument(auth).toJson(QJsonDocument::Indented));
-    f.close();
+
+    if (userInitiated) {
+        // Successful re-auth supersedes the old incident. Clear the marker so
+        // later routine saves are not refused forever by a stale quarantine.
+        m_authStateCorrupt = false;
+        const QString marker = jsonstate::quarantinePathFor(path);
+        if (QFileInfo::exists(marker) && !QFile::remove(marker)) {
+            qWarning("[JellyfinBackend] Could not clear stale auth quarantine marker: %s",
+                     qPrintable(marker));
+        }
+    }
 }
 
 void JellyfinBackend::clearAuthState() {
@@ -111,12 +152,17 @@ void JellyfinBackend::clearAuthState() {
     m_currentPlaySessionId.clear();
     // Sign out will wipe the auth file as the device is removed from access
     // on the server end as well. This will generate a fresh deviceId so any
-    // in-session re-login / QuickConnect creates one that will be synced with the 
+    // in-session re-login / QuickConnect creates one that will be synced with the
     // new device we give access to on the server and it will persist until either
     // the user signs out or manually de-auths the device from the server end.
     // saveAuthState() will recreate the file on the next successful login.
     m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    QFile::remove(m_dataRoot + "/jellyfin_auth.json");
+    const QString path = m_dataRoot + "/jellyfin_auth.json";
+    QFile::remove(path);
+    // A logout also resolves any earlier quarantine: there is no old state
+    // left to protect, and leaving the marker would block future saves.
+    m_authStateCorrupt = false;
+    QFile::remove(jsonstate::quarantinePathFor(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -124,23 +170,42 @@ void JellyfinBackend::clearAuthState() {
 // ---------------------------------------------------------------------------
 
 QJsonObject JellyfinBackend::loadConfig() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
+    const QString path = m_dataRoot + "/config.json";
+    const jsonstate::LoadResult loaded = jsonstate::load(path);
+
+    if (loaded.status == jsonstate::Status::Missing) {
+        // First run: an empty config is legitimate and is not quarantined.
+        return {};
     }
+    if (loaded.status == jsonstate::Status::Valid) {
+        // Clean JSON, including a valid empty object. saveConfig() still
+        // refuses to write an empty object back over a corrupt state.
+        return loaded.object;
+    }
+
+    // ParseError / NotObject are quarantined by the helper before it returns;
+    // ReadError leaves the unreadable file alone. In both cases the empty
+    // result is only a safe placeholder for readers, never a save source.
+    qWarning("[JellyfinBackend] Config state %s; %s; refusing to rewrite config",
+             qPrintable(jsonstate::statusText(loaded.status)),
+             qPrintable(loaded.quarantined()
+                            ? QStringLiteral("preserved at ") + loaded.quarantinePath
+                            : loaded.errorString));
     return {};
 }
 
 void JellyfinBackend::saveConfig(const QJsonObject &cfg) const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[JellyfinBackend] Could not write config.json: %s", qPrintable(f.errorString()));
+    if (cfg.isEmpty()) {
+        qWarning("[JellyfinBackend] Refusing to write config.json from an empty parse");
         return;
     }
-    f.write(QJsonDocument(cfg).toJson(QJsonDocument::Indented));
+
+    const QString path = m_dataRoot + "/config.json";
+    const jsonstate::SaveResult result = jsonstate::save(path, cfg);
+    if (!result.ok) {
+        qWarning("[JellyfinBackend] Could not write config.json: %s",
+                 qPrintable(result.errorString));
+    }
 }
 
 QJsonObject JellyfinBackend::moduleConfig() const {
@@ -234,6 +299,11 @@ QString JellyfinBackend::get_user_name() {
 }
 
 QString JellyfinBackend::get_auth_state() {
+    // Anything other than "authed" routes QML to Auth.qml. Naming the reason
+    // makes the quarantine a clear re-authentication requirement in telemetry
+    // and to the module-status gates, without claiming a valid session.
+    if (m_authStateCorrupt)
+        return QStringLiteral("reauth-required");
     return has_auth() ? QStringLiteral("authed") : QStringLiteral("none");
 }
 
@@ -453,13 +523,15 @@ void JellyfinBackend::quick_connect_authenticate(const QString &secret) {
                     QString name = infoData["ServerName"].toString();
                     if (!name.isEmpty()) {
                         m_serverName = name;
-                        saveAuthState();
+                        saveAuthState(AuthSaveMode::AfterUserAuth);
                     }
                 }
             });
         }
 
-        saveAuthState();
+        // User-initiated, successful Quick Connect: the only path allowed to
+        // replace a quarantined auth file with fresh state.
+        saveAuthState(AuthSaveMode::AfterUserAuth);
 
         QJsonObject cfg = loadConfig();
         QJsonObject modules = cfg["modules"].toObject();
