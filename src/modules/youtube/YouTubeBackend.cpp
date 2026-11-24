@@ -1895,7 +1895,8 @@ void YouTubeBackend::saveAuthFile()
     // so write()/flush()/fsync()/commit()/dir-fsync are ALL checked, 0600 is
     // enforced, and a corrupt live file is not silently replaced with defaults.
     credfile::write(path, QJsonDocument(doc).toJson(QJsonDocument::Compact),
-                    credfile::Shape::JsonObject, "youtube auth.json");
+                    credfile::Shape::JsonObject, "youtube auth.json",
+                    /*allowCorrupt=*/!m_accessToken.isEmpty() || !m_refreshToken.isEmpty());
 }
 
 // Pair-state accessors so a freshly-opened view can re-read a pending

@@ -94,9 +94,17 @@ QJsonObject PlexBackend::loadAuth() const {
 }
 
 void PlexBackend::saveAuth(const QJsonObject &auth) const {
+    // A corrupt file must never be silently replaced with a bare defaults doc
+    // (the P2 defect: loadAuth() returns {} then writes a fresh client id).
+    // A genuine re-auth carries a token and is an explicit user action — allow
+    // it with a loud warning, otherwise a signed-out UI has no way to recover.
+    const bool hasCredential =
+        !auth.value(QStringLiteral("auth_token")).toString().isEmpty()
+        || !auth.value(QStringLiteral("active_user_token")).toString().isEmpty()
+        || !auth.value(QStringLiteral("users")).toArray().isEmpty();
     credfile::write(m_dataRoot + "/plex_auth.json",
                     QJsonDocument(auth).toJson(QJsonDocument::Indented),
-                    credfile::Shape::JsonObject, "plex_auth.json");
+                    credfile::Shape::JsonObject, "plex_auth.json", hasCredential);
 }
 
 QJsonObject PlexBackend::loadConfig() const {
@@ -218,7 +226,7 @@ QByteArray PlexBackend::generateAndSaveKeyPair(const QString &keyId) {
 
     const QString keyPath = m_dataRoot + "/plex_key.pem";
     if (!credfile::write(keyPath, pemData, credfile::Shape::PemPrivateKey,
-                         "plex_key.pem")) {
+                         "plex_key.pem", /*allowCorrupt=*/true)) {
         // Never hand back a JWK for a key we failed to persist: the device
         // would register a public key it can never sign with after restart.
         EVP_PKEY_free(pkey);

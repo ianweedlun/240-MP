@@ -175,6 +175,17 @@ void corruptRefusal(const ShapeCase &c, const QString &dir, int idx) {
             if (m.contains(QStringLiteral("REFUSING")) && m.contains(QString::fromLatin1(c.name)))
                 warned = true;
         check(warned, QString::fromLatin1(c.name) + QStringLiteral(": warning names file + refusal"));
+
+        // A genuine re-auth (token present at the call site) must be able to
+        // recover: allowCorrupt=true proceeds with a loud warning.
+        check(credfile::write(path, c.newBytes, c.shape, c.name, /*allowCorrupt=*/true),
+              QString::fromLatin1(c.name) + QStringLiteral(": explicit re-auth over corrupt succeeds"));
+        check(readAll(path) == c.newBytes,
+              QString::fromLatin1(c.name) + QStringLiteral(": re-auth bytes exact"));
+        bool reauthWarn = false;
+        for (const QString &m : g_messages)
+            if (m.contains(QStringLiteral("overwriting corrupt"))) reauthWarn = true;
+        check(reauthWarn, QString::fromLatin1(c.name) + QStringLiteral(": re-auth over corrupt warns"));
     }
 }
 

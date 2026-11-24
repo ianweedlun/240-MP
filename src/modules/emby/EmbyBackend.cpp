@@ -123,7 +123,8 @@ void EmbyBackend::saveAuthState() {
 
     credfile::write(m_dataRoot + "/emby_auth.json",
                     QJsonDocument(auth).toJson(QJsonDocument::Indented),
-                    credfile::Shape::JsonObject, "emby_auth.json");
+                    credfile::Shape::JsonObject, "emby_auth.json",
+                    /*allowCorrupt=*/!m_accessToken.isEmpty());
 }
 
 void EmbyBackend::clearAuthState() {

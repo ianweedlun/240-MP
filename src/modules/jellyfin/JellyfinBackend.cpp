@@ -99,7 +99,8 @@ void JellyfinBackend::saveAuthState() {
 
     credfile::write(m_dataRoot + "/jellyfin_auth.json",
                     QJsonDocument(auth).toJson(QJsonDocument::Indented),
-                    credfile::Shape::JsonObject, "jellyfin_auth.json");
+                    credfile::Shape::JsonObject, "jellyfin_auth.json",
+                    /*allowCorrupt=*/!m_accessToken.isEmpty());
 }
 
 void JellyfinBackend::clearAuthState() {
