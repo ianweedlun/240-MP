@@ -11,6 +11,8 @@
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QProcess>
+#include <QThread>
+#include <QMutex>
 #include <QDebug>
 #include <algorithm>
 
@@ -23,9 +25,24 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
     , m_recent(dataRoot + QStringLiteral("/retroarch_recent.json")) {
     loadSettings();
     m_recent.load();
+
+    // NAV-ROOT-CAUSE #1: the first Playlists open cost ~109 ms because every
+    // .lpl was parsed on the GUI thread just to count its games. The existing
+    // mtime+size cache made later opens ~7 ms; warm it while QML is still
+    // loading so the first open is a hit too. QThread::create needs no extra
+    // Qt module and the destructor joins before any member is torn down.
+    m_countWarmThread = QThread::create([this] { warmPlaylistCountCache(); });
+    if (m_countWarmThread)
+        m_countWarmThread->start();
 }
 
-RetroArchBackend::~RetroArchBackend() = default;
+RetroArchBackend::~RetroArchBackend() {
+    if (m_countWarmThread) {
+        m_countWarmThread->wait();
+        delete m_countWarmThread;
+        m_countWarmThread = nullptr;
+    }
+}
 
 void RetroArchBackend::loadSettings() {
     // CFG-01: shared policy reader. Missing keeps the pre-fix first-run shape
@@ -135,6 +152,12 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
     // restart.
     if (key == QLatin1String("playlist_directory")) {
         m_playlistDir = value.toString();
+        // A warm-up already in flight parsed the old directory. Invalidate it.
+        {
+            QMutexLocker locker(&m_countCacheMutex);
+            ++m_playlistDirGeneration;
+            m_playlistCountCache.clear();
+        }
         return;
     }
     if (key == QLatin1String("rom_directory")) {
@@ -298,25 +321,9 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
         const QString systemId = systemFromPlaylist(pl.filePath());
         if (systemId.isEmpty()) continue;
 
-        // PERF-TRANSITION-01 lab A/B: count changes only when the file does.
-        const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
-        const qint64 size = pl.size();
-        auto it = m_playlistCountCache.constFind(pl.filePath());
-        if (it != m_playlistCountCache.constEnd()
-            && it->mtime == mtime && it->size == size) {
-            playlists.append(it->entry);
-            continue;
-        }
-        QVariantList games = parsePlaylist(pl.filePath(), systemId);
-        QVariantMap entry{
-            { "path", pl.filePath() },
-            { "name", pl.baseName() },
-            { "count", games.size() },
-            { "systemId", systemId },
-            { "shortName", shortNameForSystem(systemId) }
-        };
-        m_playlistCountCache.insert(pl.filePath(), PlaylistCountCache{mtime, size, entry});
-        playlists.append(entry);
+        // PERF-TRANSITION-01 count cache, now warmed off-thread at startup by
+        // warmPlaylistCountCache() so this first call is a hit on a cold app.
+        playlists.append(playlistCountEntry(pl, systemId));
     }
 
     // Order playlists according to playlist_sort setting:
@@ -347,6 +354,88 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
     });
 
     return playlists;
+}
+
+QVariantMap RetroArchBackend::makePlaylistCountEntry(const QFileInfo &pl,
+                                                     const QString &systemId,
+                                                     int count) const {
+    return QVariantMap{
+        { "path", pl.filePath() },
+        { "name", pl.baseName() },
+        { "count", count },
+        { "systemId", systemId },
+        { "shortName", shortNameForSystem(systemId) }
+    };
+}
+
+QVariantMap RetroArchBackend::playlistCountEntry(const QFileInfo &pl,
+                                                 const QString &systemId) {
+    const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
+    const qint64 size = pl.size();
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        auto it = m_playlistCountCache.constFind(pl.filePath());
+        if (it != m_playlistCountCache.constEnd()
+            && it->mtime == mtime && it->size == size)
+            return it->entry;
+    }
+    // Never hold the cache lock across a parse — the warm-up thread may be
+    // parsing the same file on the other side of it.
+    const QVariantList games = parsePlaylist(pl.filePath(), systemId);
+    const QVariantMap entry = makePlaylistCountEntry(pl, systemId, games.size());
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        auto it = m_playlistCountCache.constFind(pl.filePath());
+        if (it != m_playlistCountCache.constEnd()
+            && it->mtime == mtime && it->size == size)
+            return it->entry; // warm-up filled it while we parsed
+        m_playlistCountCache.insert(pl.filePath(), PlaylistCountCache{mtime, size, entry});
+    }
+    return entry;
+}
+
+void RetroArchBackend::warmPlaylistCountCache() {
+    QString dirPath;
+    quint64 generation = 0;
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        dirPath = m_playlistDir;
+        generation = m_playlistDirGeneration;
+    }
+
+    QHash<QString, PlaylistCountCache> warmed;
+    QDir playlistDir(dirPath);
+    if (playlistDir.exists()) {
+        const QFileInfoList files = playlistDir.entryInfoList(
+            playlistFilters(), QDir::Files | QDir::Readable, QDir::Name);
+        for (const QFileInfo &pl : files) {
+            const QString systemId = systemFromPlaylist(pl.filePath());
+            if (systemId.isEmpty()) continue;
+
+            const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
+            const qint64 size = pl.size();
+            {
+                QMutexLocker locker(&m_countCacheMutex);
+                if (m_playlistDirGeneration != generation)
+                    break; // settings changed under us; throw this pass away
+                auto it = m_playlistCountCache.constFind(pl.filePath());
+                if (it != m_playlistCountCache.constEnd()
+                    && it->mtime == mtime && it->size == size)
+                    continue; // GUI thread already parsed this file
+            }
+            const QVariantList games = parsePlaylist(pl.filePath(), systemId);
+            warmed.insert(pl.filePath(), PlaylistCountCache{
+                mtime, size, makePlaylistCountEntry(pl, systemId, games.size())});
+        }
+    }
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        if (m_playlistDirGeneration == generation && m_playlistDir == dirPath) {
+            for (auto it = warmed.cbegin(); it != warmed.cend(); ++it)
+                m_playlistCountCache.insert(it.key(), it.value());
+        }
+    }
+    emit playlistCountCacheWarmed();
 }
 
 // ── Tier 2: playlists of a system ────────────────────────────────────────────
