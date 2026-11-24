@@ -787,8 +787,12 @@ void InputManager::pollDebugKeyChannel()
             // named capture during scripted walks -> 240mp_screenshot_<tag>_<id>.png
             QString rawId = cmd.mid(5).trimmed();
             if (m_appCore && !rawId.isEmpty()) {
+                // The invokable takes the capture id; without Q_ARG the meta-call
+                // never matches and the named shot silently does nothing.
+                QString captured;
                 QMetaObject::invokeMethod(m_appCore, "takeScreenshotWithLabel",
-                                           Q_RETURN_ARG(QString, rawId));
+                                           Q_RETURN_ARG(QString, captured),
+                                           Q_ARG(QString, rawId));
             }
             continue;
         }
