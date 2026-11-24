@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Changed — Settings: rapid list cycling no longer storms the SD card with fsyncs (CFG-01 N1)
+- Root cause: LEFT/RIGHT on a `list_single` row called `appCore.save_setting()` on every keypress. With CFG-01's atomic writer each call is a full write + `fsync(file)` + commit + `fsync(dir)` + `.bak` update; a held remote key turned option cycling into a write/fsync storm.
+- Fix: trailing-edge debounce (300 ms) at the sole call site in `views/Settings.qml`. Rapid presses on the same row keep only the latest value and fire one durable write; a different row, Back/Return, navigation, quit or view teardown flushes the pending write first. `save_setting` itself is unchanged — still synchronous bool, still re-reads disk on `get_setting`, still refuses in the degraded state, still fsyncs every performed write — so the CFG-01 G7 storm gate keeps its exact contract and no durability is weakened. A refused write reverts the optimistic display to the on-disk value.
+- Gates: new `settings-save-debounce-smoke` (real Settings.qml + counting stub AppCore, six cases: coalescing, row-switch flush, Back flush, degraded refusal, failed-write revert, real timer path) — 11 RED failures on the pre-fix tree, all GREEN with the fix. Full ctest 99/99 including `cfg01-storm` (G7). Strace: one `save_setting` adds 2 `fsync` + 1 `rename` + 1 `linkat` over baseline, so a four-press burst drops from 8 to 2 fsyncs.
+- Tradeoff: a change is durable after the debounce interval or immediately on any exit/row change; a hard power cut inside that 300 ms window can lose only the last uncommitted setting change.
+
 ### Fixed — YouTube: early mpv death wiped the saved resume position (RES-01)
 - Root cause: mpv's exit taxonomy maps a crash, kill, or missing binary to the same `"stopped"` reason as a deliberate Back/stop. The YouTube view treated every early `"stopped"` with an existing marker as a user stop and wrote `0` over it. A view-side flag would miss the Pi's direct-IPC key path, where `sendKey()` drives quit without QML.
 - Fix (direction c): `MpvController` now exposes `userStopIntent`, set by `stop()`, `forceStop()`, and mpv's `end-file` reason `quit`/`stop`, and reset on every `loadAndPlay()`. The YouTube view clears a saved marker only when `reason === "stopped"` **and** `userStopIntent` is true; a spontaneous early death writes nothing. Other modules keep the generic `"stopped"` semantics.

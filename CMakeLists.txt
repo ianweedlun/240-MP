@@ -945,6 +945,21 @@ if(BUILD_TESTS)
     target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
 
+    # N1 (CFG-01 follow-up): Settings.qml save debounce smoke. Loads the real
+    # view with a counting stub AppCore and proves N rapid list_single presses
+    # coalesce to one save_setting call, that every exit path flushes the
+    # pending value, and that degraded/failed writes never lie on screen.
+    add_executable(settings-save-debounce-smoke
+        src/tests/settings-save-debounce-smoke-test.cpp)
+    set_target_properties(settings-save-debounce-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(settings-save-debounce-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(settings-save-debounce-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME settings-save-debounce-smoke COMMAND settings-save-debounce-smoke)
+    set_tests_properties(settings-save-debounce-smoke PROPERTIES
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen TIMEOUT 60)
+
     # Current conditions row parity: Metric and US must both show PRESSURE.
     add_executable(weather-current-smoke src/tests/weather-current-smoke-test.cpp)
     set_target_properties(weather-current-smoke PROPERTIES AUTOMOC ON)
