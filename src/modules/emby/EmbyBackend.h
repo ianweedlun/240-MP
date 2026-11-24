@@ -159,9 +159,15 @@ private:
     void ignoreSslErrors(QNetworkReply *reply) const;
 
     void loadAuthState();
-    void saveAuthState();
+    void saveAuthState();          // routine save — refuses a quarantined state
+    void saveAuthenticatedState(); // only after a successful user-initiated auth
+    void writeAuthState(bool afterUserAuth);
     void clearAuthState();
     void notifyAuthState();
+
+    // Set on corrupt/unreadable auth state. Routine saves are blocked and the
+    // UI is told to re-authenticate; only a successful user auth clears it.
+    bool m_authQuarantined = false;
 
     QJsonObject loadConfig() const;
 

@@ -1032,6 +1032,76 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-negative-cache COMMAND yt-negative-cache-tests)
 
+    # Shared atomic JSON state files (media auth + module config): four-way
+    # load status, quarantine before any rewrite, owner-only mode on POSIX,
+    # and the routine-save refusal that blocks corrupt-read clobber.
+    add_executable(json-state-file-tests
+        src/util/tests/JsonStateFileTest.cpp)
+    set_target_properties(json-state-file-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(json-state-file-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(json-state-file-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(json-state-file-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME json-state-file COMMAND json-state-file-tests)
+
+    # Emby auth-state persistence: a corrupt read must quarantine the raw bytes
+    # and stay distinguishable from a missing file; a routine save must never
+    # replace it with empty credentials or a freshly minted device id.
+    add_executable(emby-auth-state-tests
+        src/modules/emby/tests/EmbyBackendAuthStateTest.cpp
+        src/modules/emby/EmbyBackend.cpp)
+    set_target_properties(emby-auth-state-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(emby-auth-state-tests PRIVATE src)
+    target_link_libraries(emby-auth-state-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(emby-auth-state-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME emby-auth-state COMMAND emby-auth-state-tests)
+
+    # Two-sided regression for MEDIA-AUTH-CLOBBER-01. The legacy arm drives a
+    # known-bad truncate-in-place/empty-parse fixture and proves the contract
+    # checker sees the shipped clobber; the fixed arm drives the real backends
+    # and must be clean. Controls cover valid, missing, wrong-type, read-only
+    # and config round-trips. Every case uses its own QTemporaryDir data root.
+    add_executable(media-auth-clobber-regression-tests
+        src/tests/MediaAuthClobberRegressionTest.cpp
+        src/modules/emby/EmbyBackend.cpp
+        src/modules/jellyfin/JellyfinBackend.cpp)
+    set_target_properties(media-auth-clobber-regression-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(media-auth-clobber-regression-tests PRIVATE src)
+    target_link_libraries(media-auth-clobber-regression-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(media-auth-clobber-regression-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME media-auth-clobber-legacy
+        COMMAND media-auth-clobber-regression-tests
+            legacyEmbyAuthClobbersByDesign
+            legacyJellyfinAuthClobbersByDesign
+            legacyJellyfinConfigClobbersByDesign)
+    add_test(NAME media-auth-clobber-fixed
+        COMMAND media-auth-clobber-regression-tests
+            fixedEmbyAuthPreservesCorruptEvidence
+            fixedJellyfinAuthPreservesCorruptEvidence
+            fixedJellyfinConfigIsNotReducedToEmptyObject)
+    add_test(NAME media-auth-clobber-controls
+        COMMAND media-auth-clobber-regression-tests
+            validEmbyAuthRoundTrips validJellyfinAuthRoundTrips
+            missingEmbyAuthMintsIdentity missingJellyfinAuthMintsIdentity
+            wrongTypeEmbyAuthQuarantines wrongTypeJellyfinAuthQuarantines
+            readOnlyEmbyAuthSaveDoesNotClobber
+            readOnlyJellyfinAuthSaveDoesNotClobber
+            validJellyfinConfigRoundTrips)
+    set_tests_properties(
+        media-auth-clobber-legacy
+        media-auth-clobber-fixed
+        media-auth-clobber-controls
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.
     add_executable(yt-negative-cache-backend-tests

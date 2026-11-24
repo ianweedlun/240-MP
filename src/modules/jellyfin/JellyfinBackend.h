@@ -128,6 +128,10 @@ private:
     int m_lastSubLangIdx = -1;
     bool m_capabilitiesProbed = false;
     bool m_hasCapability = false;
+    // Set when jellyfin_auth.json was quarantined on load. A corrupt file must
+    // not be rewritten by a routine save; only a successful user-initiated
+    // re-authentication may replace it.
+    bool m_authStateCorrupt = false;
 
     static QString normalizeServerUrl(const QString &url);
 
@@ -143,7 +147,11 @@ private:
     void ignoreSslErrors(QNetworkReply *reply) const;
 
     void loadAuthState();
-    void saveAuthState();
+    // A routine save must never replace quarantined auth state: that is the
+    // silent-sign-out / orphaned-device path. AfterUserAuth is the one explicit
+    // write window, opened only by successful user-initiated Quick Connect.
+    enum class AuthSaveMode { Routine, AfterUserAuth };
+    void saveAuthState(AuthSaveMode mode = AuthSaveMode::Routine);
     void clearAuthState();
 
     QJsonObject loadConfig() const;
