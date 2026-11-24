@@ -103,7 +103,7 @@ jobs:
           # The key lives on the runner, so the wheel runs here: it SSHes to the
           # Pi for key injection and pulls the evidence bundle back over scp.
           mkdir -p evidence/${CRT_CASE}
-          scripts/crt-validate.sh "${CRT_CASE}" | tee evidence/${CRT_CASE}/wheel.txt
+          bash scripts/crt-validate.sh "${CRT_CASE}" | tee evidence/${CRT_CASE}/wheel.txt
 
       - name: Upload CRT evidence
         if: always()
