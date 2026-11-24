@@ -8,6 +8,24 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <atomic>
+
+namespace {
+std::atomic<int> g_parseMessages{0};
+QtMessageHandler g_prevMessageHandler = nullptr;
+void countParseMessages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg) {
+    if (msg.contains(QLatin1String("Parsing playlist:")))
+        g_parseMessages.fetch_add(1);
+    if (g_prevMessageHandler)
+        g_prevMessageHandler(type, ctx, msg);
+}
+// Restore even when a QVERIFY returns early.
+struct MessageHandlerGuard {
+    QtMessageHandler prev;
+    explicit MessageHandlerGuard(QtMessageHandler h) : prev(qInstallMessageHandler(h)) {}
+    ~MessageHandlerGuard() { qInstallMessageHandler(prev); }
+};
+}
 
 // Unit tests for RetroArchBackend's playlist browsing. Everything is local
 // file I/O against a temp tree, so the suite is fast and needs no RetroArch
@@ -62,6 +80,7 @@ private slots:
     void gameRunningChangedOnSpawnAndExit();
     void gameRunningChangedOnFailedStart();
     void refusedLaunchDoesNotEmitGameRunningChanged();
+    void countCacheIsWarmedBeforeFirstPlaylistsOpen();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -908,6 +927,37 @@ void RetroArchBackendTest::refusedLaunchDoesNotEmitGameRunningChanged() {
     QTest::qWait(100);
     QCOMPARE(spy.count(), 0);
     QVERIFY(!be->gameRunning());
+}
+
+// NAV-ROOT-CAUSE #1 (two-sided): before the fix the FIRST refreshAllPlaylists()
+// parsed every playlist on the GUI thread (~109 ms with the Pi's 20 files).
+// The constructor now warms that same mtime+size cache off-thread, so the
+// first open must do zero parses while a changed file still forces one.
+void RetroArchBackendTest::countCacheIsWarmedBeforeFirstPlaylistsOpen() {
+    cleanPlaylistDir();
+    writePlaylist("NES.lpl", playlistJson("/cores/nestopia.so", {"A", "B"}));
+    writePlaylist("SNES.lpl", playlistJson("/cores/snes9x.so", {"C", "D", "E"}));
+    writePlaylist("Genesis.lpl", playlistJson("/cores/genesis.so", {"F"}));
+
+    g_parseMessages.store(0);
+    MessageHandlerGuard guard(countParseMessages);
+    g_prevMessageHandler = guard.prev;
+
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+    QTRY_VERIFY_WITH_TIMEOUT(g_parseMessages.load() >= 3, 5000);
+    QTest::qWait(50); // let the warm-up merge its local hash into the cache
+
+    // RED: 3 parses here. GREEN: 0 — the startup thread did them instead.
+    g_parseMessages.store(0);
+    const QVariantList rows = be->refreshAllPlaylists();
+    QCOMPARE(rows.size(), 3);
+    QCOMPARE(g_parseMessages.load(), 0);
+
+    // Invalidation from PERF-TRANSITION-01 must survive the move.
+    writePlaylist("NES.lpl", playlistJson("/cores/nestopia.so", {"A", "B", "NEW"}));
+    be->refreshAllPlaylists();
+    QCOMPARE(g_parseMessages.load(), 1);
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)
