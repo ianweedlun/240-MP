@@ -423,14 +423,17 @@ void NfcReaderBackend::writeStubFile(const QString &normalizedUid) {
     const QString path = tagsDirPath() + "/" + name + ".txt";
 
     // NewOnly contract: a stub must never clobber a tag file that already
-    // exists (it may hold a different UID). Check first, then atomic-write.
+    // exists (it may hold a different UID). The exists() check gives a fast,
+    // loud refusal; writeBytesNewOnly restores the O_EXCL guarantee at the
+    // publish step (link, not rename) so a file created in between is never
+    // overwritten.
     if (QFile::exists(path)) {
         qWarning("[NfcReader] Refusing to overwrite existing stub tag file %s",
                  qPrintable(path));
         return;
     }
-    if (!atomicfile::writeBytes(path, (normalizedUid + "\n").toUtf8(),
-                                /*durable=*/true, "NFC stub tag file")) {
+    if (!atomicfile::writeBytesNewOnly(path, (normalizedUid + "\n").toUtf8(),
+                                       /*durable=*/true, "NFC stub tag file")) {
         qWarning("[NfcReader] Could not create stub tag file %s", qPrintable(path));
         return;
     }

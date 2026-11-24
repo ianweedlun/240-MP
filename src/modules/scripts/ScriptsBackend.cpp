@@ -155,6 +155,9 @@ bool ScriptsBackend::parseSidecar(const QString &sidecarPath, ScriptMeta &meta) 
 void ScriptsBackend::writeStubSidecar(const QString &sidecarPath,
                                       const ScriptMeta &defaults) {
     // NewOnly contract: leave an existing sidecar alone (it may be hand-edited).
+    // exists() is the fast refusal; writeBytesNewOnly makes the publish itself
+    // no-clobber (link, not rename) so a sidecar created in the race window is
+    // never overwritten.
     if (QFile::exists(sidecarPath))
         return;
 
@@ -189,8 +192,8 @@ void ScriptsBackend::writeStubSidecar(const QString &sidecarPath,
     out += "# yes = give the script a real terminal, for one that needs typed input.\n";
     out += "tty = " + QString(defaults.tty ? "yes" : "no") + "\n";
 
-    if (!atomicfile::writeBytes(sidecarPath, out.toUtf8(), /*durable=*/true,
-                                "scripts stub sidecar")) {
+    if (!atomicfile::writeBytesNewOnly(sidecarPath, out.toUtf8(), /*durable=*/true,
+                                       "scripts stub sidecar")) {
         // Read-only dir (mounted share, git checkout): non-fatal, defaults stand.
         if (!m_warnedUnwritable) {
             qWarning("[Scripts] Could not write sidecar %s (using defaults; "

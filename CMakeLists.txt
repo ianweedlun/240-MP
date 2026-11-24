@@ -858,6 +858,36 @@ if(BUILD_CFG01_TESTS)
     endif()
 endif()
 
+# ── N4c regression gates (data-dir persistence atomic writes) ──
+# Two-sided gates for the shared atomicfile::writeBytes shape and its
+# no-clobber variant. QtCore-only gate binary + Python kill-sweep/wiring
+# drivers. Opt-in like the CFG-01 gates (special fixtures + SIGKILL sweep);
+# enable with -DBUILD_N4C_TESTS=ON alongside -DBUILD_CFG01_TESTS=ON.
+option(BUILD_N4C_TESTS "Build the N4c data-dir atomic-write regression gates" OFF)
+if(BUILD_N4C_TESTS)
+    set(N4C_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/n4c)
+    add_executable(n4c-gate ${N4C_DIR}/n4c_gate.cpp)
+    target_include_directories(n4c-gate PRIVATE src src/util)
+    target_link_libraries(n4c-gate PRIVATE Qt6::Core)
+
+    enable_testing()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    foreach(_m failstages formats newonly)
+        add_test(NAME n4c-${_m}
+            COMMAND n4c-gate ${_m} ${CMAKE_CURRENT_BINARY_DIR}/n4c-evidence/${_m})
+        set_tests_properties(n4c-${_m} PROPERTIES TIMEOUT 120)
+    endforeach()
+    add_test(NAME n4c-kill-sweep
+        COMMAND ${Python3_EXECUTABLE} ${N4C_DIR}/run_kill_sweep.py
+            --saver $<TARGET_FILE:n4c-gate>
+            --evdir ${CMAKE_CURRENT_BINARY_DIR}/n4c-evidence/sweep)
+    set_tests_properties(n4c-kill-sweep PROPERTIES TIMEOUT 300)
+    add_test(NAME n4c-wiring
+        COMMAND ${Python3_EXECUTABLE} ${N4C_DIR}/audit_wiring.py
+            --src ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(n4c-wiring PROPERTIES TIMEOUT 60)
+endif()
+
 option(BUILD_VCHAN_TESTS "Build the virtual-channels scheduling tests" OFF)
 if(BUILD_VCHAN_TESTS)
     add_executable(vchan-tests
