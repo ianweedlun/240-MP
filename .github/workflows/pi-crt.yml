@@ -80,19 +80,15 @@ jobs:
         run: |
           umask 077
           mkdir -p ~/.ssh evidence/${CRT_CASE}
-          printf '%s' "$KEY" > ~/.ssh/id_pi_agent
+          # GitHub Actions strips the trailing newline from secret values,
+          # and OpenSSH refuses a key file missing it ("is not a key file").
+          # printf '%s\n' restores it; the staged file is then byte-identical
+          # to the original.
+          printf '%s\n' "$KEY" > ~/.ssh/id_pi_agent
           chmod 600 ~/.ssh/id_pi_agent
           # Fail here on an empty/malformed secret instead of deep in the wheel.
-          # Diagnostics printed plainly: the job log is the evidence channel.
-          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent)"
-          echo "KEY first_line=$(head -n 1 ~/.ssh/id_pi_agent)"
-          echo "KEY lines=$(wc -l < ~/.ssh/id_pi_agent)"
-          echo "KEY begin_headers=$(grep -c 'BEGIN' ~/.ssh/id_pi_agent || true)"
-          echo "KEY ends_with_newline=$([ "$(tail -c 1 ~/.ssh/id_pi_agent | od -An -c | tr -d ' \n')" = "\\n" ] && echo yes || echo no)"
-          echo 'KEY od_head:'
-          head -c 96 ~/.ssh/id_pi_agent | od -An -c | tr -s ' ' ' ' | head -6
+          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent) lines=$(wc -l < ~/.ssh/id_pi_agent)"
           ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
-          ls -la ~/.ssh/id_pi_agent
 
       - name: Rebase the Pi to this tip
         # The deploy step rebuilds and reinstalls the tarball for this sha, then
