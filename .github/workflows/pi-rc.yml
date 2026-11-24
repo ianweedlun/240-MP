@@ -37,6 +37,22 @@ on:
         required: false
 
 jobs:
+  pi-gate:
+    # Same pattern as pi-crt.yml: job-level `if` cannot read secrets, so a
+    # cheap gate job decides -- fork-safe when no Pi SSH secrets exist.
+    name: Pi SSH secrets gate
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.PI_SSH_HOSTNAME }}" ] && [ -n "${{ secrets.PI_SSH_USERNAME }}" ] && [ -n "${{ secrets.PI_SSH_IDENTITY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
   pi-rc:
     name: PR Pi verification (RC / restore)
     concurrency:
@@ -51,10 +67,9 @@ jobs:
         ||
         (github.event.action == 'closed' && !github.event.pull_request.merged)
       ) &&
-      secrets.PI_SSH_HOSTNAME != '' &&
-      secrets.PI_SSH_USERNAME != '' &&
-      secrets.PI_SSH_IDENTITY != ''
+      needs.pi-gate.outputs.ready == 'true'
     runs-on: ubuntu-24.04-arm
+    needs: pi-gate
     permissions:
       issues: write
     env:
@@ -262,13 +277,12 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       (inputs.mode == 'rc' || inputs.mode == 'restore') &&
-      secrets.PI_SSH_HOSTNAME != '' &&
-      secrets.PI_SSH_USERNAME != '' &&
-      secrets.PI_SSH_IDENTITY != ''
+      needs.pi-gate.outputs.ready == 'true'
     concurrency:
       group: pi-rc-deploy
       cancel-in-progress: false
     runs-on: ubuntu-24.04-arm
+    needs: pi-gate
     permissions:
       contents: read
     env:

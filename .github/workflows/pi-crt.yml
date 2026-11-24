@@ -39,10 +39,28 @@ permissions:
   contents: read
 
 jobs:
+  pi-gate:
+    # secrets are not readable in a job-level `if`, so probe them in a cheap
+    # gate job and gate the wheel on its output. Fork-safe: no Pi SSH secrets
+    # configured -> ready=false -> wheel skips instead of erroring.
+    name: Pi SSH secrets gate
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.PI_SSH_HOSTNAME }}" ] && [ -n "${{ secrets.PI_SSH_USERNAME }}" ] && [ -n "${{ secrets.PI_SSH_IDENTITY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
   crt-agent-validation:
     name: Agent CRT wheel
     runs-on: ubuntu-latest
-    if: ${{ secrets.PI_SSH_HOSTNAME != '' && secrets.PI_SSH_USERNAME != '' && secrets.PI_SSH_IDENTITY != '' }}
+    needs: pi-gate
+    if: needs.pi-gate.outputs.ready == 'true'
     env:
       # Use input if provided (workflow_dispatch), else fall back to secrets (push events)
       CRT_CASE: ${{ github.event.inputs.case || 'navigation-walk' }}
