@@ -1172,7 +1172,8 @@ if(BUILD_TESTS)
     # replace it with empty credentials or a freshly minted device id.
     add_executable(emby-auth-state-tests
         src/modules/emby/tests/EmbyBackendAuthStateTest.cpp
-        src/modules/emby/EmbyBackend.cpp)
+        src/modules/emby/EmbyBackend.cpp
+        src/util/ConfigFile.cpp)
     set_target_properties(emby-auth-state-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(emby-auth-state-tests PRIVATE src)
@@ -1191,7 +1192,8 @@ if(BUILD_TESTS)
     add_executable(media-auth-clobber-regression-tests
         src/tests/MediaAuthClobberRegressionTest.cpp
         src/modules/emby/EmbyBackend.cpp
-        src/modules/jellyfin/JellyfinBackend.cpp)
+        src/modules/jellyfin/JellyfinBackend.cpp
+        src/util/ConfigFile.cpp)
     set_target_properties(media-auth-clobber-regression-tests PROPERTIES
         AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(media-auth-clobber-regression-tests PRIVATE src)
