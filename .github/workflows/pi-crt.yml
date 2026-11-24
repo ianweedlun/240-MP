@@ -78,19 +78,13 @@ jobs:
           printf '%s' "${{ secrets.PI_SSH_IDENTITY }}" > ~/.ssh/id_pi_agent
           chmod 600 ~/.ssh/id_pi_agent
           # Fail here on an empty/malformed secret instead of deep in the wheel.
-          # Diagnostics are captured into the evidence bundle (downloadable) so a
-          # bad-secret failure explains itself; nothing secret is written out.
-          {
-            echo "bytes=$(wc -c < ~/.ssh/id_pi_agent)"
-            echo "first_line=$(head -n 1 ~/.ssh/id_pi_agent)"
-            echo "literal_backslash_n_count=$(grep -c '\\n' ~/.ssh/id_pi_agent || true)"
-            echo "ends_with_newline=$([ "$(tail -c 1 ~/.ssh/id_pi_agent | od -An -c | tr -d ' \n')" = "\\n" ] && echo yes || echo no)"
-            echo '--- ssh-keygen -lf ---'
-            ssh-keygen -lf ~/.ssh/id_pi_agent 2>&1
-            echo "ssh-keygen_rc=$?"
-          } 2>&1 | tee evidence/${CRT_CASE}/identity.txt
-          # exit with ssh-keygen's verdict, not tee's
-          ssh-keygen -q -lf ~/.ssh/id_pi_agent
+          # Diagnostics printed plainly: the job log is the evidence channel.
+          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent)"
+          echo "KEY first_line=$(head -n 1 ~/.ssh/id_pi_agent)"
+          echo "KEY literal_backslash_n=$(grep -c '\\n' ~/.ssh/id_pi_agent || true)"
+          echo "KEY ends_with_newline=$([ "$(tail -c 1 ~/.ssh/id_pi_agent | od -An -c | tr -d ' \n')" = "\\n" ] && echo yes || echo no)"
+          ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
+          ls -la ~/.ssh/id_pi_agent
 
       - name: Rebase the Pi to this tip
         # The deploy step rebuilds and reinstalls the tarball for this sha, then
@@ -109,8 +103,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: crt-${{ github.run_id }}-${CRT_CASE}
-          path: evidence/${CRT_CASE}
+          name: crt-${{ github.run_id }}-${{ env.CRT_CASE }}
+          path: evidence/**
 
       - name: Trace summary
         run: |
