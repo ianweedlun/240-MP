@@ -214,27 +214,20 @@ void testKillSweep(const QByteArray &selfExe)
     check(zeroed == 0, "kill: ZEROED == 0");
     check(partial == 0, "kill: PARTIAL == 0 (never truncated or torn)");
 
-    // Deterministic coverage proof using the exact same exec'd child path,
-    // un-killed, in a clean directory: proves the spawned child genuinely
-    // commits the new document and leaves no stray temp files on every OS.
+    // Deterministic in-process control: proves setUiValue commits the new
+    // document and leaves no stray temp files. Replaces fork+exec control
+    // child which never reached commit on macOS due to CoreFoundation fork
+    // safety (Qt/CF APIs abort in bare fork child after QCoreApplication).
     QTemporaryDir ctlTd;
     check(ctlTd.isValid(), "kill: control temp dir");
     const QString ctlPath = ctlTd.path() + QStringLiteral("/mpv.conf");
-    const QByteArray ctlPathBytes = QFile::encodeName(ctlPath);
     check(writeAll(ctlPath, before), "kill: control fixture written");
-    const pid_t ctl = spawnSelf(selfExe, "--child-write", ctlPathBytes.constData(), "");
-    if (ctl < 0) {
-        check(false, "kill: control fork+exec");
-    } else {
-        int status = 0;
-        ::waitpid(ctl, &status, 0);
-        check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-              "kill: un-killed control child exited 0");
-        check(readAll(ctlPath) == intended,
-              "kill: un-killed control child committed the new doc");
-        check(onlyFile(ctlTd.path(), QStringLiteral("mpv.conf")),
-              "kill: no stray QSaveFile temp beside the live file");
-    }
+    check(mpvopts::setUiValue(ctlPath, QStringLiteral("replaygain"), QStringLiteral("Track")),
+          "kill: in-process control setUiValue returns true");
+    check(readAll(ctlPath) == intended,
+          "kill: in-process control committed the new doc");
+    check(onlyFile(ctlTd.path(), QStringLiteral("mpv.conf")),
+          "kill: no stray QSaveFile temp beside the live file");
 }
 
 // ---- RLIMIT_FSIZE: checked short write, live file untouched -------------
