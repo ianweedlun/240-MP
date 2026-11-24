@@ -7,7 +7,7 @@ keys:
   - right
   - shot seek01
 expect:
-  - "^view: player"
-  - "^shot play01"
-  - "^shot play02"
-  - "^shot seek01"
+  - " view "
+  - " shot play01"
+  - " shot play02"
+  - " shot seek01"

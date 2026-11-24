@@ -8,6 +8,6 @@ keys:
   - select
   - shot nav02
 expect:
-  - "^view: module-list"
-  - "^shot nav01"
-  - "^shot nav02"
+  - " view 240mp-"
+  - " shot nav01"
+  - " shot nav02"

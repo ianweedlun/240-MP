@@ -818,6 +818,9 @@ QString AppCore::takeScreenshotWithLabel(const QString &id)
 {
     const QString path = QStringLiteral("/tmp/240mp_screenshot_") + screenshotTag()
                          + QLatin1Char('_') + id + QStringLiteral(".png");
+    // Machine-readable marker for scripted walks: pairs with the "view" marker
+    // so crt-validate.sh can assert a named capture actually happened.
+    note_state(QStringLiteral("shot"), id);
     return captureScreenshot(path);
 }
 

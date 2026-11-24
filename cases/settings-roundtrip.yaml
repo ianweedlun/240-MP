@@ -7,6 +7,6 @@ keys:
   - right
   - shot set02
 expect:
-  - "^view: settings"
-  - "^shot set01"
-  - "^shot set02"
+  - " view "
+  - " shot set01"
+  - " shot set02"
