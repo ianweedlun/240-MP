@@ -25,6 +25,82 @@ FocusScope {
     property bool resetOverlayVisible: false
     property int resetChoiceIndex: 1
 
+    // N1 follow-up: list_single LEFT/RIGHT used to call save_setting on every
+    // keypress. With the atomic writer that is one file fsync + one directory
+    // fsync + a .bak write per press — a held remote key storms the SD card.
+    // Coalesce rapid presses on the SAME row into one trailing-edge write.
+    // save_setting itself is untouched (synchronous bool, read-your-writes via
+    // get_setting, degraded refusal, full durability per performed write), so
+    // the CFG-01 G7 storm gate keeps its exact contract. Overridable interval
+    // keeps the smoke test deterministic.
+    property int saveDebounceMs: 300
+    property var pendingSettingSave: null   // { moduleId, key, savedVal, displayVal, index }
+
+    Timer {
+        id: pendingSaveTimer
+        interval: settingsRoot.saveDebounceMs
+        repeat: false
+        onTriggered: settingsRoot.flushPendingSettingSave()
+    }
+
+    // Commit a queued change now. Called on timer expiry AND on every exit /
+    // row change so a change is never silently dropped. One call == one full
+    // durable write via cfgfile::save.
+    function flushPendingSettingSave() {
+        pendingSaveTimer.stop()
+        var p = settingsRoot.pendingSettingSave
+        if (!p) return
+        settingsRoot.pendingSettingSave = null
+        if (appCore.save_setting(p.moduleId, p.key, p.savedVal)) return
+
+        // Refused (degraded) or failed: the optimistic display must not lie.
+        // Map the real on-disk value back to the row's display label.
+        var row = settingsRoot.settingsItems[p.index]
+        if (!row || row.moduleId !== p.moduleId || row.key !== p.key) return
+        var disk = appCore.get_setting(p.moduleId, p.key)
+        var label = row.value
+        var opts = row.options || []
+        var vals = row.values || opts
+        for (var i = 0; i < opts.length; i++) {
+            if (String(vals[i]) === String(disk)) { label = opts[i]; break }
+        }
+        var updated = settingsRoot.settingsItems.slice()
+        updated[p.index] = Object.assign({}, row, { value: label })
+        settingsRoot.settingsItems = updated
+        settingsList.currentIndex = p.index
+    }
+
+    // Queue, don't write. Rapid presses on one row keep only the latest value;
+    // a different row commits the previous one first.
+    function queueSettingSave(index, displayVal, savedVal) {
+        var row = settingsRoot.settingsItems[index]
+        if (!row) return false
+        // Degraded state: CFG-01 refuses every write — keep the real value on
+        // screen and do not even queue an optimistic change.
+        if (appCore.configCorrupted) return false
+        var prev = settingsRoot.pendingSettingSave
+        if (prev && (prev.moduleId !== row.moduleId || prev.key !== row.key))
+            settingsRoot.flushPendingSettingSave()
+        settingsRoot.pendingSettingSave = {
+            moduleId: row.moduleId, key: row.key, savedVal: savedVal,
+            displayVal: displayVal, index: index
+        }
+        var updated = settingsRoot.settingsItems.slice()
+        updated[index] = Object.assign({}, row, { value: displayVal })
+        settingsRoot.settingsItems = updated
+        settingsList.currentIndex = index
+        pendingSaveTimer.restart()
+        return true
+    }
+
+    // Last-resort flush for an exit that bypassed the explicit paths (SIGTERM
+    // driven quit). Guarded: context properties are null once their QObject is
+    // destroyed during teardown (LIFECYCLE-01), so never throw here.
+    Component.onDestruction: {
+        if (settingsRoot.pendingSettingSave && appCore)
+            settingsRoot.flushPendingSettingSave()
+    }
+
     // Quit overlay choices. Under the autostart service (headless RPi) the quit menu has an
     // "Reboot" option and an "Exit to Terminal" option that drops to a tty1 login without
     // powering off; those options are not needed on macOS/Desktop or when run by hand, so
@@ -265,6 +341,7 @@ FocusScope {
 
     RowTrackingListView {
         id: settingsList
+        objectName: "settingsList" // N1 smoke-test handle (repo precedent)
         model: settingsItems
 
         anchors.top: parent.top
@@ -277,6 +354,7 @@ FocusScope {
         focus: true
 
         Keys.onUpPressed: {
+            settingsRoot.flushPendingSettingSave()
             if (currentIndex > 0) currentIndex-- 
             else {
                 currentIndex = settingsItems.length-1
@@ -287,6 +365,7 @@ FocusScope {
             settingsList.positionViewAtIndex(currentIndex, ListView.Contain)
         }
         Keys.onDownPressed: {
+            settingsRoot.flushPendingSettingSave()
             if (currentIndex < count - 1) currentIndex++
             else currentIndex = 0
             while (settingsItems[currentIndex].type == "section") {
@@ -304,16 +383,7 @@ FocusScope {
                 var newVal = opts[newIdx]
                 // Display the label; persist the parallel value when one exists.
                 var savedVal = row.values ? row.values[newIdx] : newVal
-                // CFG-01: only show the new value when the write actually
-                // landed — a refused (degraded) save keeps the real value on
-                // screen instead of lying about a change that never persisted.
-                if (appCore.save_setting(row.moduleId, row.key, savedVal)) {
-                    var updated = settingsItems.slice()
-                    updated[currentIndex] = Object.assign({}, row, { value: newVal })
-                    var savedIndex = currentIndex
-                    settingsItems = updated
-                    currentIndex = savedIndex
-                }
+                settingsRoot.queueSettingSave(currentIndex, newVal, savedVal)
             }
         }
 
@@ -326,18 +396,14 @@ FocusScope {
                 var newVal = opts[newIdx]
                 // Display the label; persist the parallel value when one exists.
                 var savedVal = row.values ? row.values[newIdx] : newVal
-                // CFG-01: see onLeftPressed — refused saves don't change the UI.
-                if (appCore.save_setting(row.moduleId, row.key, savedVal)) {
-                    var updated = settingsItems.slice()
-                    updated[currentIndex] = Object.assign({}, row, { value: newVal })
-                    var savedIndex = currentIndex
-                    settingsItems = updated
-                    currentIndex = savedIndex
-                }
+                settingsRoot.queueSettingSave(currentIndex, newVal, savedVal)
             }
         }
 
         Keys.onReturnPressed: {
+            // Commit before any navigation/overlay: leaving this view must
+            // never strand an unwritten value.
+            settingsRoot.flushPendingSettingSave()
             var row = settingsItems[currentIndex]
             if (row && row.type === "submenu") {
                 if (row.key === "software_update")
@@ -360,6 +426,7 @@ FocusScope {
 
         Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace || event.key === Qt.Key_Back) {
+                settingsRoot.flushPendingSettingSave()
                 settingsRoot.goBack()
                 event.accepted = true
             }
@@ -500,6 +567,7 @@ FocusScope {
         Keys.onUpPressed:   { quitChoiceIndex = Math.max(0, quitChoiceIndex - 1) }
         Keys.onDownPressed: { quitChoiceIndex = Math.min(quitOptions.length - 1, quitChoiceIndex + 1) }
         Keys.onReturnPressed: {
+            settingsRoot.flushPendingSettingSave()
             var act = quitOptions[quitChoiceIndex].action
             if (act === "quit")          Qt.quit()
             else if (act === "reboot")   Qt.exit(12)   // matches EXIT_STATUS check in 240mp-stop
