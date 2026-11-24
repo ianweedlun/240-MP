@@ -5,6 +5,7 @@
 #include <QVariantMap>
 #include <QVariantList>
 #include <QProcess>
+#include <QHash>
 
 #include "RecentGamesStore.h"
 
@@ -126,6 +127,12 @@ private:
     // leaving a games list.
     RecentGamesStore m_recent;
     QProcess *m_gameProcess = nullptr; // the live launchGame() child, null when not running
+
+    // PERF-TRANSITION-01 lab A/B: refreshAllPlaylists() re-parses every game
+    // of every playlist on each view rebuild just for the count. Cache the
+    // per-file entry keyed by mtime+size so unchanged files skip the parse.
+    struct PlaylistCountCache { qint64 mtime; qint64 size; QVariantMap entry; };
+    QHash<QString, PlaylistCountCache> m_playlistCountCache;
 
     void loadSettings();
     // Playlist file filters: modern RetroArch writes <core>.json, older builds
