@@ -5,7 +5,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QDebug>
+#include <utility>
 
 static const QStringList kVideoExts = {
     "mp4", "mkv", "avi", "mov", "m4v", "webm", "wmv", "flv", "f4v", "mpg", "mpeg", "vob"
@@ -13,6 +15,11 @@ static const QStringList kVideoExts = {
 static const QStringList kAudioExts = {
     "mp3", "wav", "flac", "m4a", "m3u", "ogg", "aac", "m3u8"
 };
+
+// Non-blocking teardown escalation budget (matches VirtualChannelsBackend::stop_preview_video).
+static constexpr int kStopKillEscalationMs = 300;
+static constexpr int kDestructorGraceMs    = 50;
+static constexpr int kDestructorKillReapMs = 500;
 
 AmbientModeBackend::AmbientModeBackend(const QString &dataRoot, QObject *parent)
     : QObject(parent), m_dataRoot(dataRoot), m_mediaRoot(dataRoot + "/ambient")
@@ -31,6 +38,19 @@ AmbientModeBackend::AmbientModeBackend(const QString &dataRoot, QObject *parent)
 AmbientModeBackend::~AmbientModeBackend()
 {
     stopAudio();
+    const QList<QPointer<QProcess>> retiring = std::move(m_retiringProcesses);
+    m_retiringProcesses.clear();
+    for (const QPointer<QProcess> &proc : retiring) {
+        if (!proc)
+            continue;
+        proc->disconnect(this);
+        if (proc->state() != QProcess::NotRunning) {
+            if (!proc->waitForFinished(kDestructorGraceMs)) {
+                proc->kill();
+                proc->waitForFinished(kDestructorKillReapMs);
+            }
+        }
+    }
 }
 
 QString AmbientModeBackend::mediaRoot() const
@@ -120,12 +140,38 @@ void AmbientModeBackend::stopAudio()
 {
     if (!m_audioProcess)
         return;
-    if (m_audioProcess->state() != QProcess::NotRunning) {
-        m_audioProcess->terminate();
-        m_audioProcess->waitForFinished(1000);
-    }
-    m_audioProcess->deleteLater();
+    QProcess *proc = m_audioProcess;
     m_audioProcess = nullptr;
+    proc->disconnect(this);
+
+    if (proc->state() != QProcess::NotRunning) {
+        // Non-blocking teardown: never stall the Qt GUI thread with waitForFinished().
+        m_retiringProcesses.append(proc);
+        auto *killTimer = new QTimer(proc);
+        killTimer->setSingleShot(true);
+        QObject::connect(killTimer, &QTimer::timeout, proc, [proc]() {
+            if (proc->state() != QProcess::NotRunning) {
+                qWarning("[AmbientMode] audio process ignored SIGTERM — escalating to SIGKILL");
+                proc->kill();
+            }
+        });
+        auto retire = [this, proc, killTimer]() {
+            killTimer->stop();
+            m_retiringProcesses.removeAll(proc);
+            proc->deleteLater();
+        };
+        QObject::connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                         this, [retire](int, QProcess::ExitStatus) { retire(); });
+        QObject::connect(proc, &QProcess::errorOccurred,
+                         this, [retire](QProcess::ProcessError err) {
+                             if (err == QProcess::FailedToStart)
+                                 retire();
+                         });
+        proc->terminate();
+        killTimer->start(kStopKillEscalationMs);
+    } else {
+        proc->deleteLater();
+    }
     qDebug("[AmbientMode] audio process stopped");
 }
 

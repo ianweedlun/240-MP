@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
 
+### Fixed — Ambient Mode: stopping companion audio no longer freezes the GUI (AMBIENT-STOP-WAIT-01)
+- Root cause: `AmbientModeBackend::stopAudio()` called `waitForFinished(1000)` on the Qt GUI thread. A companion mpv that ignored SIGTERM stalled the UI for the full second (1000–1002 ms measured), then `~QProcess` tore down a still-running child and logged `QProcess: Destroyed while process (...) is still running`.
+- Fix: the process is detached and retired asynchronously — `terminate()` now, with a 300 ms single-shot `QTimer` escalating to `kill()` if the child ignores it; cleanup runs on `finished` / `errorOccurred(FailedToStart)`, and the destructor does a bounded reap. Mirrors `VirtualChannelsBackend::stop_preview_video()`.
+- Gate: the two-sided `ambient-stop-wait-*` CTest suite (6 cases driving a real SIGTERM-ignoring fake mpv) measures `call_wall_ms=0`, 0 destroyed-while-running warnings, and child reaped in ~290–315 ms; plain and ASan/UBSan arms green, full suite 91/91. Owner CRT validation pending.
+
 ### Fixed — settings: mpv.conf writes are now atomic (CFG-01 N4b)
 - Root cause: `mpvopts::setUiValue` wrote mpv.conf by truncating the live file and then calling an unchecked `QFile::write()`. A power pull during the per-keypress PlaybackSettings cycling (Left/Right on the four managed mpv knobs) could leave the file zeroed or torn, losing every playback setting. Separately, an existing mpv.conf that could not be read was treated as empty, so the next knob press silently replaced the whole file with a single line.
 - Fix: the write now mirrors the CFG-01 atomic shape — `QSaveFile` with every return checked (open, full-length write, flush, file fsync before commit, commit, directory fsync after commit); any pre-commit failure warns and returns false with the live file byte-identical. An existing-but-unreadable mpv.conf is refused (warn + false) instead of being overwritten with defaults. Text format and existing file modes are preserved; the four managed knobs and their values are unchanged.
