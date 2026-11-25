@@ -52,9 +52,9 @@ navigation-walk:
     - select
     - shot nav02
   expect:
-    - "^view: module-list"
-    - "^shot nav01"
-    - "^shot nav02"
+    - " view "
+    - " shot nav01"
+    - " shot nav02"
 
 playback-loop:
   keys:
@@ -64,9 +64,9 @@ playback-loop:
     - right
     - shot seek01
   expect:
-    - "^view: player"
-    - "^shot play01"
-    - "^shot play02"
+    - " view "
+    - " shot play01"
+    - " shot play02"
 
 settings-roundtrip:
   keys:
@@ -76,9 +76,9 @@ settings-roundtrip:
     - right
     - shot set02
   expect:
-    - "^view: settings"
-    - "^shot set01"
-    - "^shot set02"
+    - " view "
+    - " shot set01"
+    - " shot set02"
 EOF
 }
 

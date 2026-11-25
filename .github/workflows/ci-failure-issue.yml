@@ -7,6 +7,7 @@ on:
   workflow_run:
     workflows:
       - CI
+      - CI macOS
       - CRT agent validation
       - Burst RC deploy (rc / restore)
       - Pi RC deploy (pre-merge PR test)
@@ -24,58 +25,66 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Extract PR number, head ref, failing jobs
+      - name: Collect failure metadata
         id: meta
-        run: |
-          set -euo pipefail
-          PR_NUMS="$(gh api "repos/$GITHUB_REPOSITORY/pulls" --jq 'map(.number) | join(" ")')"
-          HEAD_REF="${GITHUB_HEAD_REF}"
-          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          echo "pull_numbers=$PR_NUMS" >> "$GITHUB_OUTPUT"
-          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
-          echo "run_url=$RUN_URL" >> "$GITHUB_OUTPUT"
-          echo "owner_repo=$OWNER_REPO" >> "$GITHUB_OUTPUT"
-
-          JOBS_JSON="$(gh api "repos/$OWNER_REPO/actions/runs/${{ github.event.workflow_run.id }}/jobs" \
-            --jq 'map(select(.conclusion == "failure")) | map({name, html_url}) | .[] | "\(.name)\t\(.html_url)"')"
-          echo "failing_jobs<<EOF" >> "$GITHUB_ENV"
-          echo "$JOBS_JSON" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_REPO: ${{ github.repository }}
+          WR_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$OWNER_REPO/actions/runs/$WR_RUN_ID/jobs" \
+            --jq '[.jobs[] | select(.conclusion == "failure") | {name, html_url}]' \
+            > "$RUNNER_TEMP/failing_jobs.json"
+          count="$(jq 'length' "$RUNNER_TEMP/failing_jobs.json")"
+          echo "failing_job_count=$count" >> "$GITHUB_OUTPUT"
+          echo "collected $count failing jobs for $OWNER_REPO run $WR_RUN_ID"
 
       - name: Build issue body
         id: body
+        if: steps.meta.outputs.failing_job_count != '0'
+        env:
+          PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ', ') }}
+          HEAD_REF: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          OWNER_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          HEAD_REF="${{ steps.meta.outputs.head_ref }}"
-          RUN_URL="${{ steps.meta.outputs.run_url }}"
-          RUNNING="$(echo '${{ env.failing_jobs }}' | jq -r '.[] | "  - \u25b6 \(.name)  [run](\(.html_url))"')"
-          BODY=$(cat <<EOF
-          CI failed on a push to \`$HEAD_REF\` in PR #${{ steps.meta.outputs.pull_numbers }}.
-
-          - Workflow run: [$(github.event.workflow_run.name)]($RUN_URL)
-          - Failing jobs:
-            $RUNNING
-
-          Fix the failing check and re-run. This issue is auto-generated.
-          EOF
-          )
-          echo "body<<EOF" >> "$GITHUB_ENV"
-          echo "$BODY" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          running="$(jq -r '.[] | "  - ▶ [\(.name)](\(.html_url))"' \
+            "$RUNNER_TEMP/failing_jobs.json")"
+          {
+            echo "CI failed for \`$WORKFLOW_NAME\` on \`$HEAD_REF\` ($HEAD_SHA) in \`$OWNER_REPO\`."
+            echo
+            if [ -n "${PR_NUMBERS:-}" ]; then
+              echo "Associated PR(s): $PR_NUMBERS"
+              echo
+            fi
+            echo "- Triggering run: [$WORKFLOW_NAME]($RUN_URL)"
+            echo "- Failing jobs:"
+            echo "$running"
+            echo
+            echo "Fix the failing check and re-run. This issue is auto-generated."
+          } > "$RUNNER_TEMP/issue_body.md"
 
       - name: Create issue
-        run: |
-          set -euo pipefail
-          OWNER_REPO="${{ steps.meta.outputs.owner_repo }}"
-          TITLE="PR #${{ steps.meta.outputs.pull_numbers }} — CI failure on ${{ steps.meta.outputs.head_ref }} ($(date -u +%Y-%m-%d))"
-          BODY="${{ env.body }}"
-          gh issue create --repo "$OWNER_REPO" \
-            --title "$TITLE" \
-            --body "$BODY" \
-            --label "ci-failure"
+        if: steps.meta.outputs.failing_job_count != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ', ') }}
+          HEAD_REF: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          OWNER_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          date="$(date -u +%Y-%m-%d)"
+          if [ -n "${PR_NUMBERS:-}" ]; then
+            title="PR #$PR_NUMBERS — CI failure on $HEAD_REF ($date)"
+          else
+            title="CI failure on $HEAD_REF — $WORKFLOW_NAME ($date)"
+          fi
+          # The ci-failure label does not exist in this repo; don't require it.
+          gh issue create --repo "$OWNER_REPO" \
+            --title "$title" \
+            --body-file "$RUNNER_TEMP/issue_body.md"

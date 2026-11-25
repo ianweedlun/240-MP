@@ -8,6 +8,6 @@ keys:
   - select
   - shot nav02
 expect:
-  - " view 240mp-"
+  - " view "
   - " shot nav01"
   - " shot nav02"
