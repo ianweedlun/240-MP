@@ -56,6 +56,9 @@ add_subdirectory(third_party/innertube-qt)
 if(NOT APPLE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(Libdrm REQUIRED libdrm)
+    # main.cpp calls FcFini() at exit to release the fontconfig globals Qt
+    # leaves behind after the FontLoaders register the bundled fonts.
+    pkg_check_modules(Fontconfig REQUIRED IMPORTED_TARGET fontconfig)
 endif()
 
 # PC/SC for the NFC reader module. Optional: the module's other driver talks to
@@ -82,6 +85,7 @@ endif()
 add_executable(240mp
     src/main.cpp
     src/AppCore.cpp
+    src/util/ConfigFile.cpp
     src/modules/local_files/LocalFilesBackend.cpp
     src/modules/plex/PlexBackend.cpp
     src/modules/jellyfin/JellyfinBackend.cpp
@@ -191,6 +195,7 @@ endif()
 
 if(NOT APPLE)
     target_include_directories(240mp PRIVATE ${Libdrm_INCLUDE_DIRS})
+    target_link_libraries(240mp PRIVATE PkgConfig::Fontconfig)
 endif()
 
 target_include_directories(240mp PRIVATE
@@ -329,6 +334,7 @@ if(BUILD_TESTS)
     add_executable(retroarch-tests
         src/modules/retroarch/tests/RetroArchBackendTest.cpp
         src/modules/retroarch/RetroArchBackend.cpp
+        src/util/ConfigFile.cpp
         # RetroArchBackend.cpp references DisplayHandoff for the launch path and
         # RecentGamesStore for the recently-played bookkeeping; the tests never
         # launch, but the symbols must resolve to link.
@@ -346,12 +352,24 @@ if(BUILD_TESTS)
     enable_testing()
     add_test(NAME retroarch-backend COMMAND retroarch-tests)
 
+    # RETRO-THUMB-CACHE: pure mtime+size manifest cache (hit/invalidate/bounds/
+    # tie-break/timing gates). QtCore only — no backend, no QML, no display.
+    add_executable(thumbnail-manifest-cache-tests
+        src/modules/retroarch/tests/ThumbnailManifestCacheTest.cpp)
+    set_target_properties(thumbnail-manifest-cache-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(thumbnail-manifest-cache-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(thumbnail-manifest-cache-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME thumbnail-manifest-cache COMMAND thumbnail-manifest-cache-tests)
+
     # Ambient Mode backend: filesystem scans, settings fallback and companion
     # audio process lifecycle. QtCore only; a fake `mpv` on PATH stands in for
     # the real player so the suite never touches audio hardware.
     add_executable(ambient-mode-tests
         src/modules/ambient_mode/tests/AmbientModeBackendTest.cpp
         src/modules/ambient_mode/AmbientModeBackend.cpp
+        src/util/ConfigFile.cpp
         src/util/MpvLocator.cpp)
     set_target_properties(ambient-mode-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(ambient-mode-tests PRIVATE Qt6::Core Qt6::Test)
@@ -398,6 +416,7 @@ if(BUILD_TESTS)
     add_executable(weather-backend-tests
         src/modules/weather/tests/WeatherBackendTest.cpp
         src/modules/weather/WeatherBackend.cpp
+        src/util/ConfigFile.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp)
     set_target_properties(weather-backend-tests PROPERTIES AUTOMOC ON)
@@ -416,6 +435,7 @@ if(BUILD_TESTS)
     # the proxy directly (no QML engine, no network).
     add_executable(appcore-weather-proxy-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/modules/weather/WeatherBackend.cpp
         src/util/MpvBasicOptions.cpp
         src/util/MpvLocator.cpp
@@ -435,6 +455,7 @@ if(BUILD_TESTS)
     # RetroArchBackend; no QML, no network (QGuiApplication for offscreen Qt).
     add_executable(appcore-setting-order-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/modules/retroarch/RetroArchBackend.cpp
         src/modules/retroarch/RecentGamesStore.cpp
         src/util/DisplayHandoff.cpp
@@ -461,6 +482,7 @@ if(BUILD_TESTS)
     # No QML engine, no network (QGuiApplication for offscreen Qt).
     add_executable(appcore-reregistration-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/util/MpvBasicOptions.cpp
         src/tests/AppCoreReregistrationTest.cpp)
     set_target_properties(appcore-reregistration-tests PROPERTIES AUTOMOC ON)
@@ -471,6 +493,26 @@ if(BUILD_TESTS)
         target_compile_options(appcore-reregistration-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME appcore-reregistration COMMAND appcore-reregistration-tests)
+
+    # CFG-01 N4b: atomic mpv.conf persistence. Two-sided instrument — the SAME
+    # gate source compiles against a pre-fix writer by setting
+    # -DMPVCONF_ATOMIC_SRC=<pre-tree>/src/util/MpvBasicOptions.cpp, where the
+    # kill/RLIMIT/seam arms fail BY DESIGN. The MPVCONF_TEST_SEAM fault define
+    # is private to this test target, never to the app.
+    set(MPVCONF_ATOMIC_SRC "${CMAKE_SOURCE_DIR}/src/util/MpvBasicOptions.cpp"
+        CACHE FILEPATH "MpvBasicOptions.cpp under test (pre-fix tree for the red control)")
+    add_executable(mpvconf-atomic-tests
+        src/tests/mpvconf_atomic/mpvconf_gate.cpp
+        ${MPVCONF_ATOMIC_SRC})
+    target_compile_definitions(mpvconf-atomic-tests PRIVATE MPVCONF_TEST_SEAM)
+    target_link_libraries(mpvconf-atomic-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_include_directories(mpvconf-atomic-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(mpvconf-atomic-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME mpvconf-atomic COMMAND mpvconf-atomic-tests)
+    set_tests_properties(mpvconf-atomic PROPERTIES TIMEOUT 300
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
     # Raw keyboard/remote taps must be visible in the TELEMETRY state log too.
     # Uses the real InputManager event filter and AppCore log sink; no QML,
@@ -486,6 +528,7 @@ if(BUILD_TESTS)
         src/audio/VolumeMixerFactory.cpp
         src/util/DisplayHandoff.cpp
         src/util/MpvBasicOptions.cpp
+        src/util/ConfigFile.cpp
         src/tests/InputManagerTelemetryTest.cpp)
     set_target_properties(input-manager-telemetry-tests PROPERTIES AUTOMOC ON)
     target_compile_definitions(input-manager-telemetry-tests PRIVATE
@@ -644,6 +687,7 @@ if(BUILD_TESTS)
         # the input layer references MpvController (media-key IPC) and the
         # RetroArch backend (launch handoff), so their symbols must resolve.
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/input/InputManager.cpp
@@ -772,6 +816,83 @@ endif()
 #
 #   cmake -B build -DBUILD_VCHAN_TESTS=ON
 #   cmake --build build --target vchan-tests && ./build/vchan-tests
+# ── CFG-01 regression gates (config.json atomicity + corrupt-load policy) ──
+# Two-sided gates per test plan t_d4e98f0b. Tier-1 sources compile against
+# PRE/P2/FIX snapshots alike (cfg01::saveSettingShim bridges void->bool).
+# Enable with -DBUILD_CFG01_TESTS=ON.
+option(BUILD_CFG01_TESTS "Build the CFG-01 config-file regression gates" OFF)
+if(BUILD_CFG01_TESTS)
+    set(CFG01_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/cfg01)
+    # Real AppCore TUs from THIS snapshot — proven minimal set, identical to
+    # appcore-setting-order-tests. ConfigFile.cpp exists only on the FIX side.
+    set(CFG01_CORE_SOURCES
+        src/AppCore.cpp
+        src/modules/retroarch/RetroArchBackend.cpp
+        src/modules/retroarch/RecentGamesStore.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/util/ConfigFile.cpp)
+        list(APPEND CFG01_CORE_SOURCES src/util/ConfigFile.cpp)
+    endif()
+    set(CFG01_CORE_LIBS Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    if(NOT APPLE)
+        list(APPEND CFG01_CORE_LIBS ${Libdrm_LIBRARIES})
+    endif()
+
+    # Classifier v3: QtCore ONLY (no product code) — §4.1.
+    add_executable(cfg01-classify ${CFG01_DIR}/cfg01_classify.cpp)
+    target_link_libraries(cfg01-classify PRIVATE Qt6::Core)
+    target_include_directories(cfg01-classify PRIVATE ${CFG01_DIR})
+
+    # Killprobe: pure POSIX timing path, no Qt anywhere near the kill clock.
+    add_executable(cfg01-killprobe ${CFG01_DIR}/cfg01_killprobe.cpp)
+
+    add_executable(cfg01-saver ${CFG01_DIR}/cfg01_saver.cpp ${CFG01_CORE_SOURCES})
+    set_target_properties(cfg01-saver PROPERTIES AUTOMOC ON)
+    target_include_directories(cfg01-saver PRIVATE src ${CFG01_DIR})
+    target_link_libraries(cfg01-saver PRIVATE ${CFG01_CORE_LIBS})
+    if(NOT APPLE)
+        target_include_directories(cfg01-saver PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+
+    add_executable(cfg01-harness ${CFG01_DIR}/cfg01_harness.cpp ${CFG01_CORE_SOURCES})
+    set_target_properties(cfg01-harness PROPERTIES AUTOMOC ON)
+    target_include_directories(cfg01-harness PRIVATE src ${CFG01_DIR})
+    target_link_libraries(cfg01-harness PRIVATE ${CFG01_CORE_LIBS})
+    if(NOT APPLE)
+        target_include_directories(cfg01-harness PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+
+    enable_testing()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME cfg01-kill-sweep
+        COMMAND ${Python3_EXECUTABLE} ${CFG01_DIR}/run_kill_sweep.py
+            --saver $<TARGET_FILE:cfg01-saver>
+            --killprobe $<TARGET_FILE:cfg01-killprobe>
+            --classify $<TARGET_FILE:cfg01-classify>
+            --evdir ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/sweep
+            --golden-dir ${CFG01_DIR}/golden
+            # Test-plan 193: grid must be calibrated on the host/PRE lane to
+            # bracket the FIX commit window. On this host 1550 us never lands
+            # a post-commit kill; 12000 us is the calibrated grid (1205 real
+            # SIGKILLs, zero corruption, G1/G3 pass). This is a sweep timing
+            # grid, not a corruption threshold — none of the gates are relaxed.
+            --max-us 12000
+            --variant FIX --qt-version ${Qt6Core_VERSION})
+    set_tests_properties(cfg01-kill-sweep PROPERTIES TIMEOUT 900)
+    foreach(_m healthy corrupt-refusal storm missing-unreadable open-failure)
+        add_test(NAME cfg01-${_m}
+            COMMAND cfg01-harness ${_m} ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/${_m})
+        set_tests_properties(cfg01-${_m} PROPERTIES TIMEOUT 120 ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+    endforeach()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME cfg01-armB
+            COMMAND cfg01-harness armB ${CMAKE_CURRENT_BINARY_DIR}/cfg01-evidence/armB)
+        set_tests_properties(cfg01-armB PROPERTIES TIMEOUT 60 ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+    endif()
+endif()
+
 option(BUILD_VCHAN_TESTS "Build the virtual-channels scheduling tests" OFF)
 if(BUILD_VCHAN_TESTS)
     add_executable(vchan-tests
@@ -808,6 +929,7 @@ if(BUILD_VCHAN_TESTS)
         src/modules/virtual_channels/TVDBNetworkResolver.cpp
         src/modules/virtual_channels/LocalLibrary.cpp
         src/modules/virtual_channels/VirtualChannelsBackend.cpp
+        src/util/ConfigFile.cpp
         src/modules/virtual_channels/LibraryDb.cpp
         src/modules/virtual_channels/tests/LibraryDbTest.cpp)
     # MediaServerSource and the fake backend it is tested against are both
@@ -857,6 +979,21 @@ if(BUILD_TESTS)
     set(MP240_RECENT_ROOT_DEF "MP240_REPO_ROOT=\"${CMAKE_SOURCE_DIR}\"")
     target_compile_definitions(recent-view-smoke PRIVATE ${MP240_RECENT_ROOT_DEF})
     add_test(NAME recent-view-smoke COMMAND recent-view-smoke)
+
+    # N1 (CFG-01 follow-up): Settings.qml save debounce smoke. Loads the real
+    # view with a counting stub AppCore and proves N rapid list_single presses
+    # coalesce to one save_setting call, that every exit path flushes the
+    # pending value, and that degraded/failed writes never lie on screen.
+    add_executable(settings-save-debounce-smoke
+        src/tests/settings-save-debounce-smoke-test.cpp)
+    set_target_properties(settings-save-debounce-smoke PROPERTIES AUTOMOC ON)
+    target_link_libraries(settings-save-debounce-smoke PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml)
+    target_compile_definitions(settings-save-debounce-smoke PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME settings-save-debounce-smoke COMMAND settings-save-debounce-smoke)
+    set_tests_properties(settings-save-debounce-smoke PROPERTIES
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen TIMEOUT 60)
 
     # Current conditions row parity: Metric and US must both show PRESSURE.
     add_executable(weather-current-smoke src/tests/weather-current-smoke-test.cpp)
@@ -1027,6 +1164,78 @@ if(BUILD_TESTS)
         target_compile_options(yt-negative-cache-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME yt-negative-cache COMMAND yt-negative-cache-tests)
+
+    # Shared atomic JSON state files (media auth + module config): four-way
+    # load status, quarantine before any rewrite, owner-only mode on POSIX,
+    # and the routine-save refusal that blocks corrupt-read clobber.
+    add_executable(json-state-file-tests
+        src/util/tests/JsonStateFileTest.cpp)
+    set_target_properties(json-state-file-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(json-state-file-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(json-state-file-tests PRIVATE src)
+    if(NOT MSVC)
+        target_compile_options(json-state-file-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME json-state-file COMMAND json-state-file-tests)
+
+    # Emby auth-state persistence: a corrupt read must quarantine the raw bytes
+    # and stay distinguishable from a missing file; a routine save must never
+    # replace it with empty credentials or a freshly minted device id.
+    add_executable(emby-auth-state-tests
+        src/modules/emby/tests/EmbyBackendAuthStateTest.cpp
+        src/modules/emby/EmbyBackend.cpp
+        src/util/ConfigFile.cpp)
+    set_target_properties(emby-auth-state-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(emby-auth-state-tests PRIVATE src)
+    target_link_libraries(emby-auth-state-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(emby-auth-state-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME emby-auth-state COMMAND emby-auth-state-tests)
+
+    # Two-sided regression for MEDIA-AUTH-CLOBBER-01. The legacy arm drives a
+    # known-bad truncate-in-place/empty-parse fixture and proves the contract
+    # checker sees the shipped clobber; the fixed arm drives the real backends
+    # and must be clean. Controls cover valid, missing, wrong-type, read-only
+    # and config round-trips. Every case uses its own QTemporaryDir data root.
+    add_executable(media-auth-clobber-regression-tests
+        src/tests/MediaAuthClobberRegressionTest.cpp
+        src/modules/emby/EmbyBackend.cpp
+        src/modules/jellyfin/JellyfinBackend.cpp
+        src/util/ConfigFile.cpp)
+    set_target_properties(media-auth-clobber-regression-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(media-auth-clobber-regression-tests PRIVATE src)
+    target_link_libraries(media-auth-clobber-regression-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    if(NOT MSVC)
+        target_compile_options(media-auth-clobber-regression-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME media-auth-clobber-legacy
+        COMMAND media-auth-clobber-regression-tests
+            legacyEmbyAuthClobbersByDesign
+            legacyJellyfinAuthClobbersByDesign
+            legacyJellyfinConfigClobbersByDesign)
+    add_test(NAME media-auth-clobber-fixed
+        COMMAND media-auth-clobber-regression-tests
+            fixedEmbyAuthPreservesCorruptEvidence
+            fixedJellyfinAuthPreservesCorruptEvidence
+            fixedJellyfinConfigIsNotReducedToEmptyObject)
+    add_test(NAME media-auth-clobber-controls
+        COMMAND media-auth-clobber-regression-tests
+            validEmbyAuthRoundTrips validJellyfinAuthRoundTrips
+            missingEmbyAuthMintsIdentity missingJellyfinAuthMintsIdentity
+            wrongTypeEmbyAuthQuarantines wrongTypeJellyfinAuthQuarantines
+            readOnlyEmbyAuthSaveDoesNotClobber
+            readOnlyJellyfinAuthSaveDoesNotClobber
+            validJellyfinConfigRoundTrips)
+    set_tests_properties(
+        media-auth-clobber-legacy
+        media-auth-clobber-fixed
+        media-auth-clobber-controls
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.
@@ -1214,7 +1423,8 @@ if(BUILD_TESTS)
         target_compile_options(yt-resolver-contract-probe PRIVATE -Wall -Wextra)
     endif()
     foreach(contract_case delayed-abandoned near-deadline fast-healthy
-                         live-waiting live-hls live-hls-with-pair)
+                         live-waiting live-hls live-hls-with-pair
+                         post-live-hls premiered-vod-pair)
         add_test(NAME yt-resolver-contract-${contract_case}
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/tests/run_contract_case.py
@@ -1331,6 +1541,7 @@ if(BUILD_TESTS)
     # CI lanes without a media stack stay green.
     add_executable(mpv-quit-intent-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
@@ -1367,6 +1578,7 @@ if(BUILD_TESTS)
     # bands are wall-clock and must not race parallel ctest load.
     add_executable(mpv-hold-repeat-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
@@ -1399,6 +1611,7 @@ if(BUILD_TESTS)
     # real; only the relaunch-after-failure case QSKIPs without mpv/ffmpeg.
     add_executable(mpv-failedtostart-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp
@@ -1434,10 +1647,47 @@ if(BUILD_TESTS)
     file(MAKE_DIRECTORY "${_failedtostart_tmp}")
     set_tests_properties(mpv-failedtostart PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_failedtostart_tmp}")
 
+    # #145 CRT repro: real mpv against the shaped local HLS master. The mpv
+    # resolver contract proved classification but never launched mpv, so the
+    # whitelist failure reached the owner's CRT. This gate reproduces it with
+    # a loopback HLS origin and the production arg helper. Needs real mpv +
+    # ffmpeg; QSKIPs on lanes missing either.
+    add_executable(yt-live-hls-local-tests
+        src/AppCore.cpp
+        # CFG-01: AppCore now calls cfgfile::load/save/reset; link the impl.
+        src/util/ConfigFile.cpp
+        src/player/MpvController.cpp
+        src/player/SeekHoldPolicy.cpp
+        src/util/DisplayHandoff.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp
+        src/util/FontconfigOverride.cpp
+        src/tests/YtLiveHlsLocalPlaylistTest.cpp)
+    set_target_properties(yt-live-hls-local-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(yt-live-hls-local-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test
+        $<$<NOT:$<BOOL:${APPLE}>>:${Libdrm_LIBRARIES}>)
+    target_include_directories(yt-live-hls-local-tests PRIVATE src)
+    if(NOT APPLE)
+        target_include_directories(yt-live-hls-local-tests PRIVATE ${Libdrm_INCLUDE_DIRS})
+    endif()
+    target_compile_definitions(yt-live-hls-local-tests PRIVATE
+        MP240_REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(yt-live-hls-local-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-live-hls-local COMMAND yt-live-hls-local-tests)
+    string(MD5 _lhl_tmp_hash "${CMAKE_CURRENT_BINARY_DIR}")
+    string(SUBSTRING "${_lhl_tmp_hash}" 0 8 _lhl_tmp_hash)
+    set(_lhl_tmp "${_failedtostart_tmp_base}/240mp-lhl-${_lhl_tmp_hash}")
+    file(MAKE_DIRECTORY "${_lhl_tmp}")
+    set_tests_properties(yt-live-hls-local PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;TMPDIR=${_lhl_tmp}")
+
     # T2 (issue #111): real MpvController per-instance socket contract.
     # No mpv spawning — constructs the controller and checks socketPath()/logFilePath().
     add_executable(mpv-instance-socket-tests
         src/AppCore.cpp
+        src/util/ConfigFile.cpp
         src/player/MpvController.cpp
         src/player/SeekHoldPolicy.cpp
         src/util/DisplayHandoff.cpp

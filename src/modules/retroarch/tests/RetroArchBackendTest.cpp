@@ -8,6 +8,25 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
+#include <QElapsedTimer>
+#include <atomic>
+
+namespace {
+std::atomic<int> g_parseMessages{0};
+QtMessageHandler g_prevMessageHandler = nullptr;
+void countParseMessages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg) {
+    if (msg.contains(QLatin1String("Parsing playlist:")))
+        g_parseMessages.fetch_add(1);
+    if (g_prevMessageHandler)
+        g_prevMessageHandler(type, ctx, msg);
+}
+// Restore even when a QVERIFY returns early.
+struct MessageHandlerGuard {
+    QtMessageHandler prev;
+    explicit MessageHandlerGuard(QtMessageHandler h) : prev(qInstallMessageHandler(h)) {}
+    ~MessageHandlerGuard() { qInstallMessageHandler(prev); }
+};
+}
 
 // Unit tests for RetroArchBackend's playlist browsing. Everything is local
 // file I/O against a temp tree, so the suite is fast and needs no RetroArch
@@ -44,6 +63,11 @@ private slots:
     void missingThumbnailYieldsEmptyString();
     void thumbnailDbUsesPlaylistBasenameOriginalCase();
     void sanitizedLabelMatchesSanitizedDbName();
+    void perNavigationScanStopsOnWarmCache();
+    void thumbnailCacheClearForcesRebuild();
+    void thumbnailCacheInvalidatesOnDirChange();
+    void thumbnailSettingChangeBumpsGenerationAndClearsCache();
+    void prewarmBuildsOffThreadAndWarmsFirstResolve();
     void signalsFireAlongsideReturnValues();
     void archiveRomPathChecksArchiveOnly();
     void archiveRomPathRelativeResolvesAgainstRomDir();
@@ -59,6 +83,7 @@ private slots:
     void gameRunningChangedOnSpawnAndExit();
     void gameRunningChangedOnFailedStart();
     void refusedLaunchDoesNotEmitGameRunningChanged();
+    void countCacheIsWarmedBeforeFirstPlaylistsOpen();
 };
 
 void RetroArchBackendTest::initTestCase() {
@@ -388,6 +413,140 @@ void RetroArchBackendTest::sanitizedLabelMatchesSanitizedDbName() {
     QVERIFY(!games.isEmpty());
     QCOMPARE(be->resolveThumbnail("F/Z Quest [T/S]", "nes_libretro"),
              thumbs + "/nes_libretro/Named_Boxarts/F_Z Quest _T_S_.png");
+}
+
+void RetroArchBackendTest::perNavigationScanStopsOnWarmCache() {
+    // Two-sided shape: the shipped findThumbnail() relisted the type dir on
+    // EVERY resolve. Here 20 distinct misses across two navigation passes make
+    // that 40 listings; the cache must list once and then never again.
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/scan_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    for (int i = 0; i < 50; ++i) {
+        QFile f(dir + QStringLiteral("/filler-%1.png").arg(i));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < 20; ++i)
+            QVERIFY(be->resolveThumbnail(QStringLiteral("missing-%1").arg(i),
+                                         QStringLiteral("scan_libretro")).isEmpty());
+    }
+
+    // Only the one existing type dir is ever listed; the other four do not
+    // exist and are not scanned. One warm-up miss, then 19 + 20 hits — the
+    // second pass adds zero scans.
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+    QCOMPARE(be->thumbnailCacheHitCount(), 39);
+}
+
+void RetroArchBackendTest::thumbnailCacheClearForcesRebuild() {
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/clear_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "clear_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    be->clearThumbnailCache();
+    QCOMPARE(be->thumbnailCacheScanCount(), 0);
+    QCOMPARE(be->resolveThumbnail("Old", "clear_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+}
+
+void RetroArchBackendTest::thumbnailCacheInvalidatesOnDirChange() {
+    // Real-filesystem counterpart to the deterministic key-provider cases: a
+    // newly added thumbnail bumps the dir mtime+size and is visible on the
+    // next resolve (one extra listing), not stranded behind a stale manifest.
+    RetroArchBackend *be = makeBackend();
+    const QString dir = m_tmp.path() + "/thumbnails/invalidate_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "invalidate_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    QTest::qSleep(20);   // key uses msecs; clear the same-millisecond window
+    { QFile f(dir + "/New.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+    QCOMPARE(be->resolveThumbnail("New", "invalidate_libretro"), dir + "/New.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 2);
+}
+
+void RetroArchBackendTest::thumbnailSettingChangeBumpsGenerationAndClearsCache() {
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+    const QString dir = m_tmp.path() + "/thumbnails/gen_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    { QFile f(dir + "/Old.png"); QVERIFY(f.open(QIODevice::WriteOnly)); f.close(); }
+
+    QCOMPARE(be->resolveThumbnail("Old", "gen_libretro"), dir + "/Old.png");
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+    const quint64 before = be->thumbnailCacheGeneration();
+
+    // A new thumbnail root clears the manifest AND bumps the generation, so a
+    // build captured under the old root cannot install a stale index later.
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("thumbnail_directory"),
+                         m_tmp.path() + "/thumbnails/gen2");
+    QCOMPARE(be->thumbnailCacheGeneration(), before + 1);
+    QCOMPARE(be->thumbnailCacheScanCount(), 0);
+    QVERIFY(be->resolveThumbnail("Old", "gen_libretro").isEmpty());
+}
+
+void RetroArchBackendTest::prewarmBuildsOffThreadAndWarmsFirstResolve() {
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+
+    // A dedicated root keeps this test independent of type dirs other cases
+    // created under the shared <thumbnails> tree.
+    const QString root = m_tmp.path() + "/prewarm-thumbs";
+    const QString dir = root + "/prewarm_libretro/Named_Boxarts";
+    QDir().mkpath(dir);
+    for (int i = 0; i < 2000; ++i) {
+        QFile f(dir + QStringLiteral("/game-%1.png").arg(i));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.close();
+    }
+
+    QSignalSpy readySpy(be, &RetroArchBackend::thumbnailManifestReady);
+    const quint64 before = be->thumbnailCacheGeneration();
+
+    // Triggering prewarm must be cheap: the 2000-file listing is queued to a
+    // worker, not executed in onSettingChanged() on the calling thread.
+    QElapsedTimer trigger;
+    trigger.start();
+    be->onSettingChanged(QStringLiteral("com.240mp.retroarch"),
+                         QStringLiteral("thumbnail_directory"), root);
+    const qint64 triggerMs = trigger.elapsed();
+    QVERIFY2(triggerMs < 100, qPrintable(QStringLiteral("prewarm trigger took %1 ms")
+                                         .arg(triggerMs)));
+    readySpy.clear();                 // drop any install from construction prewarm
+
+    // Wait for exactly one install of the new root (old-generation jobs are
+    // rejected and never installed or signalled).
+    QTRY_COMPARE_WITH_TIMEOUT(be->thumbnailCacheScanCount(), 1, 10000);
+    QVERIFY(readySpy.count() >= 1);
+    QCOMPARE(be->thumbnailCacheGeneration(), before + 1);
+
+    // No dropped matches: every game in the built manifest resolves, and no
+    // further directory listing is needed.
+    for (int i = 0; i < 20; ++i) {
+        QCOMPARE(be->resolveThumbnail(QStringLiteral("game-%1").arg(i),
+                                      QStringLiteral("prewarm_libretro")),
+                 dir + QStringLiteral("/game-%1.png").arg(i));
+    }
+    QCOMPARE(be->thumbnailCacheScanCount(), 1);
+
+    QElapsedTimer firstResolve;
+    firstResolve.start();
+    QCOMPARE(be->resolveThumbnail(QStringLiteral("game-0"),
+                                  QStringLiteral("prewarm_libretro")),
+             dir + QStringLiteral("/game-0.png"));
+    const double ms = firstResolve.nsecsElapsed() / 1e6;
+    QVERIFY2(ms <= 2.0, qPrintable(QStringLiteral("first post-prewarm resolve %1 ms")
+                                   .arg(ms, 0, 'f', 4)));
 }
 
 void RetroArchBackendTest::signalsFireAlongsideReturnValues() {
@@ -846,6 +1005,37 @@ void RetroArchBackendTest::refusedLaunchDoesNotEmitGameRunningChanged() {
     QTest::qWait(100);
     QCOMPARE(spy.count(), 0);
     QVERIFY(!be->gameRunning());
+}
+
+// NAV-ROOT-CAUSE #1 (two-sided): before the fix the FIRST refreshAllPlaylists()
+// parsed every playlist on the GUI thread (~109 ms with the Pi's 20 files).
+// The constructor now warms that same mtime+size cache off-thread, so the
+// first open must do zero parses while a changed file still forces one.
+void RetroArchBackendTest::countCacheIsWarmedBeforeFirstPlaylistsOpen() {
+    cleanPlaylistDir();
+    writePlaylist("NES.lpl", playlistJson("/cores/nestopia.so", {"A", "B"}));
+    writePlaylist("SNES.lpl", playlistJson("/cores/snes9x.so", {"C", "D", "E"}));
+    writePlaylist("Genesis.lpl", playlistJson("/cores/genesis.so", {"F"}));
+
+    g_parseMessages.store(0);
+    MessageHandlerGuard guard(countParseMessages);
+    g_prevMessageHandler = guard.prev;
+
+    RetroArchBackend *be = makeBackend();
+    QVERIFY(be);
+    QTRY_VERIFY_WITH_TIMEOUT(g_parseMessages.load() >= 3, 5000);
+    QTest::qWait(50); // let the warm-up merge its local hash into the cache
+
+    // RED: 3 parses here. GREEN: 0 — the startup thread did them instead.
+    g_parseMessages.store(0);
+    const QVariantList rows = be->refreshAllPlaylists();
+    QCOMPARE(rows.size(), 3);
+    QCOMPARE(g_parseMessages.load(), 0);
+
+    // Invalidation from PERF-TRANSITION-01 must survive the move.
+    writePlaylist("NES.lpl", playlistJson("/cores/nestopia.so", {"A", "B", "NEW"}));
+    be->refreshAllPlaylists();
+    QCOMPARE(g_parseMessages.load(), 1);
 }
 
 QTEST_GUILESS_MAIN(RetroArchBackendTest)

@@ -1,4 +1,5 @@
 #include "PlexBackend.h"
+#include "../../util/ConfigFile.h"
 #include "PlaybackDecision.h"
 
 #include <QFile>
@@ -93,20 +94,14 @@ void PlexBackend::saveAuth(const QJsonObject &auth) const {
 }
 
 QJsonObject PlexBackend::loadConfig() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        auto doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    return {};
+    // CFG-01: shared policy reader (missing != corrupt; loud on damage).
+    return cfgfile::load(m_dataRoot).doc;
 }
 
-void PlexBackend::saveConfig(const QJsonObject &cfg) const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::WriteOnly)) return;
-    f.write(QJsonDocument(cfg).toJson(QJsonDocument::Indented));
+bool PlexBackend::saveConfig(const QJsonObject &cfg) const {
+    // CFG-01: guarded atomic write. Open/write failures were fully silent here
+    // before — the auth/server-selection paths now get checked returns + fsync.
+    return cfgfile::save(m_dataRoot, cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -1041,6 +1036,11 @@ void PlexBackend::start_pin_auth() {
         emit pinReady(code, m_pendingPinId);
         m_pollTimer->start();
     });
+}
+
+void PlexBackend::stop_pin_auth() {
+    m_pollTimer->stop();
+    m_pendingPinId.clear();
 }
 
 void PlexBackend::pollPinTick() {

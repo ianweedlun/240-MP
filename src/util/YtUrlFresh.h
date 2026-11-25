@@ -12,6 +12,7 @@
 // See the LICENSE file in the project root, or run: <git tag --get-at-tag artifact>
 
 #include <QString>
+#include <QStringList>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
@@ -19,6 +20,14 @@
 #include <algorithm>
 
 namespace yturl {
+
+// URL-cache freshness policy, shared by the backend and its pure tests. A
+// cached entry is served only while it outlives kSafetyMarginS (buffer + launch
+// slack). Live HLS entries cache a shaped playlist FILE PATH with no expire=
+// parameter, so their TTL must exceed that margin: at TTL <= margin the entry
+// is born stale and every warm hit re-resolves the master.
+inline constexpr qint64 kSafetyMarginS    = 120;
+inline constexpr qint64 kLivePlaylistTtlS = 180;  // ~60 s warm window after the margin
 
 // expire= parameter as epoch seconds; 0 when absent or malformed. Two URL
 // dialects carry it: progressive googlevideo streams use query parameters
@@ -48,6 +57,21 @@ inline qint64 expireEpochFromUrl(const QString &url)
         return url.mid(i + 8, j - (i + 8)).toLongLong();
     }
     return 0;
+}
+
+// A shaped HLS master names its variant manifests with expire/<epoch>. The
+// smallest such epoch is the usable horizon for the whole snapshot: replaying
+// the file after that point makes mpv fetch a dead manifest. 0 when absent.
+inline qint64 minExpiryInPlaylist(const QString &playlist)
+{
+    qint64 minExpiry = 0;
+    const QStringList lines = playlist.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const qint64 e = expireEpochFromUrl(line);
+        if (e > 0 && (minExpiry == 0 || e < minExpiry))
+            minExpiry = e;
+    }
+    return minExpiry;
 }
 
 // A cached stream is usable while the signed window still covers buffering

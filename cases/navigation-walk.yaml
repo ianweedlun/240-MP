@@ -1,0 +1,13 @@
+# ── crt-validation case: navigation-walk ──
+# Walk ModuleList down, open a module, go to its root view, open a second module.
+keys:
+  - up
+  - select
+  - shot nav01
+  - up
+  - select
+  - shot nav02
+expect:
+  - " view 240mp-"
+  - " shot nav01"
+  - " shot nav02"

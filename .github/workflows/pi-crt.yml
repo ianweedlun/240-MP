@@ -1,0 +1,118 @@
+name: CRT agent validation
+
+# One-shot circuit: after a branch tip builds and deploys to the Pi, drive a
+# named CRT case through the debug key channel and collect evidence on the
+# runner. Results become runner-state; the DoD (item 5) consumes the evidence
+# bundle to close the card.
+#
+# Prereqs (owner setup): GitHub Secrets PI_SSH_IDENTITY (private key),
+# PI_SSH_HOSTNAME (reach the Pi over the WAN path), PI_SSH_USERNAME.
+# The identity is staged on the runner; the wheel runs there and SSHes to the
+# Pi, so the same key is used for key injection and evidence collection.
+# The identity must be authorized for a Pi user that can write the debug key
+# channel (/tmp/240mp_key.in is ian:ian 664); ghdeploy's CI key cannot.
+# The wheel is idempotent and safe: it only taps navigation/playback keys and
+# never writes config. Read the verdict line; do not treat "PASS" as "deploy"
+# or "CI green" as validation.
+
+on:
+  push:
+    branches: [dev, 'feature/**']
+    paths-ignore: ['**.md','**.yml','docs/crt-validation-cases.md']
+  # Owner dispatch to replay an ad-hoc case after a push with no code change.
+  workflow_dispatch:
+    inputs:
+      case:
+        description: 'Case name to drive'
+        required: true
+        default: navigation-walk
+      host:
+        description: 'Pi host override'
+        required: false
+        default: ''
+      user:
+        description: 'Pi user override'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pi-gate:
+    # secrets are not readable in a job-level `if`, so probe them in a cheap
+    # gate job and gate the wheel on its output. Fork-safe: no Pi SSH secrets
+    # configured -> ready=false -> wheel skips instead of erroring.
+    name: Pi SSH secrets gate
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.PI_SSH_HOSTNAME }}" ] && [ -n "${{ secrets.PI_SSH_USERNAME }}" ] && [ -n "${{ secrets.PI_SSH_IDENTITY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  crt-agent-validation:
+    name: Agent CRT wheel
+    runs-on: ubuntu-latest
+    needs: pi-gate
+    if: needs.pi-gate.outputs.ready == 'true'
+    env:
+      # Use input if provided (workflow_dispatch), else fall back to secrets (push events)
+      CRT_CASE: ${{ github.event.inputs.case || 'navigation-walk' }}
+      CRT_HOST: ${{ github.event.inputs.host || secrets.PI_SSH_HOSTNAME }}
+      CRT_USER: ${{ github.event.inputs.user || secrets.PI_SSH_USERNAME }}
+      CRT_PORT: '2222'   # WAN 2222 maps to the Pi's LAN 22, as in ci.yml
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Stage the SSH identity
+        # Multiline secrets must not be interpolated inline into a run script
+        # (documented line-collapsing/breakage path): pass through env and
+        # reference $KEY, which preserves every newline byte-for-byte.
+        env:
+          KEY: ${{ secrets.PI_SSH_IDENTITY }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh evidence/${CRT_CASE}
+          # GitHub Actions strips the trailing newline from secret values,
+          # and OpenSSH refuses a key file missing it ("is not a key file").
+          # printf '%s\n' restores it; the staged file is then byte-identical
+          # to the original.
+          printf '%s\n' "$KEY" > ~/.ssh/id_pi_agent
+          chmod 600 ~/.ssh/id_pi_agent
+          # Fail here on an empty/malformed secret instead of deep in the wheel.
+          echo "KEY bytes=$(wc -c < ~/.ssh/id_pi_agent) lines=$(wc -l < ~/.ssh/id_pi_agent)"
+          ssh-keygen -lf ~/.ssh/id_pi_agent; echo "ssh-keygen_rc=$?"
+
+      - name: Rebase the Pi to this tip
+        # The deploy step reinstalls the latest CI tarball for this ref, then
+        # verifies service-active + md5; the two-state + md5 gate is in the script.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/deploy-pi.sh --latest "${{ github.ref_name }}" 
+      - name: Drive the CRT case from the runner
+        run: |
+          set -o pipefail
+          # The key lives on the runner, so the wheel runs here: it SSHes to the
+          # Pi for key injection and pulls the evidence bundle back over scp.
+          mkdir -p evidence/${CRT_CASE}
+          bash scripts/crt-validate.sh "${CRT_CASE}" | tee evidence/${CRT_CASE}/wheel.txt
+
+      - name: Upload CRT evidence
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: crt-${{ github.run_id }}-${{ env.CRT_CASE }}
+          path: evidence/**
+
+      - name: Trace summary
+        run: |
+          echo "CRT case: ${{ env.CRT_CASE }}" >> $GITHUB_STEP_SUMMARY
+          echo "Result: see wheel.txt and evidence bundle above." >> $GITHUB_STEP_SUMMARY

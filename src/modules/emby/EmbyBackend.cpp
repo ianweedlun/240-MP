@@ -1,4 +1,5 @@
 #include "EmbyBackend.h"
+#include "../../util/ConfigFile.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -15,8 +16,14 @@
 #include <QSysInfo>
 #include <QSet>
 #include <QRegularExpression>
+#include <QTimer>
+
+#include "util/JsonStateFile.h"
 
 static const QString kModuleId = QStringLiteral("com.240mp.emby");
+
+static const QString kReauthMessage = QStringLiteral(
+    "RE-AUTHENTICATION REQUIRED: stored credentials were damaged; sign in again");
 
 // Library CollectionTypes the module knows how to browse + play. Anything else
 // (music, books, photos, mixed/empty, etc.) is hidden from both the browse list
@@ -53,7 +60,9 @@ EmbyBackend::EmbyBackend(const QString &appRoot, const QString &dataRoot, QObjec
     , m_nam(new QNetworkAccessManager(this))
 {
     loadAuthState();
-    if (m_deviceId.isEmpty()) {
+    // A corrupt read is not a first run: minting a new id here would orphan the
+    // server-side device grant. Missing files still get a fresh identity.
+    if (m_deviceId.isEmpty() && !m_authQuarantined) {
         m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
     // Seed the change guard from the restored state so a token that is still
@@ -86,16 +95,33 @@ QString EmbyBackend::normalizeServerUrl(const QString &url) {
 }
 
 void EmbyBackend::loadAuthState() {
-    QFile f(m_dataRoot + "/emby_auth.json");
-    if (!f.open(QIODevice::ReadOnly))
-        return;
+    const QString path = m_dataRoot + "/emby_auth.json";
+    const jsonstate::LoadResult loaded = jsonstate::load(path);
 
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-    if (err.error != QJsonParseError::NoError || !doc.isObject())
+    if (loaded.isCorrupt() || loaded.status == jsonstate::Status::ReadError) {
+        // load() has already moved the raw bytes aside for ParseError/NotObject.
+        // Never treat this as a missing file: routine saves stay blocked and a
+        // new deviceId must not be minted over the server-side grant.
+        m_authQuarantined = true;
+        if (loaded.isCorrupt()) {
+            const QString recovered = jsonstate::recoverStringField(loaded.raw, QStringLiteral("deviceId"));
+            if (!recovered.isEmpty())
+                m_deviceId = recovered;
+            qWarning() << "[EmbyBackend] emby_auth.json is corrupt; raw bytes preserved at"
+                       << loaded.quarantinePath << "- re-authentication required";
+        } else {
+            qWarning() << "[EmbyBackend] emby_auth.json could not be read:"
+                       << loaded.errorString << "- re-authentication required";
+        }
+        // Constructor runs before the QML connections exist, so report the
+        // reason on the next event-loop turn where Auth.qml can display it.
+        QTimer::singleShot(0, this, [this]() { emit errorOccurred(kReauthMessage); });
         return;
+    }
+    if (loaded.status == jsonstate::Status::Missing)
+        return; // first run — the constructor mints a fresh deviceId
 
-    QJsonObject auth = doc.object();
+    const QJsonObject auth = loaded.object;
     m_serverUrl  = normalizeServerUrl(auth["serverUrl"].toString());
     m_accessToken = auth["accessToken"].toString();
     m_userId     = auth["userId"].toString();
@@ -108,6 +134,25 @@ void EmbyBackend::loadAuthState() {
 }
 
 void EmbyBackend::saveAuthState() {
+    writeAuthState(false);
+}
+
+void EmbyBackend::saveAuthenticatedState() {
+    writeAuthState(true);
+}
+
+void EmbyBackend::writeAuthState(bool afterUserAuth) {
+    if (!afterUserAuth && m_authQuarantined) {
+        qWarning() << "[EmbyBackend] routine save refused: emby_auth.json is quarantined;"
+                   << "re-authentication required";
+        return;
+    }
+    // Only a successful user-initiated auth may write over quarantined state.
+    if (afterUserAuth && (m_accessToken.isEmpty() || m_userId.isEmpty() || m_serverUrl.isEmpty())) {
+        qWarning() << "[EmbyBackend] refusing to write auth state without a successful user authentication";
+        return;
+    }
+
     QJsonObject auth;
     auth["serverUrl"]   = m_serverUrl;
     auth["accessToken"] = m_accessToken;
@@ -116,14 +161,17 @@ void EmbyBackend::saveAuthState() {
     auth["serverName"]  = m_serverName;
     auth["deviceId"]    = m_deviceId;
 
-    QFile f(m_dataRoot + "/emby_auth.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[EmbyBackend] Could not write emby_auth.json: %s", qPrintable(f.errorString()));
+    const jsonstate::SaveResult saved = jsonstate::save(
+        m_dataRoot + "/emby_auth.json", auth,
+        afterUserAuth ? jsonstate::SaveMode::Explicit : jsonstate::SaveMode::Routine);
+    if (!saved.ok) {
+        qWarning() << "[EmbyBackend] Could not save emby_auth.json:" << saved.errorString;
         return;
     }
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    f.write(QJsonDocument(auth).toJson(QJsonDocument::Indented));
-    f.close();
+    // The user has replaced the damaged state; QML may route to Libraries again.
+    // The .corrupt file stays as evidence and still blocks any routine rewrite.
+    if (afterUserAuth)
+        m_authQuarantined = false;
 }
 
 void EmbyBackend::clearAuthState() {
@@ -140,8 +188,12 @@ void EmbyBackend::clearAuthState() {
     // in-session re-login / QuickConnect creates one that will be synced with the 
     // new device we give access to on the server and it will persist until either
     // the user signs out or manually de-auths the device from the server end.
-    // saveAuthState() will recreate the file on the next successful login.
+    // The next successful sign-in writes the file again through the explicit
+    // (user-initiated) save path.
     m_deviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // A deliberate sign-out resolves any earlier quarantine: the next sign-in
+    // is user-initiated and writes through the explicit re-auth path.
+    m_authQuarantined = false;
     QFile::remove(m_dataRoot + "/emby_auth.json");
 }
 
@@ -150,14 +202,8 @@ void EmbyBackend::clearAuthState() {
 // ---------------------------------------------------------------------------
 
 QJsonObject EmbyBackend::loadConfig() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    return {};
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    return cfgfile::load(m_dataRoot).doc;
 }
 
 QJsonObject EmbyBackend::moduleConfig() const {
@@ -258,10 +304,17 @@ QString EmbyBackend::get_user_name() {
 }
 
 QString EmbyBackend::get_auth_state() {
+    if (m_authQuarantined)
+        return QStringLiteral("reauth-required");
     return has_auth() ? QStringLiteral("authed") : QStringLiteral("none");
 }
 
 void EmbyBackend::check_auth() {
+    if (m_authQuarantined) {
+        emit errorOccurred(kReauthMessage);
+        notifyAuthState();
+        return;
+    }
     if (!has_auth()) {
         notifyAuthState();
         return;
@@ -398,13 +451,13 @@ void EmbyBackend::authenticate(const QString &serverUrl, const QString &username
                     QString name = infoData["ServerName"].toString();
                     if (!name.isEmpty()) {
                         m_serverName = name;
-                        saveAuthState();
+                        saveAuthenticatedState();
                     }
                 }
             });
         }
 
-        saveAuthState();
+        saveAuthenticatedState();
 
         // server_url is persisted to config.json by Root.qml (via appCore.save_setting)
         // once authStateChanged routes to Libraries — the single funnel for both the
@@ -578,7 +631,7 @@ void EmbyBackend::connect_select_server(const QString &serverUrl, const QString 
 }
 
 void EmbyBackend::persistConnectAuthAndFinish() {
-    saveAuthState();
+    saveAuthenticatedState();
 
     // server_url is persisted to config.json by Root.qml (via appCore.save_setting)
     // on authStateChanged — same funnel as the direct sign-in path.
@@ -593,7 +646,7 @@ void EmbyBackend::persistConnectAuthAndFinish() {
                 QString name = QJsonDocument::fromJson(userReply->readAll()).object()["Name"].toString();
                 if (!name.isEmpty()) {
                     m_userName = name;
-                    saveAuthState();
+                    saveAuthenticatedState();
                 }
             }
         });
@@ -609,7 +662,7 @@ void EmbyBackend::persistConnectAuthAndFinish() {
                 QString name = QJsonDocument::fromJson(infoReply->readAll()).object()["ServerName"].toString();
                 if (!name.isEmpty()) {
                     m_serverName = name;
-                    saveAuthState();
+                    saveAuthenticatedState();
                 }
             }
         });

@@ -226,6 +226,18 @@ void MpvController::setOscRanges(const QString &ranges)
     m_oscRanges = ranges;
 }
 
+QStringList MpvController::extraArgsForLocalHls(const QString &url)
+{
+    // A local HLS master written by the YouTube resolver references https
+    // variants. ffmpeg's whitelist for a file:// top-level URL is only
+    // file,crypto,data, so every variant is rejected and mpv reports
+    // "No video or audio streams selected" -> Player.qml shows launch-failed.
+    // mpv's key/value parser needs the list bracketed (mpv issue #9912).
+    if (!url.startsWith(QLatin1Char('/')) || !url.endsWith(QLatin1String(".m3u8")))
+        return {};
+    return { QStringLiteral("--demuxer-lavf-o=protocol_whitelist=[file,crypto,data,http,https,tcp,tls]") };
+}
+
 void MpvController::loadAndPlay(const QString &url, float startSeconds,
                                  int audioTrack, int subTrack,
                                  const QStringList &subFiles,
@@ -242,6 +254,12 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
     m_oscRanges.clear();
     // A new launch starts with no hold state carried over.
     resetSeekHold();
+    // RES-01: a quit intent belongs to exactly one playback session. Clear it
+    // here so a stale flag can't clear a saved marker on the NEXT video.
+    if (m_userStopIntent) {
+        m_userStopIntent = false;
+        emit userStopIntentChanged();
+    }
     if (m_process) {
         m_process->disconnect();
         if (m_process->state() != QProcess::NotRunning) {
@@ -301,6 +319,10 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 
     QStringList args;
     args << url;
+    // Local HLS masters (YouTube live/post_live) carry remote variants. Without
+    // this the ffmpeg demuxer rejects every variant and the player reports
+    // launch-failed — the exact CRT failure this gate reproduces.
+    args << extraArgsForLocalHls(url);
     // Additional playlist entries, straight after the primary url — mpv builds its
     // playlist from every non-option argument. These must be absolute paths or URLs
     // (so they can't be mistaken for flags); pass mpv options via extraArgs instead.
@@ -660,6 +682,13 @@ void MpvController::loadAndPlay(const QString &url, float startSeconds,
 void MpvController::stop() {
     m_pendingOsd.clear();
     resetSeekHold();
+    // RES-01: an explicit stop is the only "stopped" exit that may clear a
+    // saved position. Mark intent in the controller: both the QML call path
+    // and the Pi's direct-IPC key path converge here.
+    if (!m_userStopIntent) {
+        m_userStopIntent = true;
+        emit userStopIntentChanged();
+    }
 
     if (m_ipc->state() == QLocalSocket::ConnectedState) {
         sendCommand({"quit"});
@@ -671,6 +700,10 @@ void MpvController::stop() {
 void MpvController::forceStop() {
     m_pendingOsd.clear();
     resetSeekHold();
+    if (!m_userStopIntent) {
+        m_userStopIntent = true;
+        emit userStopIntentChanged();
+    }
     if (!m_process || m_process->state() == QProcess::NotRunning) return;
     m_process->terminate();
     QPointer<QProcess> proc = m_process;
@@ -934,9 +967,22 @@ void MpvController::onIpcReadyRead() {
             // mpv reports why playback ended: "eof" (played to the end),
             // "quit"/"stop" (user exited), "error", etc. Remember the last one
             // so onProcessFinished can distinguish a natural finish from a quit.
-            if (event == "end-file") {
-                m_lastEndFileReason = obj["reason"].toString();
-            } else if (event == "video-reconfig") {
+            if (event == QLatin1String("end-file")) {
+                m_lastEndFileReason = obj[QStringLiteral("reason")].toString();
+                // A post-connect Back/ESC that actually quits mpv arrives as
+                // end-file reason "quit"/"stop". Record it here rather than on
+                // every ESC keypress: the same key also dismisses the OSC menu,
+                // and a menu dismiss must not later clear a saved marker.
+                // Pre-connect Back goes through forceStop(), which sets intent
+                // directly; both converge on the same flag.
+                if (m_lastEndFileReason == QLatin1String("quit")
+                    || m_lastEndFileReason == QLatin1String("stop")) {
+                    if (!m_userStopIntent) {
+                        m_userStopIntent = true;
+                        emit userStopIntentChanged();
+                    }
+                }
+            } else if (event == QLatin1String("video-reconfig")) {
                 // Fires at the output (re)configuration point of each file load —
                 // observed live in this app's session (event stream: file-loaded,
                 // property registrations, video-reconfig, playback-restart).

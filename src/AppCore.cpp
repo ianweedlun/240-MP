@@ -1,4 +1,5 @@
 #include "AppCore.h"
+#include "util/ConfigFile.h"
 #include "util/MpvBasicOptions.h"
 #include <QDir>
 #include <QFile>
@@ -61,6 +62,12 @@ AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *paren
         m_modules.append(m);
         qDebug("[AppCore] Loaded manifest: %s", qPrintable(id));
     }
+
+    // CFG-01: establish config health at startup so the Settings banner is
+    // correct before the first get_settings, and a backup recovery happens at
+    // boot rather than at the first settings keypress. Read-only unless the
+    // file is corrupt (quarantine/restore is the load policy's job).
+    (void)loadConfig();
 }
 
 // ---------------------------------------------------------------------------
@@ -68,27 +75,43 @@ AppCore::AppCore(const QString &appRoot, const QString &dataRoot, QObject *paren
 // ---------------------------------------------------------------------------
 
 QJsonObject AppCore::loadConfig() const {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    // Return a sensible default if the file is missing or corrupt
-    return QJsonObject{
-        {"app", QJsonObject{{"color_scheme","Video 1"}}},
-        {"modules", QJsonObject{}}
-    };
+    // CFG-01: one shared policy reader for every config.json consumer. Missing
+    // and corrupt are distinguished; corrupt-with-backup recovers atomically;
+    // corrupt-without-backup enters degraded (writes refused, see saveConfig).
+    const cfgfile::LoadResult r = cfgfile::load(m_dataRoot);
+    applyConfigHealth(r.status == cfgfile::Status::Corrupt,
+                      r.status == cfgfile::Status::RecoveredFromBackup);
+    return r.doc;
 }
 
-void AppCore::saveConfig(const QJsonObject &config) const {
-    QFile f(m_dataRoot + "/config.json");
-    if (!f.open(QIODevice::WriteOnly)) {
-        qWarning("[AppCore] Could not write config.json: %s", qPrintable(f.errorString()));
+bool AppCore::saveConfig(const QJsonObject &config) const {
+    // CFG-01: guarded atomic write (QSaveFile + checked returns + fsync). The
+    // corrupt-live refusal lives INSIDE cfgfile::save — intrinsic, so every
+    // current and future caller is covered without per-caller policy.
+    return cfgfile::save(m_dataRoot, config);
+}
+
+void AppCore::applyConfigHealth(bool corrupted, bool recovered) const {
+    const QString notice = recovered
+        ? QStringLiteral("Settings recovered from backup.")
+        : QString();
+    if (m_configCorrupted == corrupted && m_configNotice == notice)
         return;
-    }
-    f.write(QJsonDocument(config).toJson(QJsonDocument::Indented));
+    m_configCorrupted = corrupted;
+    m_configNotice = notice;
+    // loadConfig is const (const accessors call it); the health cache is
+    // mutable UI state, so the notify goes through a const_cast.
+    emit const_cast<AppCore *>(this)->configHealthChanged();
+}
+
+bool AppCore::resetCorruptedConfig() {
+    // Explicit user-confirmed reset (Settings.qml two-step overlay). The only
+    // path that writes over a corrupt live file; quarantines the damaged bytes
+    // first. Healthy/missing config -> false, nothing touched.
+    if (!cfgfile::reset(m_dataRoot, cfgfile::defaultDocument()))
+        return false;
+    loadConfig();   // re-read: Ok -> clears degraded, emits configHealthChanged
+    return true;
 }
 
 bool AppCore::isModuleEnabled(const ModuleEntry &m, const QJsonObject &modulesConfig) const {
@@ -254,30 +277,36 @@ bool AppCore::weatherLooksLikeCoordinates(const QString &spec) const {
     return ret;
 }
 
-void AppCore::save_setting(const QString &moduleId, const QString &key, const QVariant &value) {
+bool AppCore::save_setting(const QString &moduleId, const QString &key, const QVariant &value) {
+    QJsonObject config = loadConfig();
+
+    // CFG-01 degraded guard: corrupt config.json with no usable backup — every
+    // settings write is refused until the user confirms a reset. No backend
+    // mutation, no change signals: views keep showing the last real values.
+    if (m_configCorrupted)
+        return false;
+
     // The four basic mpv knobs write straight into ~/.config/mpv/mpv.conf — the
     // menu and the file are one surface, config.json stays out of their way.
     if (moduleId.isEmpty() && mpvopts::isManagedKey(key)) {
         if (!mpvopts::setUiValue(mpvConfPath(), key, value.toString())) {
             qWarning("[AppCore] Rejected unknown mpv token for %s: %s",
                      qPrintable(key), qPrintable(value.toString()));
-            return;
+            return false;
         }
         // Drop the legacy key from config.json if one is still there.
-        QJsonObject config = loadConfig();
         QJsonObject app = config["app"].toObject();
         if (app.contains(key)) {
             app.remove(key);
             config["app"] = app;
-            saveConfig(config);
+            if (!saveConfig(config))
+                return false;
         }
         qDebug("[AppCore] mpv setting written to mpv.conf: %s = %s",
                qPrintable(key), qPrintable(value.toString()));
         emit appSettingChanged(key, value.toString());
-        return;
+        return true;
     }
-
-    QJsonObject config = loadConfig();
 
     // Navigate to the target section
     auto getTarget = [&]() -> QJsonObject {
@@ -308,7 +337,8 @@ void AppCore::save_setting(const QString &moduleId, const QString &key, const QV
     }
 
     setTarget(target);
-    saveConfig(config);
+    if (!saveConfig(config))
+        return false;
 
     qDebug("[AppCore] Setting saved: %s.%s = %s",
            qPrintable(moduleId.isEmpty() ? "app" : moduleId),
@@ -316,7 +346,7 @@ void AppCore::save_setting(const QString &moduleId, const QString &key, const QV
 
     if (moduleId.isEmpty()) {
         emit appSettingChanged(key, value.toString());
-        return;
+        return true;
     }
 
     // Views handle moduleSettingChanged by immediately re-reading their backend
@@ -337,6 +367,7 @@ void AppCore::save_setting(const QString &moduleId, const QString &key, const QV
                                   Q_ARG(QVariant, value));
     }
     emit moduleSettingChanged(moduleId, key, value);
+    return true;
 }
 
 QVariant AppCore::get_module_info(const QString &moduleId) {
@@ -759,9 +790,47 @@ QString AppCore::takeScreenshot()
     return captureScreenshot();
 }
 
+// Screen-tag generator. Returns e.g. "retroarch-Games" from the active view
+// source; stable across runs so evidence filenames are comparable.
+QString AppCore::screenshotTag() const
+{
+    const QStringList seg = m_activeViewSource.split(QLatin1Char('/'));
+    QString module;
+    QString view;
+    const int i = seg.indexOf("views");
+    if (i > 0) {
+        module = seg[i - 1];
+        module.remove("com.240mp.");
+    }
+    if (!seg.isEmpty()) {
+        view = seg.last();
+        view.remove(".qml");
+    }
+    QString tag = module.isEmpty() ? view : (module + '-');
+    tag.remove(QRegularExpression("[^A-Za-z0-9_-]"));
+    return tag.isEmpty() ? "app" : tag;
+}
+
+// Named capture during scripted walks: `shot <id>` on the debug key channel
+// writes 240mp_screenshot_<view-tag>_<id>.png so a walk can be replayed and
+// compared frame-by-frame with evidence named in the case card.
+QString AppCore::takeScreenshotWithLabel(const QString &id)
+{
+    const QString path = QStringLiteral("/tmp/240mp_screenshot_") + screenshotTag()
+                         + QLatin1Char('_') + id + QStringLiteral(".png");
+    // Machine-readable marker for scripted walks: pairs with the "view" marker
+    // so crt-validate.sh can assert a named capture actually happened.
+    note_state(QStringLiteral("shot"), id);
+    return captureScreenshot(path);
+}
+
 void AppCore::note_view(const QString &source)
 {
     m_activeViewSource = source;
+    // Machine-readable view-change marker for scripted walks: the agent asserts
+    // "view:<tag>" in the state log when it reaches a screen. Companion to the
+    // takeScreenshotWithLabel() capture.
+    note_state("view", screenshotTag());
 }
 
 void AppCore::note_state(const QString &event, const QString &detail)

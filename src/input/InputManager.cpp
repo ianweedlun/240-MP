@@ -783,6 +783,19 @@ void InputManager::pollDebugKeyChannel()
                 QMetaObject::invokeMethod(m_appCore, "takeScreenshot");
             continue;
         }
+        if (cmd.startsWith(QLatin1String("shot "))) {
+            // named capture during scripted walks -> 240mp_screenshot_<tag>_<id>.png
+            QString rawId = cmd.mid(5).trimmed();
+            if (m_appCore && !rawId.isEmpty()) {
+                // The invokable takes the capture id; without Q_ARG the meta-call
+                // never matches and the named shot silently does nothing.
+                QString captured;
+                QMetaObject::invokeMethod(m_appCore, "takeScreenshotWithLabel",
+                                           Q_RETURN_ARG(QString, captured),
+                                           Q_ARG(QString, rawId));
+            }
+            continue;
+        }
         if (cmd == QLatin1String("volup") || cmd == QLatin1String("volumeup")
             || cmd == QLatin1String("voldown") || cmd == QLatin1String("volumedown")
             || cmd == QLatin1String("volmute") || cmd == QLatin1String("volumemute")) {

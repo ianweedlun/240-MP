@@ -1,0 +1,12 @@
+# ── crt-validation case: settings-roundtrip ──
+# Open Settings, cycle Left/Right, capture before and after.
+keys:
+  - shot set01
+  - select
+  - left
+  - right
+  - shot set02
+expect:
+  - " view "
+  - " shot set01"
+  - " shot set02"

@@ -1,4 +1,5 @@
 #include "NfcReaderBackend.h"
+#include "../../util/ConfigFile.h"
 
 #include "../../AppCore.h"
 #include "NfcDriver.h"
@@ -161,9 +162,9 @@ NfcReaderBackend::NfcReaderBackend(const QString &appRoot, const QString &dataRo
     // means enabled — otherwise a hand-edited config could list the module in
     // the menu while the reader silently never polls.
     bool configuredEnabled = kManifestEnabledDefault;
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        const QJsonObject moduleConfig = QJsonDocument::fromJson(f.readAll()).object()
+    {
+        // CFG-01: shared policy reader (was a silent-fallback config.json read).
+        const QJsonObject moduleConfig = cfgfile::load(m_dataRoot).doc
             ["modules"].toObject()["com.240mp.nfc_reader"].toObject();
         const QString dir = moduleConfig["tags_directory"].toString();
         if (!dir.isEmpty())

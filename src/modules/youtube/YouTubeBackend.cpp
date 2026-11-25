@@ -58,7 +58,8 @@ YouTubeBackend::YouTubeBackend(const QString &appRoot, const QString &dataRoot, 
                 // playlist hand-off so `ms` covers the whole live ladder.
                 m_resolveStartMs.insert(r.key,
                                         QDateTime::currentMSecsSinceEpoch() - r.elapsedMs);
-                launchHlsResolve(r.videoId, r.resolution, r.key, r.hlsManifestUrl);
+                launchHlsResolve(r.videoId, r.resolution, r.key,
+                                 r.hlsManifestUrl, r.postLive);
                 return;
             }
             emit resolveTelemetry(r.videoId, QStringLiteral("innertube"), r.elapsedMs);
@@ -1498,7 +1499,8 @@ bool YouTubeBackend::cachedPlaybackSingle(const QString &videoId,
 }
 
 void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
-                                         const QString &resolution)
+                                         const QString &resolution,
+                                         bool allowRetry)
 {
     if (videoId.isEmpty())
         return;
@@ -1507,10 +1509,11 @@ void YouTubeBackend::invalidateCachedUrl(const QString &videoId,
     if (!yturl::invalidateCachedEntry(m_urlCache, videoId, fmt))
         return; // nothing stored for this pair: the cold path is already in effect
     // A cached URL that failed to PLAY must not be re-minted by the same
-    // resolver. invalidateCachedUrl is only called on a playback failure, so
-    // mark the key's in-process attempt spent: the key surfaces RESOLVE_BUSY
-    // rather than looping resolve -> 403 -> evict -> resolve on the same client.
-    m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
+    // resolver — unless the caller is the warm-403 cure, whose whole point
+    // is a same-session re-resolve (see header). Spending the key on that
+    // path made every cure an instant RESOLVE_BUSY.
+    if (!allowRetry)
+        m_itTried.insert(yturl::cacheKeyFor(videoId, fmt));
     QFile f(urlCacheFilePath());
     if (!f.open(QIODevice::WriteOnly))
         return;
@@ -1565,6 +1568,10 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
                                          const QString &key)
 {
     if (negativeCacheBlocks(videoId)) {
+        // A blocked video is a failure terminal like any other. Emitting
+        // nothing here left the player view waiting on LOADING until the
+        // 4 s watchdog fell back (same family as the 2026-11-22 defect).
+        emit playbackResolveFailed(videoId, QStringLiteral("NEGATIVE_CACHE"));
         finishUrlResolve(key);
         return;
     }
@@ -1589,27 +1596,29 @@ void YouTubeBackend::launchUrlResolve(const QString &videoId, const QString &res
 // #128 live route: one bounded GET of the HLS master, shaped to the resolution
 // cap, written to a per-video playlist file mpv demuxes as a single stream
 // (ffmpeg keeps A/V sync inside one HLS presentation — two independent live
-// playlists would drift). The cache entry is the FILE PATH with a 60 s TTL:
-// live segments roll, so a warm hit inside the minute reuses the just-written
-// file and anything older re-resolves a fresh master.
-static constexpr qint64 kLivePlaylistTtlS = 60;
+// playlists would drift). The cache entry is the FILE PATH. Every read path
+// checks freshness with the 120 s URL margin, so the old 60 s TTL made the
+// entry born stale: the shared live TTL leaves a ~60 s usable warm window,
+// after which the master is re-resolved.
 static constexpr qint64 kMaxHlsMasterBytes = 1024 * 1024;
 
 void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &resolution,
-                                      const QString &key, const QString &hlsUrl)
+                                      const QString &key, const QString &hlsUrl,
+                                      bool postLive)
 {
     QNetworkRequest req{QUrl(hlsUrl)};
     QNetworkReply *reply = m_nam.get(req);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, key, videoId, resolution, hlsUrl]() {
+            [this, reply, key, videoId, resolution, hlsUrl, postLive]() {
         reply->deleteLater();
         const QByteArray body = reply->read(kMaxHlsMasterBytes);
         const qint64 startedMs = m_resolveStartMs.take(key);
         const qint64 ms = QDateTime::currentMSecsSinceEpoch() - startedMs;
 
         QString playlistPath;
+        QString shaped;
         if (reply->error() == QNetworkReply::NoError && !body.isEmpty()) {
-            const QString shaped = ythls::filterMaster(
+            shaped = ythls::filterMaster(
                 QString::fromUtf8(body), QUrl(hlsUrl),
                 ytstream::maxHeightForResolution(resolution));
             if (!shaped.isEmpty()) {
@@ -1637,10 +1646,23 @@ void YouTubeBackend::launchHlsResolve(const QString &videoId, const QString &res
             return;
         }
 
-        storeUrlCacheEntry(key, playlistPath, QString(), true,
-                           QDateTime::currentSecsSinceEpoch() + kLivePlaylistTtlS);
-        qWarning("[Youtube] resolve done (live-hls) vid=%s ms=%lld",
-                 qPrintable(videoId), static_cast<long long>(ms));
+        const qint64 nowSecs = QDateTime::currentSecsSinceEpoch();
+        qint64 cacheExpiry = nowSecs + yturl::kLivePlaylistTtlS;
+        if (postLive) {
+            // A finished broadcast is a fixed snapshot, not a rolling live
+            // feed: keep the shaped file until its own manifest URLs expire.
+            // The short live TTL minus the 120 s safety margin left only a
+            // ~60 s warm window, so a slow resume-overlay choice went stale
+            // and fell through to mpv's ytdl hook (PLAYBACK FAILED on the
+            // owner's CRT). No new segments appear after the event ends.
+            const qint64 manifestExpiry = yturl::minExpiryInPlaylist(shaped);
+            if (manifestExpiry > nowSecs)
+                cacheExpiry = manifestExpiry;
+        }
+        storeUrlCacheEntry(key, playlistPath, QString(), true, cacheExpiry);
+        qWarning("[Youtube] resolve done (live-hls) vid=%s ms=%lld ttl=%lld",
+                 qPrintable(videoId), static_cast<long long>(ms),
+                 static_cast<long long>(cacheExpiry - nowSecs));
         emit resolveTelemetry(videoId, QStringLiteral("live-hls"), ms);
         emit playbackUrlReady(videoId);
         finishUrlResolve(key);

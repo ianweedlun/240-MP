@@ -1,4 +1,5 @@
 #include "RetroArchBackend.h"
+#include "../../util/ConfigFile.h"
 #include "../../util/DisplayHandoff.h"
 #include <QBuffer>
 #include <QDir>
@@ -10,6 +11,8 @@
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QProcess>
+#include <QThread>
+#include <QMutex>
 #include <QDebug>
 #include <algorithm>
 
@@ -22,17 +25,42 @@ RetroArchBackend::RetroArchBackend(const QString &appRoot, const QString &dataRo
     , m_recent(dataRoot + QStringLiteral("/retroarch_recent.json")) {
     loadSettings();
     m_recent.load();
+
+    // NAV-ROOT-CAUSE #1: the first Playlists open cost ~109 ms because every
+    // .lpl was parsed on the GUI thread just to count its games. The existing
+    // mtime+size cache made later opens ~7 ms; warm it while QML is still
+    // loading so the first open is a hit too. QThread::create needs no extra
+    // Qt module and the destructor joins before any member is torn down.
+    m_countWarmThread = QThread::create([this] { warmPlaylistCountCache(); });
+    if (m_countWarmThread)
+        m_countWarmThread->start();
 }
 
-RetroArchBackend::~RetroArchBackend() = default;
+RetroArchBackend::~RetroArchBackend() {
+    // A queued build captures `this` to post its result back. Stop and join
+    // the worker before member teardown so no job can touch a dying backend.
+    m_thumbPrewarmThread.quit();
+    m_thumbPrewarmThread.wait();
+    delete m_thumbPrewarmContext;
+    m_thumbPrewarmContext = nullptr;
+    if (m_countWarmThread) {
+        m_countWarmThread->wait();
+        delete m_countWarmThread;
+        m_countWarmThread = nullptr;
+    }
+}
 
 void RetroArchBackend::loadSettings() {
-    QFile f(m_dataRoot + "/config.json");
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            QJsonObject root = doc.object();
+    // CFG-01: shared policy reader. Missing keeps the pre-fix first-run shape
+    // (ctor defaults, no migration write); corrupt is already warned/quarantined
+    // by the policy and every write below would be refused by the intrinsic
+    // guard anyway — so only a usable document runs the settings/migration body.
+    const cfgfile::LoadResult r = cfgfile::load(m_dataRoot);
+    if (r.status == cfgfile::Status::Missing || r.status == cfgfile::Status::Corrupt)
+        return;
+    {
+        QJsonObject root = r.doc;
+        {
             QJsonObject mod = root["modules"].toObject()["com.240mp.retroarch"].toObject();
 
             m_playlistDir = mod["playlist_directory"].toString();
@@ -84,18 +112,19 @@ void RetroArchBackend::loadSettings() {
                 QJsonObject modules = root["modules"].toObject();
                 modules.insert("com.240mp.retroarch", mod);
                 root["modules"] = modules;
-                // Close the read handle first, then write with a fresh QFile.
-                f.close();
-                QFile fw(m_dataRoot + "/config.json");
-                if (fw.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                    fw.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-                    qInfo("[RetroArch] Config migration written to %s", qPrintable(fw.fileName()));
+                // CFG-01: guarded atomic write (was QFile WriteOnly|Truncate —
+                // a constructor-time wipe window on the migration path).
+                if (cfgfile::save(m_dataRoot, root)) {
+                    qInfo("[RetroArch] Config migration written to %s/config.json", qPrintable(m_dataRoot));
                 } else {
-                    qWarning("[RetroArch] Failed to write migrated config: %s", qPrintable(fw.errorString()));
+                    qWarning("[RetroArch] Failed to write migrated config (see cfgfile warning)");
                 }
             }
         }
     }
+    // RETRO-THUMB-ASYNC: build the type-dir manifests on a worker right away
+    // so the first QML resolve is a hash hit, not a ~250 ms inline relist.
+    prewarmThumbnailManifests();
 }
 
 // ── Live setting changes ─────────────────────────────────────────────────────
@@ -132,6 +161,12 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
     // restart.
     if (key == QLatin1String("playlist_directory")) {
         m_playlistDir = value.toString();
+        // A warm-up already in flight parsed the old directory. Invalidate it.
+        {
+            QMutexLocker locker(&m_countCacheMutex);
+            ++m_playlistDirGeneration;
+            m_playlistCountCache.clear();
+        }
         return;
     }
     if (key == QLatin1String("rom_directory")) {
@@ -140,6 +175,11 @@ void RetroArchBackend::onSettingChanged(const QString &moduleId, const QString &
     }
     if (key == QLatin1String("thumbnail_directory")) {
         m_thumbnailDir = value.toString();
+        // clear() bumps the generation: any manifest already being built for
+        // the old root is discarded when its job posts back. Then seed the
+        // new root's type dirs on the worker again.
+        m_thumbManifestCache.clear();
+        prewarmThumbnailManifests();
         return;
     }
 }
@@ -292,14 +332,9 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
         const QString systemId = systemFromPlaylist(pl.filePath());
         if (systemId.isEmpty()) continue;
 
-        QVariantList games = parsePlaylist(pl.filePath(), systemId);
-        playlists.append(QVariantMap{
-            { "path", pl.filePath() },
-            { "name", pl.baseName() },
-            { "count", games.size() },
-            { "systemId", systemId },
-            { "shortName", shortNameForSystem(systemId) }
-        });
+        // PERF-TRANSITION-01 count cache, now warmed off-thread at startup by
+        // warmPlaylistCountCache() so this first call is a hit on a cold app.
+        playlists.append(playlistCountEntry(pl, systemId));
     }
 
     // Order playlists according to playlist_sort setting:
@@ -330,6 +365,88 @@ QVariantList RetroArchBackend::refreshAllPlaylists() {
     });
 
     return playlists;
+}
+
+QVariantMap RetroArchBackend::makePlaylistCountEntry(const QFileInfo &pl,
+                                                     const QString &systemId,
+                                                     int count) const {
+    return QVariantMap{
+        { "path", pl.filePath() },
+        { "name", pl.baseName() },
+        { "count", count },
+        { "systemId", systemId },
+        { "shortName", shortNameForSystem(systemId) }
+    };
+}
+
+QVariantMap RetroArchBackend::playlistCountEntry(const QFileInfo &pl,
+                                                 const QString &systemId) {
+    const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
+    const qint64 size = pl.size();
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        auto it = m_playlistCountCache.constFind(pl.filePath());
+        if (it != m_playlistCountCache.constEnd()
+            && it->mtime == mtime && it->size == size)
+            return it->entry;
+    }
+    // Never hold the cache lock across a parse — the warm-up thread may be
+    // parsing the same file on the other side of it.
+    const QVariantList games = parsePlaylist(pl.filePath(), systemId);
+    const QVariantMap entry = makePlaylistCountEntry(pl, systemId, games.size());
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        auto it = m_playlistCountCache.constFind(pl.filePath());
+        if (it != m_playlistCountCache.constEnd()
+            && it->mtime == mtime && it->size == size)
+            return it->entry; // warm-up filled it while we parsed
+        m_playlistCountCache.insert(pl.filePath(), PlaylistCountCache{mtime, size, entry});
+    }
+    return entry;
+}
+
+void RetroArchBackend::warmPlaylistCountCache() {
+    QString dirPath;
+    quint64 generation = 0;
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        dirPath = m_playlistDir;
+        generation = m_playlistDirGeneration;
+    }
+
+    QHash<QString, PlaylistCountCache> warmed;
+    QDir playlistDir(dirPath);
+    if (playlistDir.exists()) {
+        const QFileInfoList files = playlistDir.entryInfoList(
+            playlistFilters(), QDir::Files | QDir::Readable, QDir::Name);
+        for (const QFileInfo &pl : files) {
+            const QString systemId = systemFromPlaylist(pl.filePath());
+            if (systemId.isEmpty()) continue;
+
+            const qint64 mtime = pl.lastModified().toMSecsSinceEpoch();
+            const qint64 size = pl.size();
+            {
+                QMutexLocker locker(&m_countCacheMutex);
+                if (m_playlistDirGeneration != generation)
+                    break; // settings changed under us; throw this pass away
+                auto it = m_playlistCountCache.constFind(pl.filePath());
+                if (it != m_playlistCountCache.constEnd()
+                    && it->mtime == mtime && it->size == size)
+                    continue; // GUI thread already parsed this file
+            }
+            const QVariantList games = parsePlaylist(pl.filePath(), systemId);
+            warmed.insert(pl.filePath(), PlaylistCountCache{
+                mtime, size, makePlaylistCountEntry(pl, systemId, games.size())});
+        }
+    }
+    {
+        QMutexLocker locker(&m_countCacheMutex);
+        if (m_playlistDirGeneration == generation && m_playlistDir == dirPath) {
+            for (auto it = warmed.cbegin(); it != warmed.cend(); ++it)
+                m_playlistCountCache.insert(it.key(), it.value());
+        }
+    }
+    emit playlistCountCacheWarmed();
 }
 
 // ── Tier 2: playlists of a system ────────────────────────────────────────────
@@ -623,6 +740,53 @@ QString RetroArchBackend::resolveCorePath(const QString &corePath, const QString
     return candidate;
 }
 
+QStringList RetroArchBackend::discoverThumbnailTypeDirs() const {
+    QStringList out;
+    if (m_thumbnailDir.isEmpty())
+        return out;
+    const QDir root(m_thumbnailDir);
+    if (!root.exists())
+        return out;
+    // Only directories are listed — the 50k files live two levels down, so
+    // this discovery pass stays sub-millisecond even on the lab fixture.
+    const QDir::Filters dirsOnly = QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable;
+    for (const QFileInfo &system : root.entryInfoList(dirsOnly)) {
+        const QDir systemDir(system.absoluteFilePath());
+        for (const QFileInfo &type : systemDir.entryInfoList(dirsOnly))
+            out << type.absoluteFilePath();
+    }
+    return out;
+}
+
+void RetroArchBackend::prewarmThumbnailManifests() {
+    const QStringList dirs = discoverThumbnailTypeDirs();
+    if (dirs.isEmpty())
+        return;
+    if (!m_thumbPrewarmThread.isRunning()) {
+        m_thumbPrewarmContext = new QObject;   // no parent: lives in the worker
+        m_thumbPrewarmContext->moveToThread(&m_thumbPrewarmThread);
+        m_thumbPrewarmThread.start();
+    }
+    const quint64 generation = m_thumbManifestCache.generation();
+    for (const QString &dirPath : dirs) {
+        const auto key = m_thumbManifestCache.keyFor(dirPath);
+        // Runs on the worker: builds a standalone index, never touches the
+        // cache. The result is posted back to this object's thread where
+        // installPrewarmed() drops stale work (generation bump or a changed
+        // mtime+size) before it can enter the LRU.
+        QMetaObject::invokeMethod(m_thumbPrewarmContext,
+            [this, dirPath, key, generation]() {
+                const auto built = retro::ThumbnailManifestCache::buildManifest(dirPath, key);
+                QMetaObject::invokeMethod(this,
+                    [this, dirPath, key, generation, built]() {
+                        if (m_thumbManifestCache.installPrewarmed(
+                                dirPath, key, generation, built))
+                            emit thumbnailManifestReady();
+                    }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+    }
+}
+
 QString RetroArchBackend::findThumbnail(const QString &gameName,
                                         const QString &dirName) const {
     // RetroArch organises thumbnails as
@@ -636,33 +800,19 @@ QString RetroArchBackend::findThumbnail(const QString &gameName,
         QStringLiteral("Named_Titles"),  QStringLiteral("Boxarts"),
         QStringLiteral("Snaps")
     };
-    const QStringList extensions = { QStringLiteral(".png"), QStringLiteral(".jpg") };
-    // entryInfoList takes GLOB patterns, not bare extensions — ".png" matches
-    // nothing, which silently broke the case-insensitive fallback.
-    const QStringList globs = { QStringLiteral("*.png"), QStringLiteral("*.jpg") };
+    const QString sanitized = sanitizeForThumbnailDb(gameName);
 
+    // RETRO-THUMB-CACHE: the shipped loop did up to four QFileInfo::exists()
+    // stats plus a full entryInfoList() relist and linear case-insensitive
+    // compare on EVERY call. The cache builds that basename index at most once
+    // per type dir while its (mtime, size) is unchanged, so a warm navigation
+    // step is hash lookups only. Same three tiers, same first-match tie-break.
     for (const QString &type : thumbTypes) {
         const QDir thumbDir(m_thumbnailDir + QStringLiteral("/") + dirName + QStringLiteral("/") + type);
-        if (!thumbDir.exists()) continue;
-
-        // Exact, then RetroArcName-sanitized (thumbnail DBs mangle "/\\:*?|<>[]"
-        // etc. to "_" when generated from labels), then case-insensitive —
-        // three escalating attempts without pre-listing the directory.
-        const QString sanitized = sanitizeForThumbnailDb(gameName);
-        for (const QString &candidate : { gameName, sanitized }) {
-            for (const QString &ext : extensions) {
-                const QString exact = thumbDir.filePath(candidate + ext);
-                if (QFileInfo(exact).exists()) return exact;
-            }
-        }
-
-        const QFileInfoList files = thumbDir.entryInfoList(globs, QDir::Files);
-        for (const QFileInfo &file : files) {
-            const QString base = file.completeBaseName();
-            if (base.compare(gameName, Qt::CaseInsensitive) == 0
-                || base.compare(sanitizeForThumbnailDb(gameName), Qt::CaseInsensitive) == 0)
-                return file.absoluteFilePath();
-        }
+        const QString match = m_thumbManifestCache.resolve(
+            thumbDir.absolutePath(), gameName, sanitized);
+        if (!match.isEmpty())
+            return match;
     }
     return QString();
 }

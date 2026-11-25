@@ -25,12 +25,16 @@
 set -euo pipefail
 
 REPO="ianweedlun/240-MP"
-PIUSER="${PI_SSH_USER:-ian}"
+PIUSER="${PI_SSH_USER:-${CRT_USER:-ian}}"
+# WAN/runner path: the CRT wheel stages the identity on the runner and
+# reaches the Pi over CRT_HOST:CRT_PORT (defaults stay LAN-friendly).
+HOST_DEFAULT="${CRT_HOST:-execubot}"
+PORT="${CRT_PORT:-22}"
 
 # ── Resolve tarball ────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--latest" ]; then
     BRANCH="${2:?Usage: deploy-pi.sh --latest <branch> [hostname]}"
-    HOST="${3:-execubot}"
+    HOST="${3:-$HOST_DEFAULT}"
 
     echo "=== Fetching latest CI artifact for branch: $BRANCH ==="
     RUN_JSON=$(gh run list --repo "$REPO" --branch "$BRANCH" --workflow CI --status success --limit 1 --json databaseId,headSha,createdAt)
@@ -97,8 +101,8 @@ fi
 [ -z "$KEYFILE" ] && KEYFILE="$HOME/.ssh/id_pi_agent"
 TARGET="$PIUSER@$HOST"
 
-sshrun() { ssh -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
-scpput() { scp -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
+sshrun() { ssh -p "$PORT" -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$TARGET" "$1"; }
+scpput() { scp -P "$PORT" -o ConnectTimeout=15 -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$1" "$2"; }
 
 # ── Skip-gate fast path (mirrors the `deploy-pi` job in .github/workflows/ci.yml) ──
 # The authoritative marker lives in the CI user's home (/home/ghdeploy/.240mp-last-deployed-rev;

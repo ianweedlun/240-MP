@@ -29,6 +29,10 @@ public:
 
     // Auth flow
     Q_INVOKABLE void start_pin_auth();
+    // Ends an in-progress device-PIN poll when the auth view goes away
+    // (module exit or hand-off to the next auth step); the next
+    // start_pin_auth() begins a fresh one.
+    Q_INVOKABLE void stop_pin_auth();
     Q_INVOKABLE void load_users_from_cache();
     // pin is only supplied on a retry, after plex.tv has told us the profile
     // needs one (see userPinRequired). It is never stored.
@@ -194,7 +198,7 @@ private:
 
     // Config file helpers (shared with AppCore)
     QJsonObject loadConfig() const;
-    void saveConfig(const QJsonObject &cfg) const;
+    bool saveConfig(const QJsonObject &cfg) const;
 
     // Plex HTTP helpers
     QNetworkRequest plexRequest(const QUrl &url, const QString &token) const;

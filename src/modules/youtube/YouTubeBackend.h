@@ -15,6 +15,7 @@
 #include "../../util/YtSponsorEdl.h"
 #include "../../util/YtSponsorTtl.h"
 #include "../../util/YtPendingReplay.h"
+#include "../../util/YtUrlFresh.h"
 
 class YtInnertubeResolver;
 
@@ -90,8 +91,17 @@ public:
     // signature binds to the minting session/IP, not just expire=). When the
     // Player's warm launch dies before first position, it evicts that entry
     // and re-enters the cold resolve — costs network only on actual failure.
+    // Drop the cached stream entry for one video+resolution after a playback
+    // failure. allowRetry=false (default): the eviction also marks the key's
+    // in-process Innertube attempt spent — a URL that failed to play must not
+    // be re-minted by the same client in a resolve -> 403 -> evict -> resolve
+    // loop. allowRetry=true (the warm-403 cure): the eviction exists to make
+    // a SAME-SESSION re-resolve mint a fresh URL — spending the key here would
+    // turn the cure's resolve into an instant RESOLVE_BUSY (the 2026-11-22
+    // stuck-on-Loading defect), so the key stays eligible.
     Q_INVOKABLE void invalidateCachedUrl(const QString &videoId,
-                                         const QString &resolution);
+                                         const QString &resolution,
+                                         bool allowRetry = false);
 
     // Plan A warm-up: one pass over watch history finds the newest video with
     // an unfinished resume position and fires its background resolve, so the
@@ -386,7 +396,8 @@ private:
     void                launchUrlResolve(const QString &videoId, const QString &resolution,
                                           const QString &key);
     void                launchHlsResolve(const QString &videoId, const QString &resolution,
-                                         const QString &key, const QString &hlsUrl);
+                                         const QString &key, const QString &hlsUrl,
+                                         bool postLive);
     void                finishUrlResolve(const QString &key);
     void                pumpWarmQueue();
 
@@ -421,7 +432,7 @@ private:
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
     static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // browse walks are cheap; keep it parallel
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
-    static constexpr qint64 kUrlSafetyMarginS   = 120;   // buffer+launch slack below expiry
+    static constexpr qint64 kUrlSafetyMarginS   = yturl::kSafetyMarginS; // buffer+launch slack
     static constexpr int    kUrlCacheMaxEntries = 80;
     // The in-process resolver is ~20x cheaper than a subprocess spawn, so one
     // warm pass can cover a whole list page instead of the front dozen rows.

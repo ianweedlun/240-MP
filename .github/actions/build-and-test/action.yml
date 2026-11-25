@@ -21,7 +21,7 @@ inputs:
   apt-packages:
     description: "Single-line apt package list; empty to skips the apt step (macOS). ccache is appended by the ccache input."
     required: false
-    default: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite"
+    default: "build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite"
   build-sdl2-source:
     description: "Whether to build SDL2 from source (macOS lanes; Homebrew's sdl2 is now the sdl2-compat/SDL3 shim)"
     required: false

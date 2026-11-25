@@ -18,6 +18,11 @@ are guarded by the generation captured when their request was issued.
 | `yt-resolver-contract-delayed-abandoned` | 5500 ms (> 4000 ms timeout) | exactly one `ok=0 reason=timeout`; no further callback within 2× the delay; **zero** Player requests |
 | `yt-resolver-contract-near-deadline` | 3500 ms (< timeout) | exactly one `ok=1`; no timeout result; one Player request carrying `fixture-vd` |
 | `yt-resolver-contract-fast-healthy` | 0 ms | exactly one `ok=1` (over-suppression guard) |
+| `yt-resolver-contract-live-waiting` | 0 ms | `ok=0 reason=live-waiting` (LIVE_STREAM_OFFLINE) |
+| `yt-resolver-contract-live-hls` | 0 ms | `ok=1 hls=1 vod=0` (running event, master only) |
+| `yt-resolver-contract-live-hls-with-pair` | 0 ms | `ok=1 hls=1 vod=0` — LIVE response that also carries progressive URLs still takes HLS |
+| `yt-resolver-contract-post-live-hls` | 0 ms | `ok=1 hls=1 vod=0` — FINISHED event (post_live: isLive=0, `source/yt_live_broadcast` manifest, live-ingest pair) takes HLS; pre-fix code serves the dead pair |
+| `yt-resolver-contract-premiered-vod-pair` | 0 ms | `ok=1 hls=0 vod=1` — premiered-live VOD (isLiveContent=1, `source/youtube` manifest, working pair) stays on the pair route; catches isLiveContent-based misclassification |
 
 Delays are fixture-side sleeps in `fixture_proxy.py` (loopback CONNECT+TLS
 fixture, stdlib-only Python, **no live network**). The C++ probe

@@ -1,4 +1,5 @@
 #include <QtTest/QtTest>
+#include <QDateTime>
 
 #include "../YtUrlFresh.h"
 
@@ -29,6 +30,8 @@ private slots:
     void freshVsSafetyMargin();
     void pruneDropsExpiredThenCapsByNewestWindow();
     void cacheKeyVersionInvalidatesPreFixPairs();
+    void liveHlsPlaylistWarmHitIsFresh();
+    void postLivePlaylistOutlivesResumeDelay();
 };
 
 void YtUrlFreshTest::parseExpireParamBoundaries()
@@ -128,6 +131,47 @@ void YtUrlFreshTest::cacheKeyVersionInvalidatesPreFixPairs()
     QVERIFY(cache.contains(legacyKey));
     QVERIFY(yturl::cacheKeyFor(videoId, format)
             != yturl::cacheKeyFor(videoId, QStringLiteral("bv+ba[height<=720]")));
+}
+
+void YtUrlFreshTest::liveHlsPlaylistWarmHitIsFresh()
+{
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    // launchHlsResolve writes expire = now + kLivePlaylistTtlS; every cache
+    // read applies kSafetyMarginS. A live playlist entry must be usable on
+    // the warm hit, not born stale because its TTL was shorter than the margin.
+    QVERIFY2(yturl::kLivePlaylistTtlS > yturl::kSafetyMarginS,
+             "live HLS TTL must outlive the URL freshness safety margin");
+    const qint64 expire = now + yturl::kLivePlaylistTtlS;
+    QVERIFY2(yturl::urlFresh(expire, now, yturl::kSafetyMarginS),
+             "live HLS playlist entry is stale on arrival — warm hits re-resolve");
+    // The 60 s pre-fix TTL was always stale; the usable window afterwards is
+    // TTL - margin (~60 s), matching the original "warm hit inside the minute".
+    QVERIFY(!yturl::urlFresh(now + 60, now, yturl::kSafetyMarginS));
+    QVERIFY(yturl::urlFresh(expire, now + 59, yturl::kSafetyMarginS));
+    QVERIFY(!yturl::urlFresh(expire, now + 61, yturl::kSafetyMarginS));
+}
+
+void YtUrlFreshTest::postLivePlaylistOutlivesResumeDelay()
+{
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const qint64 manifestExpiry = now + 6 * 3600;
+    const QString playlist = QStringLiteral(
+        "#EXTM3U\n"
+        "#EXT-X-MEDIA:URI=\"https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/%1/ei/x/source/yt_live_broadcast\"\n"
+        "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/%1/ei/x/source/yt_live_broadcast\n"
+        "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/%2/ei/x/source/yt_live_broadcast\n")
+        .arg(manifestExpiry).arg(manifestExpiry + 600);
+    QCOMPARE(yturl::minExpiryInPlaylist(playlist), manifestExpiry);
+    QVERIFY(yturl::minExpiryInPlaylist(QStringLiteral("#EXTM3U\nhttps://x/y")) == 0);
+
+    // Owner CRT: the resolve lands in ~400 ms while the resume overlay is
+    // still open; the choice can come minutes later. The rolling-live TTL
+    // expires inside that gap, but a finished broadcast is a fixed snapshot
+    // and must stay usable until its own manifest URLs expire.
+    const qint64 rollingExpiry = now + yturl::kLivePlaylistTtlS;
+    QVERIFY(!yturl::urlFresh(rollingExpiry, now + 180, yturl::kSafetyMarginS));
+    QVERIFY(yturl::urlFresh(manifestExpiry, now + 180, yturl::kSafetyMarginS));
+    QVERIFY(yturl::urlFresh(manifestExpiry, now + 3600, yturl::kSafetyMarginS));
 }
 
 QTEST_MAIN(YtUrlFreshTest)

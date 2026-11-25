@@ -199,7 +199,8 @@ FocusScope {
 
                     Text {
                         id: videoValueText
-                        text: videoShuffleSelected ? "SHUFFLE" : videoFiles[videoIndex].name
+                        text: videoShuffleSelected ? "SHUFFLE"
+                            : videoIndex < videoFiles.length ? videoFiles[videoIndex].name : ""
                         color: focusRow === 0 ? root.surfaceColor : root.primaryColor
                         font.family: root.globalFont
                         font.capitalization: Font.AllUppercase

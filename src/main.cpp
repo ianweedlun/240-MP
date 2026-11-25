@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <locale.h>
 #include <csignal>
+#include <atomic>
 #include <thread>
 #include <QThread>
 #include <QRegularExpression>
@@ -38,6 +39,10 @@
 #include "util/HandoffWindowPolicy.h"
 #ifdef Q_OS_MAC
 #include "util/MacosUtils.h"
+#endif
+#ifdef Q_OS_LINUX
+#include <fontconfig/fontconfig.h>
+#include <cstdlib>
 #endif
 
 static QString resolveAppRoot() {
@@ -107,6 +112,18 @@ static void redactingMessageHandler(QtMsgType type, const QMessageLogContext &ct
     if (g_priorMessageHandler) g_priorMessageHandler(type, ctx, clean);
 }
 
+#ifdef Q_OS_LINUX
+// Main.qml's FontLoaders register the bundled fonts through
+// QFontDatabase::addApplicationFont, which makes fontconfig build its global
+// config on first use. fontconfig keeps that config for the process lifetime
+// and Qt never calls FcFini(), so LSan reports the config's parse allocations
+// as leaked at exit (one-time, ~320 B in 3 blocks — not per-transition growth).
+// Release them on the way out: registered before any font is loaded, this
+// handler runs after main()'s stack objects (engine, windows, app) and Qt's
+// font database are destroyed, and before the sanitizer's leak check.
+static void releaseFontconfigGlobals() { FcFini(); }
+#endif
+
 int main(int argc, char *argv[]) {
     g_priorMessageHandler = qInstallMessageHandler(redactingMessageHandler);
     QGuiApplication app(argc, argv);
@@ -125,6 +142,10 @@ int main(int argc, char *argv[]) {
 #endif
 
     setlocale(LC_NUMERIC, "C");
+
+#ifdef Q_OS_LINUX
+    std::atexit(releaseFontconfigGlobals);
+#endif
 
     std::signal(SIGTERM, mp240HandleTerm);
     std::signal(SIGINT,  mp240HandleTerm);
@@ -160,8 +181,6 @@ int main(int argc, char *argv[]) {
               i, qPrintable(screens.at(i)->name()),
               g.width(), g.height(), g.x(), g.y());
     }
-
-    QQmlApplicationEngine engine;
 
     AppCore             appCore(appRoot, dataRoot);
 
@@ -237,6 +256,12 @@ int main(int argc, char *argv[]) {
 
     // Each module backend is wired in one call: stored for action routing, exposed to QML
     // introspection. The module ID lives in exactly one place per module.
+    // LIFECYCLE-01: the engine is declared AFTER the stack singletons so C++
+    // unwinding destroys it FIRST. QML Component.onDestruction handlers then
+    // run while every context property is still a live object. Before this the
+    // engine was declared above AppCore and destructed last, so handlers saw
+    // null wrappers and their exit cleanup threw TypeError.
+    QQmlApplicationEngine engine;
     QQmlContext *ctx = engine.rootContext();
     appCore.registerModule("com.240mp.local_files",  "localFilesBackend",  &localFiles,  ctx);
     appCore.registerModule("com.240mp.plex",         "plexBackend",        &plexBackend, ctx);
@@ -359,18 +384,24 @@ int main(int argc, char *argv[]) {
     // while the agent drives, without manual Tab presses. Debug-only: readback
     // races the render loop on EGLFS (accepted for debug captures), and the
     // frame during mpv video playback is near-black (known framebuffer limit).
+    // LIFECYCLE-01: owned (joinable) so the explicit teardown below can stop it
+    // before the engine-owned window goes away. A detached loop calling into
+    // AppCore was a pre-existing exit-time hazard in either declaration order.
+    std::atomic<bool> autocapStop{false};
+    std::thread autocapLoop;
     if (const char *ac = std::getenv("MP240_AUTOCAP_S")) {
         const int n = std::atoi(ac);
         if (n >= 5) {
             QQuickWindow *capWin = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
             if (capWin) {
-                std::thread capLoop([n, &appCore] {
-                    for (;;) {
-                        std::this_thread::sleep_for(std::chrono::seconds(n));
-                        (void)appCore.takeScreenshot();
+                autocapLoop = std::thread([n, &appCore, &autocapStop] {
+                    while (!autocapStop.load()) {
+                        for (int i = 0; i < n && !autocapStop.load(); ++i)
+                            std::this_thread::sleep_for(std::chrono::seconds(1));
+                        if (!autocapStop.load())
+                            (void)appCore.takeScreenshot();
                     }
                 });
-                capLoop.detach();
                 qInfo("[main] auto-capture every %d s (MP240_AUTOCAP_S)", n);
             }
         }
@@ -405,5 +436,16 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    return app.exec();
+    const int exitCode = app.exec();
+
+    // LIFECYCLE-01 explicit teardown, while every singleton is still alive:
+    // stop the debug capture loop and drop AppCore's raw pointer to the
+    // engine-owned window. The engine destructs next (it is declared after the
+    // singletons), so QML destruction handlers see live context properties.
+    autocapStop.store(true);
+    if (autocapLoop.joinable())
+        autocapLoop.join();
+    appCore.setQuickWindow(nullptr);
+
+    return exitCode;
 }

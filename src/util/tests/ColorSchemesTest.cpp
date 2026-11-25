@@ -16,6 +16,12 @@
 namespace {
 QString findRepoRoot()
 {
+    // Out-of-tree builds (cross lanes) run from a build dir outside the repo;
+    // the lane exports the checkout root so the walk-up below never has to
+    // guess. Unset on CI, where the build dir sits inside the checkout.
+    const QString hint = qEnvironmentVariable("MP240_TEST_REPO_ROOT");
+    if (!hint.isEmpty() && QFile::exists(hint + "/Main.qml"))
+        return hint;
     // Tests run from a build dir inside the repo; walk up until both sources exist.
     QString dir = QDir::currentPath();
     for (int up = 0; up < 6 && !dir.isEmpty(); ++up) {

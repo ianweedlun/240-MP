@@ -1,5 +1,7 @@
 #pragma once
+#include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QProcess>
 #include <QStringList>
 #include <QVariantList>
@@ -23,7 +25,8 @@ public slots:
 private:
     QVariantList scanFiles(const QStringList &extensions) const;
 
-    QString   m_dataRoot;
-    QString   m_mediaRoot;
-    QProcess *m_audioProcess = nullptr;
+    QString                   m_dataRoot;
+    QString                   m_mediaRoot;
+    QProcess                 *m_audioProcess = nullptr;
+    QList<QPointer<QProcess>> m_retiringProcesses;
 };

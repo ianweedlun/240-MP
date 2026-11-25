@@ -1,4 +1,5 @@
 #include "WeatherBackend.h"
+#include "../../util/ConfigFile.h"
 #include "WeatherCodes.h"
 #include "../../util/MpvLocator.h"
 
@@ -268,14 +269,8 @@ QString WeatherBackend::music_file_path() const {
 }
 
 QJsonObject WeatherBackend::loadConfig() const {
-    QFile f(m_dataRoot + QStringLiteral("/config.json"));
-    if (f.open(QIODevice::ReadOnly)) {
-        QJsonParseError err;
-        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject())
-            return doc.object();
-    }
-    return {};
+    // CFG-01: shared policy reader (was a silent-fallback config.json read).
+    return cfgfile::load(m_dataRoot).doc;
 }
 
 QJsonObject WeatherBackend::moduleConfig() const {
@@ -529,10 +524,18 @@ void WeatherBackend::stopMusic() {
         m_music = nullptr;          // cleared first: terminate() can re-enter
         p->disconnect(this);        // this slot via the finished signal
         if (p->state() != QProcess::NotRunning) {
+            // Non-blocking teardown: never stall the Qt GUI thread with waitForFinished().
+            connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    p, [p](int, QProcess::ExitStatus) {
+                        p->deleteLater();
+                    });
             p->terminate();
-            p->waitForFinished(1000);
+            QTimer::singleShot(300, p, [p]() {
+                if (p->state() != QProcess::NotRunning) p->kill();
+            });
+        } else {
+            p->deleteLater();
         }
-        p->deleteLater();
     }
     m_musicPaused = false;
     emit musicStateChanged();

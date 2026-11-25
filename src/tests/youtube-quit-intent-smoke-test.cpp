@@ -86,7 +86,7 @@ public:
     }
     int saveCalls = 0;
     Q_INVOKABLE void savePosition(const QString &, int, const QString &, const QString &) { ++saveCalls; }
-    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &) {}
+    Q_INVOKABLE void invalidateCachedUrl(const QString &, const QString &, bool = false) {}
     Q_INVOKABLE QString ytdlFormatForResolution(const QString &) const { return QStringLiteral("best"); }
     Q_INVOKABLE bool hasSponsorSegments(const QString &) const { return false; }
     Q_INVOKABLE bool sponsorFetchInFlight(const QString &) const { return false; }

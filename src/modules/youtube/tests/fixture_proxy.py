@@ -57,6 +57,57 @@ def player_body(mode="vod"):
     ]
     hls_url = ("https://manifest.googlevideo.com/api/manifest/hls_playlist/"
                "fixture/master.m3u8")
+    if mode == "post-live":
+        # Finished live event (yt-dlp live_status post_live): isLive=False but
+        # served through the live-broadcast pipeline. The manifest carries the
+        # source/yt_live_broadcast marker and the progressive "pair" URLs are
+        # live-ingest URLs mpv cannot demux (owner CRT defect 2026-11-22).
+        # The resolver must take the HLS route off the manifest marker, not
+        # isLive. isLiveContent stays True (ordinary premiered-live VODs share
+        # it with working pairs, so it is not a usable discriminator).
+        ingest_pair = [
+            {"itag": 135,
+             "url": "http://127.0.0.1:9/video?expire=4102444800"
+                    "&source=yt_live_broadcast&live=1&hang=1&noclen=1",
+             "mimeType": "video/mp4; codecs=\"avc1.4d401e\"",
+             "width": 640, "height": 480, "qualityLabel": "480p"},
+            {"itag": 140,
+             "url": "http://127.0.0.1:9/audio?expire=4102444800"
+                    "&source=yt_live_broadcast&live=1&hang=1&noclen=1",
+             "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+             "audioQuality": "AUDIO_QUALITY_MEDIUM",
+             "audioTrack": {"id": "en.4", "displayName": "English original",
+                            "audioIsDefault": True}}
+        ]
+        finished_hls_url = ("https://manifest.googlevideo.com/api/manifest/"
+                            "hls_variant/fixture/source/yt_live_broadcast/"
+                            "force_finished/1/playlist_type/CLEAN/"
+                            "maudio/1/pmf/1/master.m3u8")
+        return {
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"videoId": "fixture", "isLive": False,
+                            "isLiveContent": True},
+            "streamingData": {"hlsManifestUrl": finished_hls_url,
+                              "expiresInSeconds": 21599,
+                              "formats": [], "adaptiveFormats": ingest_pair}
+        }
+    if mode == "premiered-vod":
+        # Negative control (exS8rhURw4o shape, 2026-11-22 probe): an ordinary
+        # VOD that merely premiered live — isLiveContent=1 and a manifest,
+        # but with source/youtube and a WORKING progressive pair. The resolver
+        # must keep the pair route; only the live-broadcast manifest marker
+        # diverts to HLS.
+        return {
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"videoId": "fixture", "isLive": False,
+                            "isLiveContent": True},
+            "streamingData": {"hlsManifestUrl":
+                             "https://manifest.googlevideo.com/api/manifest/"
+                             "hls_variant/fixture/source/youtube/"
+                             "playlist_type/CLEAN/master.m3u8",
+                              "expiresInSeconds": 21599,
+                              "formats": [], "adaptiveFormats": vod_pair}
+        }
     if mode == "live-waiting":
         # #128: a not-yet-started live event. The vendored endpoint treats
         # LIVE_STREAM_OFFLINE as a no-error status; streamingData is empty.
@@ -187,8 +238,10 @@ if __name__ == "__main__":
     p.add_argument("--visitor-delay-ms", type=int, default=0,
                    help="fixture-side sleep before the visitorData GET reply")
     p.add_argument("--player-mode", default="vod",
-                   choices=["vod", "live-waiting", "live-hls", "live-hls-with-pair"],
-                   help="shape of the canned Player response (#128 live cases)")
+                   choices=["vod", "live-waiting", "live-hls", "live-hls-with-pair",
+                            "post-live", "premiered-vod"],
+                   help="shape of the canned Player response (#128 live cases; "
+                        "post-live/premiered-vod: 2026-11-22 post_live cases)")
     args = p.parse_args()
     if args.visitor_delay_ms < 0:
         p.error("--visitor-delay-ms must be >= 0")

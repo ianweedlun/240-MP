@@ -37,6 +37,22 @@ on:
         required: false
 
 jobs:
+  pi-gate:
+    # Same pattern as pi-crt.yml: job-level `if` cannot read secrets, so a
+    # cheap gate job decides -- fork-safe when no Pi SSH secrets exist.
+    name: Pi SSH secrets gate
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.PI_SSH_HOSTNAME }}" ] && [ -n "${{ secrets.PI_SSH_USERNAME }}" ] && [ -n "${{ secrets.PI_SSH_IDENTITY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
   pi-rc:
     name: PR Pi verification (RC / restore)
     concurrency:
@@ -50,8 +66,10 @@ jobs:
          contains(github.event.pull_request.labels.*.name, 'pi-test'))
         ||
         (github.event.action == 'closed' && !github.event.pull_request.merged)
-      )
+      ) &&
+      needs.pi-gate.outputs.ready == 'true'
     runs-on: ubuntu-24.04-arm
+    needs: pi-gate
     permissions:
       issues: write
     env:
@@ -126,7 +144,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           # APP_VERSION is set by the tested decide helper: "<PR>-pi-rc" for an
           # RC deploy, or the saved official rev for a restore. The latter is
           # what ci.yml stamps on the beta build (github.sha), so the restored
@@ -258,11 +276,13 @@ jobs:
     name: Burst RC deploy (rc / restore)
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      (inputs.mode == 'rc' || inputs.mode == 'restore')
+      (inputs.mode == 'rc' || inputs.mode == 'restore') &&
+      needs.pi-gate.outputs.ready == 'true'
     concurrency:
       group: pi-rc-deploy
       cancel-in-progress: false
     runs-on: ubuntu-24.04-arm
+    needs: pi-gate
     permissions:
       contents: read
     env:
@@ -346,7 +366,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="${{ env.APP_VERSION }}"
           cmake --build build --parallel 4
@@ -490,7 +510,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake qt6-base-dev qt6-declarative-dev libqt6svg6 qt6-svg-dev \
             qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window \
-            libdrm-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
+            libdrm-dev libfontconfig1-dev libssl-dev libsdl2-dev libpcsclite-dev libqt6sql6 libqt6sql6-sqlite ccache
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DAPP_VERSION="buildonly-pi-rc"
           cmake --build build --parallel 4

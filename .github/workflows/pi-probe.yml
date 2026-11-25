@@ -657,7 +657,7 @@ jobs:
         #   2. The Authorization header was the literal string `Bearer ***` (a redaction
         #      artifact from authoring), so every API call was unauthenticated and any
         #      artifact download would have 401'd. Now the token arrives in GH_TOKEN.
-        if: env.PI_UNREACHABLE != '1' && github.event_name == 'workflow_dispatch'
+        if: env.PI_UNREACHABLE != '1'
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_SHA_INPUT: ${{ inputs.expected_sha }}
@@ -894,17 +894,43 @@ jobs:
             PERR=$(printf '%s\n' "$P6" | sed -n 's/^PROC_GROUPS_ERROR=//p' | head -1)
             NODEP=$(grep -oE '[cbps-][rwxsStT-]{9} [^ ]+ /dev/snd/controlC0' "$FACTS" | head -1)
             AUSERV=$(sed -n "s/^240mp.service User='\(.*\)'$/\1/p" "$FACTS" | head -1)
+            # Read FACT4_STATUS and C_CI_AUDIO early for accurate VERDICT text
+            FACT4_STATUS=$(sed -n 's/^FACT4_STATUS=//p' "$FACTS" 2>/dev/null | head -1)
+            CIA_EARLY=$(sed -n 's/^C_CI_AUDIO=//p' "$FACTS" 2>/dev/null | head -1)
+            [ -n "$FACT4_STATUS" ] || FACT4_STATUS=unknown
+            [ -n "$CIA_EARLY" ] || CIA_EARLY=no
             echo
             if [ "$HAS29" = "yes" ]; then
               case "${LAS:-}" in
                 ''|unreadable) LAS_TXT="libasound mapping in the app process is NOT observable from CI (/proc/PID/maps needs root or the owning uid)" ;;
                 *)             LAS_TXT="libasound is mapped ${LAS}x in the app process" ;;
               esac
-              echo "VERDICT: LIVE PROCESS HOLDS gid 29 (audio) — /proc/${LPIDV:-?}/status Groups='${GRPLINE}' (gid 29 -> audio) and the mixer node is ${NODEP:-perms not captured} (mode/owner:group/path, no ACL '+' marker), so the amixer child that ALSAVolumeMixer::setLevel() spawns inherits uid 1000 + gid 29 and passes the kernel DAC check: app-wide volume CAN physically open the mixer with NO further change on the Pi. ${LAS_TXT} — and that is not the mechanism anyway: the shipped ALSA path shells out to amixer (src/audio/ALSAVolumeMixer.cpp), not an in-process libasound client. Still unmeasured after this run: FACT 4's before/after/restore attenuation numbers, gated on Ian running 'usermod -aG audio ghdeploy' so the probe itself can drive the mixer."
+              if [ "$CIA_EARLY" = "yes" ] && [ "$FACT4_STATUS" = "skipped-scheduled-guard" ]; then
+                FACT4_TXT="Still unmeasured on the scheduled path: FACT 4's before/after/restore attenuation numbers are guarded off (CANARY_MODE=1, FACT4_STATUS=skipped-scheduled-guard) — the CI user CAN open /dev/snd/controlC0, so a workflow_dispatch run (without force_schedule) can measure them."
+              elif [ "$CIA_EARLY" = "yes" ]; then
+                FACT4_TXT="Still unmeasured: FACT 4's before/after/restore attenuation numbers (ci_audio=yes — runnable via workflow_dispatch)."
+              else
+                FACT4_TXT="Still unmeasured after this run: FACT 4's before/after/restore attenuation numbers, gated on Ian running 'usermod -aG audio ghdeploy' so the probe itself can drive the mixer."
+              fi
+              echo "VERDICT: LIVE PROCESS HOLDS gid 29 (audio) — /proc/${LPIDV:-?}/status Groups='${GRPLINE}' (gid 29 -> audio) and the mixer node is ${NODEP:-perms not captured} (mode/owner:group/path, no ACL '+' marker), so the amixer child that ALSAVolumeMixer::setLevel() spawns inherits uid 1000 + gid 29 and passes the kernel DAC check: app-wide volume CAN physically open the mixer with NO further change on the Pi. ${LAS_TXT} — and that is not the mechanism anyway: the shipped ALSA path shells out to amixer (src/audio/ALSAVolumeMixer.cpp), not an in-process libasound client. ${FACT4_TXT}"
             elif [ "$HAS29" = "no" ]; then
-              echo "VERDICT: LIVE PROCESS DOES NOT HOLD gid 29 — /proc/${LPIDV:-?}/status Groups='${GRPLINE}', so the group-db inference was wrong for this image; the fix is to add the unit's own User= (${AUSERV:-unknown}) to group 29 and restart the service to re-run initgroups() — 'usermod -aG audio ghdeploy' alone cannot help, because the live group set comes from the unit's User=, not the CI login. Still unmeasured: FACT 4."
+              if [ "$CIA_EARLY" = "yes" ] && [ "$FACT4_STATUS" = "skipped-scheduled-guard" ]; then
+                FACT4_TXT="Still unmeasured on the scheduled path: FACT 4's before/after/restore attenuation numbers are guarded off (CANARY_MODE=1, FACT4_STATUS=skipped-scheduled-guard) — the CI user CAN open /dev/snd/controlC0, so a workflow_dispatch run (without force_schedule) can measure them."
+              elif [ "$CIA_EARLY" = "yes" ]; then
+                FACT4_TXT="Still unmeasured: FACT 4's before/after/restore attenuation numbers (ci_audio=yes — runnable via workflow_dispatch)."
+              else
+                FACT4_TXT="Still unmeasured: FACT 4."
+              fi
+              echo "VERDICT: LIVE PROCESS DOES NOT HOLD gid 29 — /proc/${LPIDV:-?}/status Groups='${GRPLINE}', so the group-db inference was wrong for this image; the fix is to add the unit's own User= (${AUSERV:-unknown}) to group 29 and restart the service to re-run initgroups() — 'usermod -aG audio ghdeploy' alone cannot help, because the live group set comes from the unit's User=, not the CI login. ${FACT4_TXT}"
             else
-              echo "VERDICT: LIVE-PROCESS GROUP SET NOT OBSERVABLE from CI on this image (MainPID=${LPIDV:-none}; reason: ${PERR:-${GRPLINE:-no Groups line}}), so gid-29 holding remains inference from the group db, not a measurement; libasound mapped=${LAS:-unknown}. Still unmeasured: FACT 4, gated on 'usermod -aG audio ghdeploy'."
+              if [ "$CIA_EARLY" = "yes" ] && [ "$FACT4_STATUS" = "skipped-scheduled-guard" ]; then
+                FACT4_TXT="Still unmeasured on the scheduled path: FACT 4's before/after/restore attenuation numbers are guarded off (CANARY_MODE=1, FACT4_STATUS=skipped-scheduled-guard) — the CI user CAN open /dev/snd/controlC0, so a workflow_dispatch run (without force_schedule) can measure them."
+              elif [ "$CIA_EARLY" = "yes" ]; then
+                FACT4_TXT="Still unmeasured: FACT 4's before/after/restore attenuation numbers (ci_audio=yes — runnable via workflow_dispatch)."
+              else
+                FACT4_TXT="Still unmeasured: FACT 4, gated on 'usermod -aG audio ghdeploy'."
+              fi
+              echo "VERDICT: LIVE-PROCESS GROUP SET NOT OBSERVABLE from CI on this image (MainPID=${LPIDV:-none}; reason: ${PERR:-${GRPLINE:-no Groups line}}), so gid-29 holding remains inference from the group db, not a measurement; libasound mapped=${LAS:-unknown}. ${FACT4_TXT}"
             fi
           fi
 
@@ -1049,4 +1075,14 @@ jobs:
             echo "- canary: \`CANARY: state=$STATE rev=$REV12 rev_marker=$REVM service=$SVC mixer=$MIX control=$CTL ci_audio=$CIA lane=$LANE rc_rev=$RC12 rc_pr=$RC_PR rc_md5=$RCM\`"
             if [ -n "$DRIFT_WHY" ]; then echo "- drift:${DRIFT_WHY}"; fi
           } >> $GITHUB_STEP_SUMMARY
+          # Fail closed on DRIFT for scheduled runs (and force_schedule dispatches).
+          # UNREACHABLE keeps exit 0 per the asleep-Pi invariant (pi-probe.yml:940).
+          case "${{ github.event_name }}" in
+            schedule)
+              if [ "$STATE" = "DRIFT" ]; then exit 1; fi
+              ;;
+            workflow_dispatch)
+              if [ "${{ inputs.force_schedule }}" = "true" ] && [ "$STATE" = "DRIFT" ]; then exit 1; fi
+              ;;
+          esac
           exit 0

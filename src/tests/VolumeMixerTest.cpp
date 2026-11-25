@@ -219,6 +219,47 @@ private Q_SLOTS:
                      "Simple mixer control 'PCM',0")), -1);  // no level -> cache
     }
 
+    // VOL-ALSA-PARSE-01: capture before playback (BAD_ARM) must not steal level.
+    // Full-duplex cards emit Capture rows before Playback rows, so the first
+    // \d+% would be capture if the parser scans the whole buffer. The fix
+    // anchors matching to Playback lines specifically.
+    void testAlsaParseLevelPercentCaptureBeforePlayback() {
+        // BAD_ARM: Capture row appears before Playback row — parser must ignore
+        // capture and return the playback level (85), not capture level (42).
+        const QString badArm = QStringLiteral(
+            "Simple mixer control 'PCM',0\n"
+            "Capture channels: Mono\n"
+            "  Mono: Capture 12 [42%] [12.00dB] [on]\n"
+            "Playback channels: Mono\n"
+            "  Mono: Playback -1196 [85%] [-11.96dB] [on]\n");
+        QCOMPARE(ALSAVolumeMixer::parseLevelPercent(badArm), 85);
+
+        // HEALTHY_ORDER: Playback before Capture — parser still returns playback.
+        const QString healthyOrder = QStringLiteral(
+            "Simple mixer control 'PCM',0\n"
+            "Playback channels: Mono\n"
+            "  Mono: Playback -1196 [85%] [-11.96dB] [on]\n"
+            "Capture channels: Mono\n"
+            "  Mono: Capture 12 [42%] [12.00dB] [on]\n");
+        QCOMPARE(ALSAVolumeMixer::parseLevelPercent(healthyOrder), 85);
+
+        // No Playback row at all -> -1.
+        const QString captureOnly = QStringLiteral(
+            "Simple mixer control 'Mic',0\n"
+            "Capture channels: Mono\n"
+            "  Mono: Capture 12 [42%] [12.00dB] [on]\n");
+        QCOMPARE(ALSAVolumeMixer::parseLevelPercent(captureOnly), -1);
+
+        // Combined control (Pi PCM) - no separate capture row.
+        const QString combined = QStringLiteral(
+            "Simple mixer control 'PCM',0\n"
+            "  Capabilities: pvolume pvolume-joined pswitch pswitch-joined\n"
+            "  Playback channels: Mono\n"
+            "  Limits: Playback -10239 - 400\n"
+            "  Mono: Playback -2260 [75%] [-22.60dB] [on]\n");
+        QCOMPARE(ALSAVolumeMixer::parseLevelPercent(combined), 75);
+    }
+
     // Split-control cards name the elements separately instead of exposing a
     // combined 'Master': `scontrols` then lists 'Master Playback Volume' and
     // 'Master Playback Switch'. The volume half must be picked up by the same
