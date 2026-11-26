@@ -200,6 +200,11 @@ private:
     QJsonObject loadConfig() const;
     bool saveConfig(const QJsonObject &cfg) const;
 
+    // PLEX-RESPONSE-BODY-CAP-01: stream a reply into a bounded buffer before
+    // any fromJson()/readAll() call. Emits a typed errorOccurred and returns
+    // ok=false on rejection; the caller must not emit a partial item model.
+    QByteArray readCappedReply(QNetworkReply *reply, bool *ok);
+
     // Plex HTTP helpers
     QNetworkRequest plexRequest(const QUrl &url, const QString &token) const;
     QNetworkReply  *plexGet(const QUrl &url, const QString &token);

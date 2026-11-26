@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QEventLoop>
 #include <QSslError>
 #include <QUrlQuery>
 #include <QCoreApplication>
@@ -24,6 +25,41 @@
 #include <openssl/bio.h>
 
 static const QString PLEX_TV = QStringLiteral("https://plex.tv");
+
+// PLEX-RESPONSE-BODY-CAP-01: one no-progress deadline and two parse caps for
+// Plex replies. setTransferTimeout() restarts on every arriving byte, so a
+// slow-but-progressing library load is not cut off; a peer that goes silent is.
+// The byte cap is checked from Content-Length and from the running byte count,
+// so close-delimited and underestimated bodies are bounded too. The item cap
+// keeps a huge library from building and flattening a model on the GUI thread.
+static constexpr int kPlexTransferTimeoutMs = 5000;
+static constexpr qint64 kPlexMaxResponseBytes = 64LL * 1024 * 1024;
+static constexpr int kPlexMaxMetadataItems = 10000;
+
+// errorOccurred() carries a QString for QML; the uppercase token is the typed
+// part. Callers compose the human context ("LOAD LIBRARY FAILED: " + token).
+enum class PlexError {
+    TransferTimeout,
+    ResponseTooLarge,
+    ItemLimitExceeded,
+};
+
+static QString plexErrorText(PlexError error) {
+    switch (error) {
+    case PlexError::TransferTimeout:   return QStringLiteral("PLEX TRANSFER TIMEOUT");
+    case PlexError::ResponseTooLarge:  return QStringLiteral("PLEX RESPONSE TOO LARGE");
+    case PlexError::ItemLimitExceeded: return QStringLiteral("PLEX ITEM LIMIT EXCEEDED");
+    }
+    return QStringLiteral("PLEX ERROR");
+}
+
+// The transport deadline surfaces as QNetworkReply::TimeoutError; map it to
+// the typed reason so callers never emit a bare "Operation timed out".
+static QString plexNetworkErrorText(QNetworkReply *reply) {
+    return reply->error() == QNetworkReply::TimeoutError
+        ? plexErrorText(PlexError::TransferTimeout)
+        : reply->errorString();
+}
 
 // Auth logging helpers.  plex.tv issues JWTs while PMS only accepts opaque
 // per-server tokens, so "which kind of token did we end up with" is the single
@@ -124,6 +160,8 @@ QString PlexBackend::clientId() const {
 
 QNetworkRequest PlexBackend::plexRequest(const QUrl &url, const QString &token) const {
     QNetworkRequest req(url);
+    // Single choke point for GET/POST/PUT/DELETE and the JSON POST variant.
+    req.setTransferTimeout(kPlexTransferTimeoutMs);
     req.setRawHeader("Accept", "application/json");
     req.setRawHeader("X-Plex-Client-Identifier", clientId().toLatin1());
     req.setRawHeader("X-Plex-Product", "240-MP");
@@ -189,6 +227,63 @@ QNetworkReply *PlexBackend::plexPostJson(const QUrl &url, const QString &token,
     auto *reply = m_nam->post(req, body);
     ignoreSslErrors(reply);
     return reply;
+}
+
+QByteArray PlexBackend::readCappedReply(QNetworkReply *reply, bool *ok) {
+    QByteArray body;
+    if (ok) *ok = false;
+    if (!reply) return {};
+
+    bool rejected = false;
+    bool finished = false;
+    QEventLoop loop;
+
+    auto reject = [&]() {
+        if (rejected || finished) return;
+        rejected = true;
+        reply->abort();
+        reply->close();
+        emit errorOccurred(plexErrorText(PlexError::ResponseTooLarge));
+        loop.quit();
+    };
+
+    // Drain in bounded chunks: one readyRead can carry megabytes, and a single
+    // giant read() would itself stall the GUI thread. Reading also releases
+    // Qt's ~3 MiB reply buffer so the server keeps sending instead of hanging.
+    auto drain = [&]() {
+        while (!rejected && !finished && reply->bytesAvailable() > 0) {
+            const QByteArray chunk = reply->read(qMin<qint64>(reply->bytesAvailable(), 256 * 1024));
+            if (chunk.isEmpty()) break;
+            if (static_cast<qint64>(body.size()) + chunk.size() > kPlexMaxResponseBytes) {
+                reject();
+                return;
+            }
+            body += chunk;
+        }
+    };
+
+    // Loop as context: every connection dies with it on return, so a late
+    // signal from an aborted reply can never touch these stack locals.
+    connect(reply, &QNetworkReply::metaDataChanged, &loop, [&]() {
+        if (rejected || finished) return;
+        const qint64 declared =
+            reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        if (declared > kPlexMaxResponseBytes) reject();
+    });
+    connect(reply, &QNetworkReply::readyRead, &loop, [&]() { drain(); });
+    connect(reply, &QNetworkReply::finished, &loop, [&]() {
+        finished = true;
+        loop.quit();
+    });
+
+    // Small replies can already be buffered by the time the handlers attach.
+    drain();
+    if (!rejected && !reply->isFinished())
+        loop.exec();
+    if (!rejected) drain();  // bytes delivered just before finished()
+
+    if (ok) *ok = !rejected;
+    return rejected ? QByteArray{} : body;
 }
 
 // ---------------------------------------------------------------------------
@@ -1620,20 +1715,32 @@ void PlexBackend::load_library_all(const QString &sectionId) {
     QUrl url(uri + "/library/sections/" + sectionId + "/all");
     QUrlQuery q; q.addQueryItem("sort","titleSort"); url.setQuery(q);
     auto *reply = plexGet(url, token);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, sectionId]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 498) {
-                handle498([this, sectionId]{ load_library_all(sectionId); }); return;
-            }
-            emit errorOccurred("LOAD LIBRARY FAILED: " + reply->errorString()); return;
+
+    // Stream and cap before parsing: on rejection a typed errorOccurred has
+    // already gone out and the reply is aborted, so no partial model is built.
+    bool bodyOk = false;
+    const QByteArray body = readCappedReply(reply, &bodyOk);
+    reply->deleteLater();
+    if (!bodyOk) return;
+
+    if (reply->error() != QNetworkReply::NoError) {
+        if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 498) {
+            handle498([this, sectionId]{ load_library_all(sectionId); }); return;
         }
-        QJsonArray metadata = QJsonDocument::fromJson(reply->readAll())
-                              .object()["MediaContainer"].toObject()["Metadata"].toArray();
-        QVariantList items;
-        for (const auto &mv : metadata) items.append(formatItem(mv.toObject()));
-        flattenSeasons(items, [this](const QVariantList &flat) { emit itemsLoaded(flat); });
-    });
+        emit errorOccurred("LOAD LIBRARY FAILED: " + plexNetworkErrorText(reply)); return;
+    }
+    QJsonArray metadata = QJsonDocument::fromJson(body)
+                          .object()["MediaContainer"].toObject()["Metadata"].toArray();
+    // O(1) check before the expensive formatItem/flattenSeasons pass, which is
+    // what blocked the GUI thread for ~2 s on the 12,000-item known-bad body.
+    if (metadata.size() > kPlexMaxMetadataItems) {
+        emit errorOccurred("LOAD LIBRARY FAILED: " +
+                           plexErrorText(PlexError::ItemLimitExceeded));
+        return;
+    }
+    QVariantList items;
+    for (const auto &mv : metadata) items.append(formatItem(mv.toObject()));
+    flattenSeasons(items, [this](const QVariantList &flat) { emit itemsLoaded(flat); });
 }
 
 void PlexBackend::load_collections(const QString &sectionId) {
