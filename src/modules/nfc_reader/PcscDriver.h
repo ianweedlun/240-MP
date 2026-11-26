@@ -3,6 +3,7 @@
 
 #include <QStringList>
 
+#include <atomic>
 #include <cstdint>
 
 // PC/SC (pcsc-lite on Linux, PCSC.framework on macOS) reader driver.
@@ -23,6 +24,12 @@ public:
     QString pollUid(bool &ok) override;
     void close() override;
 
+    // SCardCancel on the live context. A thread blocked in
+    // SCardGetStatusChange wakes with SCARD_E_CANCELLED (treated as "no card
+    // this tick" by cardPresent()), so the worker can exit and be joined.
+    // Safe to call from the backend thread while the worker is blocked.
+    void cancel() override;
+
     // True when PC/SC was compiled in. The QML layer uses this to tell "no
     // reader plugged in" apart from "this build has no PC/SC support".
     static bool compiledIn();
@@ -32,10 +39,12 @@ private:
     QString findReader();
     bool cardPresent(const QString &readerName);
     QString readCardUid(const QString &readerName);
-    uintptr_t m_context = 0;
     // Only so debug logging can report the reader list when it changes rather
     // than on every 500 ms poll.
     QStringList m_lastListedReaders;
 #endif
+    // Atomic because cancel() reads it from the backend thread while the
+    // worker thread may be establishing or releasing the context.
+    std::atomic<uintptr_t> m_context{0};
     QString m_readerName;
 };

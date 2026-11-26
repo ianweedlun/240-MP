@@ -99,6 +99,14 @@ void NfcPollWorker::start() {
     timer->start();
 }
 
+void NfcPollWorker::cancel() {
+    // Called on the backend thread while the worker may be blocked inside a
+    // driver. Cancel every driver, not just the active one: a wedge during
+    // detection happens before m_active is set. The vector is fixed after the
+    // constructor and each driver's cancel() is cross-thread-safe.
+    for (auto &driver : m_drivers) driver->cancel();
+}
+
 void NfcPollWorker::poll() {
     if (!m_active) {
         // Rate-limited so a machine with no reader is not opening device nodes
@@ -301,8 +309,17 @@ void NfcReaderBackend::abandonWorker(int waitMs) {
     if (!m_workerThread) return;
 
     disconnect(m_worker, nullptr, this, nullptr);
+    // Cancel any blocking PC/SC call before quitting. A thread wedged in
+    // SCardGetStatusChange ignores QThread::quit(); SCardCancel makes it return
+    // SCARD_E_CANCELLED so the event loop can stop and wait() can actually join
+    // this thread instead of it being orphaned with its context/fd still open.
+    m_worker->cancel();
     m_workerThread->quit();
     if (m_workerThread->wait(waitMs)) {
+        // The finished->deleteLater connection delivers on the worker thread
+        // as its event loop unwinds, so m_worker is already reaped by the time
+        // wait() returns. Only the QThread object (main-thread affinity) is
+        // left to delete here. ~QObject drops its own pending deferred delete.
         delete m_workerThread;
     } else {
         // Either the caller did not want to block (waitMs 0, from a settings
@@ -700,7 +717,11 @@ void NfcReaderBackend::onSampled(bool readerConnected, const QString &uid, const
     if (!m_pollingEnabled || sender() != m_worker) return;
 
     m_lastSampleMs = QDateTime::currentMSecsSinceEpoch();
-    m_respawnCount = 0;
+    // A sample must NOT clear the respawn budget. Recovery between wedges
+    // used to restore the full restart allowance, so a wedge/recover/wedge
+    // loop could abandon an unbounded number of threads and PC/SC contexts.
+    // The budget is now for the lifetime of one polling session and is only
+    // cleared by an explicit stop/start (NFC-WEDGE-THREAD-LEAK-01).
 
     if (readerConnected != m_readerConnected || deviceName != m_readerName) {
         m_readerConnected = readerConnected;

@@ -206,3 +206,14 @@ bool PcscDriver::ensureConnected() { return false; }
 QString PcscDriver::pollUid(bool &ok) { ok = false; return {}; }
 
 #endif // NFC_PCSC_AVAILABLE
+
+void PcscDriver::cancel() {
+#if defined(NFC_PCSC_AVAILABLE)
+    // SCardCancel is the documented way to break another thread out of
+    // SCardGetStatusChange; the blocked call returns SCARD_E_CANCELLED, which
+    // cardPresent() already treats as "no card this tick". Reading the handle
+    // atomically keeps this safe against a concurrent establish/release.
+    const uintptr_t ctx = m_context.load(std::memory_order_acquire);
+    if (ctx) SCardCancel(static_cast<SCARDCONTEXT>(ctx));
+#endif
+}
