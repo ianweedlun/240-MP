@@ -2657,6 +2657,33 @@ void VirtualChannelsBackend::finishGeneration(bool ok, const QString &message) {
 namespace {
 
 constexpr int kPlexEnumTimeoutMs = 20000;
+
+// One hop is one load_* request. The watchdog is a per-request timer restarted
+// on every hop, so on its own it cannot stop a server that keeps answering a
+// cycle. The total budget covers the largest legitimate walk: every show and
+// every season gets one request, with slack for library/set lookups.
+constexpr int kPlexEnumMaxHops = 3 * vchan::kMaxServerItems + 64;
+
+struct PlexEnumGuard {
+    QSet<QString> visited;
+    int           hops = 0;
+
+    void reset() { visited.clear(); hops = 0; }
+    bool takeHop() { return ++hops <= kPlexEnumMaxHops; }
+    // Mark before enqueueing: a reply that names an item already in flight
+    // must not put it on a queue a second time.
+    bool alreadySeen(const QString &key) {
+        if (key.isEmpty()) return false;
+        if (visited.contains(key)) return true;
+        visited.insert(key);
+        return false;
+    }
+};
+
+// File-local on purpose: generation callbacks all land on the GUI thread, and
+// the two-sided enumeration harness compiles this translation unit against the
+// shipped header. Keeping the guard here leaves the class layout untouched.
+PlexEnumGuard g_plexEnumGuard;
 }
 
 void VirtualChannelsBackend::ensurePlexTimer() {
@@ -2723,6 +2750,7 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
     m_pgShows.clear();
     m_pgSeasons.clear();
     m_pgEpisodes.clear();
+    g_plexEnumGuard.reset();
     m_pgPendingCollections.clear();
     m_pgPendingPlaylists.clear();
     m_pgAskedCollections = false;
@@ -2737,6 +2765,11 @@ void VirtualChannelsBackend::plexEnumStart(int channelNumber,
 }
 
 void VirtualChannelsBackend::plexEnumNext() {
+    if (!g_plexEnumGuard.takeHop()) {
+        m_pgTimer->stop();
+        plexEnumFail(QStringLiteral("Plex enumeration exceeded its item budget"));
+        return;
+    }
     m_pgTimer->start();
 
     if (!m_pgPendingCollections.isEmpty()) {
@@ -2986,10 +3019,13 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
             if (key.isEmpty()) continue;
 
             if (type == QLatin1String("show")) {
+                if (g_plexEnumGuard.alreadySeen(key)) continue;
+                if (m_pgShows.size() >= vchan::kMaxServerItems) continue;
                 m_pgShows << key;
                 continue;
             }
             if (plexExcluded(key, /*isSeason*/ false)) continue;
+            if (m_pgEpisodes.size() >= vchan::kMaxServerItems) continue;
             MediaItem item;
             if (plexItemToMedia(m, &item)) m_pgEpisodes.push_back(item);
         }
@@ -3062,7 +3098,9 @@ void VirtualChannelsBackend::onPlexItemsLoaded(const QVariant &items) {
             }
         }
         if (!wanted) continue;
-        if (!key.isEmpty()) m_pgShows << key;
+        if (g_plexEnumGuard.alreadySeen(key)) continue;
+        if (m_pgShows.size() >= vchan::kMaxServerItems) break;
+        m_pgShows << key;
     }
 
     emit generationProgress(m_pgChannel, 0, m_pgShows.size());
@@ -3099,11 +3137,21 @@ void VirtualChannelsBackend::onPlexChildrenLoaded(const QVariant &items) {
     int skippedSeasons = 0, skippedEpisodes = 0;
     for (const QVariant &v : items.toList()) {
         const QVariantMap m = v.toMap();
-        const QString type = m.value("type").toString();
-        const QString key  = m.value("ratingKey").toString();
+        const QString type  = m.value("type").toString();
+        const QString key   = m.value("ratingKey").toString();
         if (key.isEmpty()) continue;
 
-        if (type == QLatin1String("season")) {
+        // A season inside a season is the cycle this guard exists for: Plex
+        // happily returns a season as its own child. Only the Se stage asks
+        // for seasons, so an Episodes-stage season is never worth enqueueing.
+        const bool isSeason = type == QLatin1String("season");
+        if (isSeason && m_pgStage == PlexStage::Episodes) continue;
+        if (g_plexEnumGuard.alreadySeen(key)) continue;
+        if (isSeason ? m_pgSeasons.size() >= vchan::kMaxServerItems
+                     : m_pgEpisodes.size() >= vchan::kMaxServerItems)
+            continue;
+
+        if (isSeason) {
             if (plexExcluded(key, /*isSeason*/ true)) { ++skippedSeasons; continue; }
             m_pgSeasons << key;
             continue;
@@ -3112,6 +3160,7 @@ void VirtualChannelsBackend::onPlexChildrenLoaded(const QVariant &items) {
         if (plexExcluded(key, /*isSeason*/ false)) { ++skippedEpisodes; continue; }
 
         MediaItem item;
+        if (m_pgEpisodes.size() >= vchan::kMaxServerItems) continue;
         if (plexItemToMedia(m, &item)) m_pgEpisodes.push_back(item);
     }
 
