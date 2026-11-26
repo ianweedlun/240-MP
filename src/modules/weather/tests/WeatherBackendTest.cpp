@@ -236,16 +236,10 @@ private:
 
     void writeFile(const QString &name, const QString &content) {
         const QString path = m_dir.filePath(name);
-        qInfo("[DBG-wfile] name=%s path=%s", qUtf8Printable(name),
-              qUtf8Printable(path));
         QFile f(path);
-        const bool ok = f.open(QIODevice::WriteOnly | QIODevice::Truncate);
-        qInfo("[DBG-wfile] open=%d", ok ? 1 : 0);
-        if (!ok) return;
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
         const QByteArray bytes = content.toUtf8();
-        const qint64 n = f.write(bytes);
-        qInfo("[DBG-wfile] bytesRequested=%lld written=%lld", (long long)bytes.size(),
-              (long long)n);
+        f.write(bytes);
         // QFile is closed by its destructor at end of scope; flush explicitly.
         f.close();
     }
@@ -442,7 +436,10 @@ private slots:
         const rlim_t oldCur = rl.rlim_cur;
         const rlim_t oldMax = rl.rlim_max;
         rl.rlim_cur = 0;
-        rl.rlim_max = 0;
+        // Keep rlim_max intact: an unprivileged process cannot raise a hard
+        // limit it lowered, so zeroing it would poison every later write in
+        // the suite with EFBIG. Lowering only the soft limit still makes
+        // QSaveFile::commit() fail here, and restoring it always succeeds.
         QVERIFY(::setrlimit(RLIMIT_FSIZE, &rl) == 0);
 
         struct Recorder {
