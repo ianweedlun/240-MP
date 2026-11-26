@@ -16,8 +16,6 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QCoreApplication>
-#include <sys/resource.h>
-#include <csignal>
 
 #include "modules/weather/WeatherBackend.h"
 
@@ -416,9 +414,9 @@ private slots:
 
     // Notebook hypothesis #4: a failed write must not change the file and must
     // surface "unwritable_location" instead of silently promoting an
-    // unwritten change. RLIMIT_FSIZE=0 refuses any write that grows the file;
-    // with SIGXFSZ ignored the failing write returns -1 and the backend answers
-    // with the error, leaving the seed content intact.
+    // unwritten change. Make the data root read-only so QSaveFile cannot stage
+    // a rewrite. This is filesystem-level and platform-neutral; RLIMIT_FSIZE
+    // behaves differently between our lab host and the CI runners.
     void setLocationWriteFailureLeavesFileUnchanged()
     {
         writeLocation(QStringLiteral("38.8, -77.0, OLD"));
@@ -429,18 +427,30 @@ private slots:
         const QByteArray fileBefore = beforeFile.readAll();
         beforeFile.close();
 
-        // Refuse any file growth so the rewrite cannot land.
-        std::signal(SIGXFSZ, SIG_IGN);
-        struct rlimit rl;
-        QVERIFY(::getrlimit(RLIMIT_FSIZE, &rl) == 0);
-        const rlim_t oldCur = rl.rlim_cur;
-        const rlim_t oldMax = rl.rlim_max;
-        rl.rlim_cur = 0;
-        // Keep rlim_max intact: an unprivileged process cannot raise a hard
-        // limit it lowered, so zeroing it would poison every later write in
-        // the suite with EFBIG. Lowering only the soft limit still makes
-        // QSaveFile::commit() fail here, and restoring it always succeeds.
-        QVERIFY(::setrlimit(RLIMIT_FSIZE, &rl) == 0);
+        struct RestorePermissions {
+            QString path;
+            QFile::Permissions perms;
+            ~RestorePermissions() { QFile::setPermissions(path, perms); }
+        } restore{m_dir.path(), QFile::permissions(m_dir.path())};
+
+        const QString probePath = m_dir.filePath(QStringLiteral("write-probe.txt"));
+        {
+            QFile probe(probePath);
+            QVERIFY(probe.open(QIODevice::WriteOnly));
+            probe.close();
+            QVERIFY(probe.remove());
+        }
+
+        // Owner keeps read/execute so the backend can still read the seed;
+        // only the write bit goes away, which blocks QSaveFile staging.
+        QVERIFY(QFile::setPermissions(
+            m_dir.path(),
+            QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther |
+                QFile::ExeOwner | QFile::ExeGroup | QFile::ExeOther));
+        {
+            QFile probe(probePath);
+            QVERIFY(!probe.open(QIODevice::WriteOnly));
+        }
 
         struct Recorder {
             QStringList reasons;
@@ -454,16 +464,20 @@ private slots:
         wb.setLocation(QStringLiteral("10.0000, 20.0000, NEW"));
         QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
 
-        // Restore the ambient limits before asserting on the file.
-        rl.rlim_cur = oldCur;
-        rl.rlim_max = oldMax;
-        QVERIFY(::setrlimit(RLIMIT_FSIZE, &rl) == 0);
-        std::signal(SIGXFSZ, SIG_DFL);
-
         QVERIFY(recorder.wasEmitted(QStringLiteral("unwritable_location")));
         QFile afterFile(m_dir.filePath(QStringLiteral("weather_location.txt")));
         QVERIFY(afterFile.open(QIODevice::ReadOnly));
         QCOMPARE(afterFile.readAll(), fileBefore);
+        afterFile.close();
+
+        // Green arm: once writable again, the same directory accepts writes.
+        QVERIFY(QFile::setPermissions(m_dir.path(), restore.perms));
+        {
+            QFile probe(probePath);
+            QVERIFY(probe.open(QIODevice::WriteOnly));
+            probe.close();
+            QVERIFY(probe.remove());
+        }
     }
 
     // Comment and blank lines in weather_location.txt must survive a location
