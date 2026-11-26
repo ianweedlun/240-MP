@@ -1307,6 +1307,52 @@ if(BUILD_TESTS)
         media-auth-clobber-controls
         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 
+    # NFC-PN532-ZEROLEN-FRAME-OOB-01: checked-in two-sided regression for a
+    # zero-length information frame (00 FF 00 00 00 00). readFrame() is in an
+    # anonymous namespace, so the test TU compiles the real product source
+    # instead of a copy; only SerialPort.cpp is linked beside it. QT_FORCE_ASSERTS
+    # is mandatory: pre-fix the empty payload.at(0) must abort, not degrade into
+    # a silent empty Data frame. Controls live in their own ctest entry so they
+    # stay green in both arms. Point PN532_SOURCE_ROOT at a pinned pre-fix tree
+    # to replay the RED arm after the guard lands.
+    set(PN532_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+        "Source root whose Pn532SerialDriver.cpp is compiled into the zero-length-frame regression")
+    add_executable(pn532-zerolen-frame-tests
+        src/tests/Pn532ZeroLengthFrameTest.cpp
+        src/modules/nfc_reader/SerialPort.cpp)
+    set_target_properties(pn532-zerolen-frame-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(pn532-zerolen-frame-tests PRIVATE
+        src
+        "${PN532_SOURCE_ROOT}/src/modules/nfc_reader")
+    target_compile_definitions(pn532-zerolen-frame-tests PRIVATE
+        QT_FORCE_ASSERTS
+        PN532_SERIAL_DRIVER_CPP="${PN532_SOURCE_ROOT}/src/modules/nfc_reader/Pn532SerialDriver.cpp")
+    target_link_libraries(pn532-zerolen-frame-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_library(PN532_UTIL_LIBRARY NAMES util)
+        if(PN532_UTIL_LIBRARY)
+            target_link_libraries(pn532-zerolen-frame-tests PRIVATE ${PN532_UTIL_LIBRARY})
+        endif()
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(pn532-zerolen-frame-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME pn532-zerolen-frame
+        COMMAND pn532-zerolen-frame-tests zeroLengthFrameReturnsNone)
+    add_test(NAME pn532-zerolen-controls
+        COMMAND pn532-zerolen-frame-tests
+            ackFrameStillRecognized
+            nackFrameStillRecognized
+            validDataFrameRecognized
+            badLcsReturnsNone
+            truncatedFrameReturnsNone
+            extendedLengthDesyncReturnsNone
+            errorFrameRecognized
+            wrongDcsLiteralFrameReturnsNone)
+    set_tests_properties(pn532-zerolen-frame pn532-zerolen-controls
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.
     add_executable(yt-negative-cache-backend-tests

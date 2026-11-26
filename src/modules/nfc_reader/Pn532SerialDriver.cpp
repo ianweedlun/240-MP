@@ -87,6 +87,10 @@ FrameKind readFrame(SerialPort &port, QByteArray &payload, int timeoutMs) {
     // 0xFF here would be an extended frame; none of the commands this driver
     // sends can provoke one, so treat it as a desync rather than parsing it.
     if (len == 0xFF) return FrameKind::None;
+    // A zero-length information frame has no TFI/DCS: with LCS 00 it passes
+    // the checksum below, then body.left(0) leaves an empty payload and the
+    // at(0) call reads past the end. No command here gets a zero-length reply.
+    if (len == 0x00) return FrameKind::None;
     if (quint8(len + lcs) != 0x00) return FrameKind::None;
 
     const int rest = qMax(1, timeoutMs - int(elapsed.elapsed()));
@@ -100,6 +104,7 @@ FrameKind readFrame(SerialPort &port, QByteArray &payload, int timeoutMs) {
     port.read(1, 50);  // postamble
 
     payload = body.left(len);
+    if (payload.isEmpty()) return FrameKind::None;
     if (quint8(payload.at(0)) == 0x7F) return FrameKind::Error;
     return FrameKind::Data;
 }
