@@ -428,6 +428,17 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-backend COMMAND weather-backend-tests)
 
+    # Standalone probe: does a QTemporaryDir QFile write persist?
+    add_executable(writefile-probe-tests
+        src/modules/weather/tests/WriteFileProbeTest.cpp)
+    set_target_properties(writefile-probe-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(writefile-probe-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(writefile-probe-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(writefile-probe-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME writefile-probe COMMAND writefile-probe-tests)
+
     # AppCore -> weather module proxy (issue #53): app-level views load outside
     # the weather module's QQml scope where the module-scope "weatherBackend"
     # context property is null. The location reads are proxied through appCore,

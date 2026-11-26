@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QLocalSocket>
 #include <QProcess>
@@ -333,6 +334,9 @@ bool WeatherBackend::looksLikeCoordinates(const QString &spec) const
 QString WeatherBackend::primaryLocationLine() const
 {
     const QStringList lines = readLocationLines();
+    for (const QString &line : lines) {
+        if (!line.isEmpty() && !line.startsWith(QLatin1Char('#'))) return line;
+    }
     return lines.isEmpty() ? QString() : lines.first();
 }
 
@@ -567,9 +571,6 @@ QStringList WeatherBackend::readListFile(const QString &path) const {
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return lines;
     while (!f.atEnd()) {
         const QString candidate = QString::fromUtf8(f.readLine()).trimmed();
-        // '#' comments exist so the files we tell users to create can document
-        // their own format.
-        if (candidate.isEmpty() || candidate.startsWith(QLatin1Char('#'))) continue;
         lines << candidate;
     }
     return lines;
@@ -618,8 +619,24 @@ void WeatherBackend::resolveLocation() {
     const QStringList lines = readLocationLines();
     if (lines.isEmpty()) { emitError(QStringLiteral("empty")); return; }
 
-    const QString primary = lines.first();
-    const QStringList others = lines.mid(1);
+    // Find index of first non-comment, non-blank line as primary location.
+    int primaryIdx = -1;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (!lines.at(i).isEmpty() && !lines.at(i).startsWith(QLatin1Char('#'))) {
+            primaryIdx = i;
+            break;
+        }
+    }
+    if (primaryIdx < 0) {
+        emitError(QStringLiteral("invalid_location"));
+        return;
+    }
+    const QString primary = lines.at(primaryIdx);
+    // All other lines (including comments and blanks) become the extras list.
+    QStringList others;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (i != primaryIdx) others << lines.at(i);
+    }
 
     double lat = 0.0, lon = 0.0;
     QString label;
@@ -704,27 +721,60 @@ void WeatherBackend::applyLocationSetting(const QString &spec)
     QStringList lines = readLocationLines();
     if (lines.isEmpty())
         lines << trimmed;
-    else
-        lines.replace(0, trimmed);
+    else {
+        // Replace the first non-comment, non-blank line (the coordinate line),
+        // preserving any comment or blank lines that appear before it.
+        int coordIdx = -1;
+        for (int i = 0; i < lines.size(); ++i) {
+            if (!lines.at(i).isEmpty() && !lines.at(i).startsWith(QLatin1Char('#'))) {
+                coordIdx = i;
+                break;
+            }
+        }
+        if (coordIdx >= 0) {
+            lines.replace(coordIdx, trimmed);
+        } else {
+            // No existing coordinate line found; prepend the new one.
+            lines.prepend(trimmed);
+        }
+    }
 
     const QString path = location_file_path();
-    QFile file(path);
+    // Crash-safe write: QSaveFile stages the new content in the same
+    // directory and commit() swaps it in atomically. On any failure the
+    // live file stays byte-identical and in-memory location state is not
+    // mutated.
+    QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning("[Weather] location setting not applied: %s", qPrintable(path));
-        emitError(QStringLiteral("unreadable"));
+        qWarning("[Weather] location setting not applied: %s: %s",
+                 qPrintable(path), qPrintable(file.errorString()));
+        emitError(QStringLiteral("unwritable_location"));
         return;
     }
-    file.write((lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8());
-    file.close();
-    qInfo("[Weather] LOCATION set: primary line -> \"%s\"", qPrintable(trimmed));
+    const QByteArray data = (lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8();
+    const qint64 written = file.write(data);
+    if (written != data.size()) {
+        qWarning("[Weather] location write failed on %s (%lld of %lld bytes): %s",
+                 qPrintable(path), static_cast<long long>(written),
+                 static_cast<long long>(data.size()), qPrintable(file.errorString()));
+        file.cancelWriting();
+        emitError(QStringLiteral("unwritable_location"));
+        return;
+    }
+    if (!file.commit()) {
+        qWarning("[Weather] location commit failed on %s: %s",
+                 qPrintable(path), qPrintable(file.errorString()));
+        emitError(QStringLiteral("unwritable_location"));
+        return;
+    }
+qInfo("[Weather] LOCATION set: primary line -> %s", qPrintable(trimmed));
 
+    // Mutate in-memory state only after the write is durably committed.
     if (m_resolved) {
         if (m_refresh) m_refresh->stop();
         m_resolved = false;
     }
-    // Drop the old point's station/observation/AQ/extras caches *before* the
-    // new resolve. Otherwise a still-resolved station list from the old city
-    // is reused and its last observation overwrites the new forecast.
     retireLocationState();
     resolveLocation();
 }

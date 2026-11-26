@@ -16,6 +16,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QCoreApplication>
+#include <sys/resource.h>
+#include <csignal>
 
 #include "modules/weather/WeatherBackend.h"
 
@@ -233,9 +235,19 @@ private:
     FakeWeatherServer m_server;
 
     void writeFile(const QString &name, const QString &content) {
-        QFile f(m_dir.filePath(name));
-        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
-        f.write(content.toUtf8());
+        const QString path = m_dir.filePath(name);
+        qInfo("[DBG-wfile] name=%s path=%s", qUtf8Printable(name),
+              qUtf8Printable(path));
+        QFile f(path);
+        const bool ok = f.open(QIODevice::WriteOnly | QIODevice::Truncate);
+        qInfo("[DBG-wfile] open=%d", ok ? 1 : 0);
+        if (!ok) return;
+        const QByteArray bytes = content.toUtf8();
+        const qint64 n = f.write(bytes);
+        qInfo("[DBG-wfile] bytesRequested=%lld written=%lld", (long long)bytes.size(),
+              (long long)n);
+        // QFile is closed by its destructor at end of scope; flush explicitly.
+        f.close();
     }
 
     void writeConfig(const QString &units) {
@@ -403,8 +415,148 @@ private slots:
                 const double mb = pressure.split(QLatin1Char(' ')).first().toDouble();
                 QVERIFY(mb > 1000.0 && mb < 1020.0);
             }
-            wb.stop();
+
         }
+
+    }
+
+    // Notebook hypothesis #4: a failed write must not change the file and must
+    // surface "unwritable_location" instead of silently promoting an
+    // unwritten change. RLIMIT_FSIZE=0 refuses any write that grows the file;
+    // with SIGXFSZ ignored the failing write returns -1 and the backend answers
+    // with the error, leaving the seed content intact.
+    void setLocationWriteFailureLeavesFileUnchanged()
+    {
+        writeLocation(QStringLiteral("38.8, -77.0, OLD"));
+        WeatherBackend wb(QString(), m_dir.path());
+
+        QFile beforeFile(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(beforeFile.open(QIODevice::ReadOnly));
+        const QByteArray fileBefore = beforeFile.readAll();
+        beforeFile.close();
+
+        // Refuse any file growth so the rewrite cannot land.
+        std::signal(SIGXFSZ, SIG_IGN);
+        struct rlimit rl;
+        QVERIFY(::getrlimit(RLIMIT_FSIZE, &rl) == 0);
+        const rlim_t oldCur = rl.rlim_cur;
+        const rlim_t oldMax = rl.rlim_max;
+        rl.rlim_cur = 0;
+        rl.rlim_max = 0;
+        QVERIFY(::setrlimit(RLIMIT_FSIZE, &rl) == 0);
+
+        struct Recorder {
+            QStringList reasons;
+            void record(const QString &r) { reasons << r; }
+            bool wasEmitted(const QString &r) const { return reasons.contains(r); }
+        };
+        Recorder recorder;
+        QObject::connect(&wb, &WeatherBackend::locationError,
+                         [&recorder](const QString &r) { recorder.record(r); });
+
+        wb.setLocation(QStringLiteral("10.0000, 20.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        // Restore the ambient limits before asserting on the file.
+        rl.rlim_cur = oldCur;
+        rl.rlim_max = oldMax;
+        QVERIFY(::setrlimit(RLIMIT_FSIZE, &rl) == 0);
+        std::signal(SIGXFSZ, SIG_DFL);
+
+        QVERIFY(recorder.wasEmitted(QStringLiteral("unwritable_location")));
+        QFile afterFile(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(afterFile.open(QIODevice::ReadOnly));
+        QCOMPARE(afterFile.readAll(), fileBefore);
+    }
+
+    // Comment and blank lines in weather_location.txt must survive a location
+    // update: only the first non-comment, non-blank line (the coordinate) is
+    // replaced, so a comment sitting before it is preserved on write-back.
+    void commentsInLocationFileSurviveUpdate()
+    {
+        const QString seed =
+            QStringLiteral("# documented list\n")
+            + QStringLiteral("\n")
+            + QStringLiteral("42.3601, -71.0589, BOSTON\n")
+            + QStringLiteral("# extra note\n")
+            + QStringLiteral("40.7128, -74.0060, NYC\n");
+        writeFile(QStringLiteral("weather_location.txt"), seed);
+
+        WeatherBackend wb(QString(), m_dir.path());
+        {
+            QFileInfo fi(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            qInfo("[DBG] after-writeFile exists=%d bytes=%lld",
+                  fi.exists() ? 1 : 0, fi.size());
+            QFile probe(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(probe.open(QIODevice::ReadOnly));
+            qInfo("[DBG] after-writeFile probeSize=%lld", (long long)probe.size());
+        }
+        {
+            qInfo("[DBG] m_dir.path=%s", qUtf8Printable(m_dir.path()));
+            QFile probe(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(probe.open(QIODevice::ReadOnly));
+            qInfo("[DBG] seed-after-ctor bytes=%lld", (long long)probe.size());
+            qInfo("[DBG] seed-after-ctor content=%s", qUtf8Printable(probe.readAll()));
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        wb.setLocation(QStringLiteral("5.0000, 6.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        QFile after(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        const QString afterText = QString::fromUtf8(after.readAll());
+
+        // DEBUG dump of the file right after setLocation, before assertions.
+        {
+            QFile dbg(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(dbg.open(QIODevice::ReadOnly));
+            qInfo("[DBG] comments file bytes=%lld", (long long)dbg.size());
+            qInfo("[DBG] comments file content=%s", qUtf8Printable(dbg.readAll()));
+        }
+        QVERIFY(afterText.contains(QStringLiteral("# documented list")));
+        QVERIFY(afterText.contains(QStringLiteral("# extra note")));
+        QVERIFY(afterText.contains(QStringLiteral("40.7128, -74.0060, NYC")));
+        QCOMPARE(afterText,
+                 QStringLiteral("# documented list\n"
+                                "\n"
+                                "5.0000, 6.0000, NEW\n"
+                                "# extra note\n"
+                                "40.7128, -74.0060, NYC\n"));
+    }
+
+    // A successful update rewrites the primary line and keeps the extra
+    // locations and comments in order.
+    void successfulUpdateKeepsExtrasAndComments()
+    {
+        const QString seed =
+            QStringLiteral("42.3601, -71.0589, BOSTON\n")
+            + QStringLiteral("# note about NYC\n")
+            + QStringLiteral("40.7128, -74.0060, NYC\n")
+            + QStringLiteral("34.0522, -118.2437, LA\n");
+        writeFile(QStringLiteral("weather_location.txt"), seed);
+
+        WeatherBackend wb(QString(), m_dir.path());
+        wb.setLocation(QStringLiteral("5.0000, 6.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        QFile after(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        const QString afterText = QString::fromUtf8(after.readAll());
+
+        QVERIFY(afterText.contains(QStringLiteral("40.7128, -74.0060, NYC")));
+        QVERIFY(afterText.contains(QStringLiteral("34.0522, -118.2437, LA")));
+        QVERIFY(afterText.contains(QStringLiteral("# note about NYC")));
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate path = %s", qUtf8Printable(m_dir.filePath(QStringLiteral("weather_location.txt"))));
+        bool af2 = after.open(QIODevice::ReadOnly);
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate after.open() = %d", af2 ? 1 : 0);
+        const QString afterText2 = af2 ? QString::fromUtf8(after.readAll()) : QStringLiteral("(open failed)");
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate afterText2 = %s", qUtf8Printable(afterText2));
+        QCOMPARE(afterText,
+                 QStringLiteral("5.0000, 6.0000, NEW\n"
+                                "# note about NYC\n"
+                                "40.7128, -74.0060, NYC\n"
+                                "34.0522, -118.2437, LA\n"));
     }
 };
 
