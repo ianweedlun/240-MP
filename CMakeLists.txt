@@ -233,6 +233,14 @@ if(APPLE AND NOT DEFINED ENV{CI})
 endif()
 
 # ── Install rules ──────────────────────────────────────────────────────────────
+# Docs/reference payloads and an unused splash. Nothing at runtime opens these
+# (repo-wide grep, including deploy/RC workflows, finds no reference), and the
+# QML engine loads only the view files, so exclude them from installed trees.
+set(240MP_INSTALL_EXCLUDES
+    PATTERN "openapi.json" EXCLUDE
+    PATTERN "jellyfin-openapi-stable.json" EXCLUDE
+    PATTERN "boot-splash.tga" EXCLUDE
+)
 if(APPLE)
     install(TARGETS 240mp BUNDLE DESTINATION . COMPONENT Runtime)
 
@@ -270,7 +278,8 @@ if(APPLE)
         "${CMAKE_SOURCE_DIR}/assets"
         "${CMAKE_SOURCE_DIR}/scripts"
         DESTINATION "240mp.app/Contents/Resources"
-        COMPONENT Runtime)
+        COMPONENT Runtime
+        ${240MP_INSTALL_EXCLUDES})
 
     # Icon lives under packaging/macos (not assets/) so it ships alongside the
     # other macOS packaging inputs; installed at the same relative path so it
@@ -319,7 +328,8 @@ else()
         "${CMAKE_SOURCE_DIR}/assets"
         "${CMAKE_SOURCE_DIR}/scripts"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
-        COMPONENT Runtime)
+        COMPONENT Runtime
+        ${240MP_INSTALL_EXCLUDES})
 endif()
 
 # ── Tests (opt-in) ─────────────────────────────────────────────────────────────

@@ -218,8 +218,41 @@ Window {
     // loading it here just registers it with Qt's fontconfig-backed font
     // database; Qt's own missing-glyph fallback then picks it up for every
     // existing font.family: root.globalFont binding with no further changes.
-    FontLoader {
-        id: unifontLoader; source: "assets/fonts/unifont.otf"
+    //
+    // W2: registering a 5.1 MB OTF is synchronous work on the cold-start path.
+    // No app-owned copy contains CJK text (all of it is ASCII) and server
+    // titles arrive over the network long after startup, so the first frame
+    // cannot need the fallback. Defer registration until a frame containing
+    // the loaded module view has swapped. The font ends up in the same
+    // fontconfig-backed database, so every root.globalFont binding keeps its
+    // missing-glyph fallback exactly as before, only a frame later.
+    property bool _unifontRequested: false
+    function requestUnifont() {
+        if (_unifontRequested || !_startupNavigated) return
+        _unifontRequested = true
+        logState("font", "unifont-deferred after-first-frame")
+        unifontDeferred.active = true
+    }
+    Loader {
+        id: unifontDeferred
+        active: false
+        sourceComponent: Component {
+            FontLoader {
+                source: "assets/fonts/unifont.otf"
+                property bool _readyLogged: false
+                function noteReady() {
+                    if (_readyLogged || status !== FontLoader.Ready) return
+                    _readyLogged = true
+                    logState("font", "unifont-ready name=" + name)
+                }
+                Component.onCompleted: noteReady()
+                onStatusChanged: noteReady()
+            }
+        }
+    }
+    Connections {
+        target: root
+        function onFrameSwapped() { root.requestUnifont() }
     }
     property string globalFont: font.name;
 
