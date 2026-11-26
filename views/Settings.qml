@@ -350,6 +350,9 @@ FocusScope {
         anchors.leftMargin: root.sw * 0.115625 //74
         width: root.sw * 0.76875 //492
         height: root.sh * 0.525 - (configBanner.visible ? root.sh * 0.095 : 0) //252
+        // Two rows of offscreen delegates keep a navigation key from
+        // constructing items on the frame the key lands.
+        cacheBuffer: root.sh * 0.1166667 // 56 px = two 28 px rows
         clip: true
         focus: true
 
