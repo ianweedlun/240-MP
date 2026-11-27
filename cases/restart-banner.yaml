@@ -1,0 +1,55 @@
+# ── crt-validation case: restart-banner ──
+# Proves the module-gating wave's user-visible behavior: toggling a module's
+# ENABLED flag writes config.json, but the backend set is fixed at boot, so
+# Settings must show the restart-required banner (and log
+# `restart-banner shown` via AppCore::note_state in debug builds).
+#
+# Keys are taps through the debug key channel / FIFO, never holds.
+#   escape, down x3 -> Settings, first module row (Ambient:Mode, idx=4)
+#   select -> module settings, ENABLED is row 0
+#   NEGATIVE ARM: `down` (wrong key) moves off ENABLED without writing config;
+#     back to Settings, shot rb_bad -> banner must stay hidden.
+#   GREEN ARM: `right` flips ENABLED; back to Settings, shot rb_good ->
+#     banner must be shown.
+#   CLEANUP ARM: `right` flips ENABLED back; shot rb_restore -> hidden again,
+#     so the case is idempotent and leaves the owner's config as it found it.
+#
+# Negative-arm check: a scratch control with the same walk but `down`
+# substituted for the green `right`, still expecting `restart-banner shown`,
+# FAILs (verified locally). The case is not a source-text snapshot: a build
+# without the banner emits no `restart-banner` markers and cannot pass.
+#
+# Vision verdict (last step, on app-initiated screenshots the wheel pulls by
+# exact filename, NOT from CRT_SCREENSHOT_DIR):
+#   /tmp/240mp_screenshot_240mp-_rb_good.png -> a banner panel sits below the
+#   header above the settings rows. Under the autostart service it reads
+#   "Module change pending — restart now to apply." with a Restart now button;
+#   in a manual launch it reads "Quit, then relaunch to apply.".
+#   /tmp/240mp_screenshot_240mp-_rb_bad.png and ..._rb_restore.png -> no banner.
+#   Pull: scp -P 22 ian@execubot.weedlun.me:/tmp/240mp_screenshot_240mp-_rb_*.png
+#   Filter to the current run by mtime; the state log is append-only.
+keys:
+  - escape
+  - down
+  - down
+  - down
+  - select
+  - down
+  - escape
+  - shot rb_bad
+  - select
+  - right
+  - escape
+  - shot rb_good
+  - select
+  - right
+  - escape
+  - shot rb_restore
+expect:
+  - "select Ambient:Mode idx=4"
+  - "select ENABLED idx=0"
+  - "shot rb_bad"
+  - "restart-banner shown"
+  - "shot rb_good"
+  - "restart-banner hidden"
+  - "shot rb_restore"

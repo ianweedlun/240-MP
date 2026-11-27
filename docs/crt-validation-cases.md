@@ -25,6 +25,7 @@ Run: `scripts/crt-validate.sh <case-name>` (from the repo root).
 | `navigation-walk` | up, select, shot nav01, up, select, shot nav02 | `view: module-list`, shot markers | ModuleList open → select a module → open its root view |
 | `playback-loop` | shot play01, playpause, shot play02, right, shot seek01 | `view: player` + shot markers | Playback open, play/pause toggle, fine seek |
 | `settings-roundtrip` | shot set01, select, left, right, shot set02 | `view: settings` + shot markers | Settings open + cycle, screen reads back |
+| `restart-banner` | escape, down×3, select, down, shot rb_bad; select, right, shot rb_good; select, right, shot rb_restore | `select Ambient:Mode idx=4`, `select ENABLED idx=0`, `restart-banner shown|hidden`, three named shots | Module enable flag divergence shows the restart-required banner; wrong key leaves it hidden; config restored |
 
 Each case prints `PASS` only when every `expect:` grep pattern matches the
 state-log tail. Evidence is produced on the Pi, pulled to
