@@ -844,6 +844,49 @@ if(BUILD_TESTS)
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endforeach()
 
+    # AMBIENT-GHOST-AUDIO-01 checked-in two-sided gate. Compiles the SHIPPED
+    # AmbientModeBackend/MpvLocator/ConfigFile (no paraphrase) and loads the
+    # actual ambient Player.qml offscreen with a compiled fake mpv on PATH.
+    # The negative arm uses a pinned verbatim pre-fix view fixture, so the gate
+    # fails if the destructor cleanup is removed from the product view. Both
+    # arms assert child-PID liveness + view-driven stopAudio count (never RSS).
+    # See src/tests/README-ambient-companion-teardown.md. RUN_SERIAL keeps the
+    # fake mpv PID registry and PATH stub isolated between arms.
+    add_executable(ambient-companion-fake-mpv
+        src/tests/ambient_companion_fake_mpv.cpp)
+    set_target_properties(ambient-companion-fake-mpv PROPERTIES AUTOMOC OFF)
+    add_executable(ambient-companion-teardown-probe
+        src/tests/AmbientCompanionTeardownProbe.cpp
+        src/modules/ambient_mode/AmbientModeBackend.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(ambient-companion-teardown-probe PROPERTIES AUTOMOC ON)
+    target_include_directories(ambient-companion-teardown-probe PRIVATE
+        src
+        src/modules/ambient_mode)
+    target_link_libraries(ambient-companion-teardown-probe PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ambient-companion-teardown-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(ambient_case teardown-product teardown-prefix control-ended
+                         control-direct-stop control-empty-audio control-video-only
+                         control-repeat repeat-teardown-product repeat-teardown-prefix)
+        add_test(NAME ambient-companion-teardown-${ambient_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_ambient_companion_teardown_case.py
+                --ctest-case ${ambient_case}
+                --probe $<TARGET_FILE:ambient-companion-teardown-probe>
+                --fake-mpv $<TARGET_FILE:ambient-companion-fake-mpv>
+                --product-view ${CMAKE_CURRENT_SOURCE_DIR}/modules/ambient_mode/views/Player.qml
+                --prefix-view ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/ambient-teardown/prefix/Player.qml
+                --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(ambient-companion-teardown-${ambient_case} PROPERTIES
+            TIMEOUT 120
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
         src/modules/plex/tests/PlaybackDecisionTest.cpp)
