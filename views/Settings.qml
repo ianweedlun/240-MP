@@ -339,6 +339,97 @@ FocusScope {
         }
     }
 
+        // --- MODULE RESTART banner ---
+        // True when a module's on-disk enable flag disagrees with the loaded
+        // backends (restart_required). When the app runs under the autostart
+        // service, the user can relaunch in place: the banner offers a
+        // "Restart now" button that exits with code 11 (the launcher applies
+        // a staged update, then execs). Otherwise the user is told to quit and
+        // relaunch manually.
+        Rectangle {
+            id: restartBanner
+            anchors.top: parent.top
+            anchors.topMargin: root.sh * 0.235
+            anchors.left: parent.left
+            anchors.leftMargin: root.sw * 0.115625 //74
+            width: root.sw * 0.76875 //492
+            height: root.sh * 0.095
+            visible: appCore.restartRequired
+            color: root.accentColor
+            border.color: "#40C060"
+            border.width: 1
+            radius: 4
+            z: 50
+
+            // Debug-only: emit the banner condition to the state log so an
+            // offscreen drive can prove the binding without a screenshot.
+            // No-op in release builds (note_state is compiled out there).
+            function logBanner() {
+                if (appCore.telemetryEnabled())
+                    appCore.note_state("restart-banner", restartBanner.visible ? "shown" : "hidden")
+            }
+            Component.onCompleted: logBanner()
+            onVisibleChanged: logBanner()
+
+            Text {
+                anchors.fill: parent
+                anchors.margins: root.sh * 0.008
+                text: appCore.isAutostartSession()
+                    ? "Module change pending — restart now to apply."
+                    : "Quit, then relaunch to apply."
+                font.family: root.globalFont
+                font.pixelSize: root.sh * 0.025 //12
+                color: root.surfaceColor
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                wrapMode: Text.WordWrap
+            }
+
+            FocusScope {
+                id: restartButton
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.topMargin: root.sh * 0.02
+                anchors.rightMargin: root.sw * 0.009375 //6
+                visible: appCore.isAutostartSession()
+                // A hidden FocusScope with focus:true still takes active focus
+                // and swallows every navigation key. Only claim focus when the
+                // banner is actually shown, so settingsList keeps it otherwise.
+                focus: restartBanner.visible && appCore.isAutostartSession()
+
+                // Re-launch through the launcher: the autostart service's
+                // 240mp-stop treats exit 11 as a no-op, so Restart=on-failure
+                // relaunches via the launcher (which applies the staged
+                // update) instead of re-reading config.json. Outside the
+                // autostart session this is never exposed — the banner instead
+                // says to quit and relaunch manually.
+                Keys.onReturnPressed: {
+                    Qt.exit(11)
+                }
+                Keys.onBackPressed: { }
+
+                Text {
+                    text: "Restart now"
+                    font.family: root.globalFont
+                    font.pixelSize: root.sh * 0.04 //18
+                    color: root.primaryColor
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: root.sw * 0.0125
+                    anchors.rightMargin: root.sw * 0.0125
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: Qt.exit(11)
+                }
+            }
+        }
+
+        // --- QUIT CONFIRMATION OVERLAY ---
+
+
     RowTrackingListView {
         id: settingsList
         objectName: "settingsList" // N1 smoke-test handle (repo precedent)

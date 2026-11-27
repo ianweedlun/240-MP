@@ -72,6 +72,28 @@ public:
     // resolves it (config override, else manifest default, else true). Unknown
     // ids are not enabled.
     Q_INVOKABLE bool is_module_enabled(const QString &moduleId) const;
+
+    // Pure helper: does the on-disk module enable state disagree with the
+    // backends loaded this session? A module is "enabled but has no backend"
+    // when config.json enables it (or defers to the manifest default) while
+    // no backend is registered for it this session; "disabled but still
+    // running" when a backend is registered but config.json disables it.
+    // Either direction means the on-disk flag cannot be honored until a
+    // restart, so the caller (Settings banner + unit tests) can compare
+    // without a QML engine.
+    bool moduleStateChangedSinceBoot() const;
+
+    // True when moduleStateChangedSinceBoot() is true. Q_INVOKABLE so QML
+    // (Settings banner) can call it; the value is derived from disk each
+    // call, so a fresh read always reflects the latest config.json.
+    Q_INVOKABLE bool restart_required() const;
+
+    // Banner surface for the Settings view. Bound by Settings.qml; the QML
+    // binding re-evaluates whenever this fires, so a save_setting that
+    // changes a module's enabled state reflects in the banner without a view
+    // rebuild.
+    Q_PROPERTY(bool restartRequired READ restart_required NOTIFY restartRequiredChanged)
+    bool restartRequired() const { return restart_required(); }
     // APP_ROOT-relative QML entry point of a module by id ("modules/plex/views/Root.qml"),
     // or empty when the module is unknown. Lets one module route into another
     // without hardcoding a path across module boundaries.
@@ -133,6 +155,7 @@ signals:
     void dynamicOptionsReady(const QString &moduleId, const QString &key, const QVariant &options);
     void moduleAuthStateChanged(const QString &moduleId);
     void moduleActionStatus(const QString &moduleId, const QString &message);
+    void restartRequiredChanged();
     void configHealthChanged();
 
 private slots:

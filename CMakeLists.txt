@@ -496,6 +496,25 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
 
+    # restart_required(): pure module-flag vs backend comparison used by the
+    # Settings restart banner. No QML engine, no network, no active backend,
+    # no DisplayHandoff: the comparison reads config.json versus m_backends.
+    # QGuiApplication for offscreen Qt.
+    add_executable(appcore-restart-required-tests
+        src/AppCore.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/AppCoreRestartRequiredTest.cpp)
+    set_target_properties(appcore-restart-required-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-restart-required-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-restart-required-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-restart-required-tests PRIVATE -Wall -Wextra)
+    endif()
+    enable_testing()
+    add_test(NAME appcore-restart-required COMMAND appcore-restart-required-tests)
+
     # T1 M-3: re-registering the same backend/module id must not multiply
     # AppCore's signal fan-out. Real AppCore + probe backend, QSignalSpy on
     # all three re-emitted signals; control (x1) and stress (x10) arms. The
@@ -830,6 +849,36 @@ if(BUILD_TESTS)
         target_compile_options(plex-playback-decision PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME plex-playback-decision COMMAND plex-playback-decision)
+
+    # Consumer Control drain starvation regression: the shipped slot body is
+    # lifted verbatim from src/input/InputManager.cpp at build time (see the
+    # generator) so the test follows the product code instead of a paraphrase.
+    # Linux only: evdev plus the read() wrapper used by the EINTR case.
+    if(UNIX AND NOT APPLE)
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/extract_consumer_ctrl_drain.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/input/InputManager.cpp
+                ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/input/InputManager.cpp
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/extract_consumer_ctrl_drain.py
+            COMMENT "Extracting Consumer Control drain functions for regression tests"
+            VERBATIM)
+        add_executable(consumer-control-drain-tests
+            src/tests/ConsumerControlDrainTest.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc)
+        set_target_properties(consumer-control-drain-tests PROPERTIES AUTOMOC ON)
+        target_include_directories(consumer-control-drain-tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR})
+        target_link_libraries(consumer-control-drain-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(consumer-control-drain-tests PRIVATE -Wall -Wextra)
+            target_link_options(consumer-control-drain-tests PRIVATE -Wl,--wrap=read)
+        endif()
+        add_test(NAME consumer-control-drain COMMAND consumer-control-drain-tests)
+        set_tests_properties(consumer-control-drain PROPERTIES TIMEOUT 30)
+    endif()
 endif()
 # OFF by default: the normal build and the release pipeline are unaffected, and
 # an upstream PR is not forced to adopt a test framework. QtCore only — these

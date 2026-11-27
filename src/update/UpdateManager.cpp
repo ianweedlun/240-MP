@@ -34,11 +34,11 @@ QString assetSuffix() {
 #endif
 }
 
-// "Apply & Restart" under the autostart service: 240mp-stop (scripts/install.sh)
-// treats exit 11 as a no-op so Restart=on-failure relaunches through the
-// launcher, which applies the staged tarball. Sibling of Qt.exit(10) ("Exit to
-// Terminal") in views/Settings.qml.
-constexpr int kExitCodeUpdateRestart = 11;
+// Generic restart exit code for "relaunch through the launcher": 11. The
+// autostart service's 240mp-stop treats 11 as a no-op, so Restart=on-failure
+// relaunches through the launcher, which applies a staged update. A sibling
+// of Qt.exit(10) ("Exit to Terminal") in views/Settings.qml.
+constexpr int kExitCodeRestart = 11;
 
 QString feedUrl() {
     const QString env = qEnvironmentVariable("MP240_UPDATE_FEED_URL");
@@ -459,7 +459,7 @@ void UpdateManager::applyLinux() {
     sums.close();
 
     if (qEnvironmentVariableIsSet("MP240_AUTOSTART"))
-        QTimer::singleShot(0, qApp, []() { QCoreApplication::exit(kExitCodeUpdateRestart); });
+        QTimer::singleShot(0, qApp, []() { QCoreApplication::exit(kExitCodeRestart); });
     else
         QTimer::singleShot(0, qApp, &QCoreApplication::quit);
 }
