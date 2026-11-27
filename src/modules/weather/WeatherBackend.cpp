@@ -72,6 +72,28 @@ const char *kNwsUserAgent = "240-MP/" APP_VERSION " (https://github.com/anthonyc
 // Open-Meteo publishes data roughly every 15 minutes.
 constexpr int kRefreshMs = 10 * 60 * 1000;
 
+// The music IPC peer is mpv, which creates its socket a beat after launch.
+// Keep the early attempts quick, then back off and give up: an unresponsive
+// peer used to be retried every 100 ms for the life of the process.
+constexpr int kMusicIpcMaxAttempts   = 10;
+constexpr int kMusicIpcBaseMs        = 100;
+constexpr int kMusicIpcMaxIntervalMs = 2000;
+constexpr int kMusicIpcDeadlineMs    = 10000;
+
+// Stable vocabulary for musicIpcFailed(reason). Teardown errors never reach
+// here (stopMusic() halts the retry timer before abort()), but keep the mapping
+// total so a new Qt enum value cannot turn into a blank status line.
+QString musicIpcErrorReason(QLocalSocket::LocalSocketError error) {
+    switch (error) {
+    case QLocalSocket::UnknownSocketError:     return QStringLiteral("unknown");
+    case QLocalSocket::ConnectionRefusedError: return QStringLiteral("refused");
+    case QLocalSocket::ServerNotFoundError:    return QStringLiteral("no_server");
+    case QLocalSocket::SocketAccessError:      return QStringLiteral("access");
+    case QLocalSocket::SocketTimeoutError:     return QStringLiteral("timeout");
+    default:                                   return QStringLiteral("socket");
+    }
+}
+
 // Played when the user has no weather_music.txt, so the module sounds right
 // with zero setup. Written the way a user would write them — spaces and all —
 // because musicPlaylist() applies the same encoding rule to both sources.
@@ -448,29 +470,85 @@ void WeatherBackend::startMusic() {
     m_music->start(bin, args);
 
     // mpv creates the socket a beat after launch, so a single connect attempt
-    // loses the race. Same retry shape as MpvController.
+    // loses the race. Retry with backoff, but never indefinitely: a peer that
+    // never listens used to keep this timer hot for the whole process.
     if (!m_musicIpc) {
         m_musicIpc = new QLocalSocket(this);
         connect(m_musicIpc, &QLocalSocket::connected, this, [this]() {
             m_musicConnect->stop();
+            // A listener that shows up after the last retry still wins.
+            m_musicIpcAttempts = 0;
+            m_musicIpcExhausted = false;
+            ++m_musicIpcSequence;
             m_musicApplied = m_musicDucked ? 0.0 : 100.0;
             applyMusicVolume();
+        });
+        // Count failures rather than timer ticks. The isActive() gate also
+        // suppresses the error abort() emits in stopMusic(): teardown stops
+        // the timer first, so that error belongs to no retry sequence.
+        connect(m_musicIpc, &QLocalSocket::errorOccurred, this,
+                [this](QLocalSocket::LocalSocketError error) {
+            if (!m_musicConnect || !m_musicConnect->isActive()) return;
+
+            ++m_musicIpcAttempts;
+            if (m_musicIpcAttempts >= kMusicIpcMaxAttempts) {
+                failMusicIpc(musicIpcErrorReason(error));
+                return;
+            }
+            // 100 ms x5, then 200/400/800/1600 ms, capped at 2 s.
+            const int step = qMax(0, m_musicIpcAttempts - 5);
+            m_musicConnect->setInterval(qMin(kMusicIpcMaxIntervalMs,
+                                             kMusicIpcBaseMs << qMin(step, 5)));
         });
     }
     if (!m_musicConnect) {
         m_musicConnect = new QTimer(this);
-        m_musicConnect->setInterval(100);
+        m_musicConnect->setInterval(kMusicIpcBaseMs);
         connect(m_musicConnect, &QTimer::timeout, this, [this]() {
+            if (m_musicIpcExhausted) return;
+            // Belt-and-braces for a peer that accepts but leaves us wedged in
+            // ConnectingState, where the state guard below would keep waiting.
+            if (m_musicIpcDeadline.elapsed() > kMusicIpcDeadlineMs) {
+                failMusicIpc(QStringLiteral("timeout"));
+                return;
+            }
             if (m_musicIpc->state() == QLocalSocket::ConnectedState
                 || m_musicIpc->state() == QLocalSocket::ConnectingState)
                 return;
             m_musicIpc->connectToServer(m_musicSocketPath);
         });
     }
+
+    // Every re-arm is a fresh sequence. Without this a second module visit
+    // inherits an exhausted counter and never tries to connect at all.
+    ++m_musicIpcSequence;
+    m_musicIpcAttempts = 0;
+    m_musicIpcExhausted = false;
+    m_musicIpcDeadline.restart();
+    m_musicConnect->setInterval(kMusicIpcBaseMs);
     m_musicConnect->start();
 
     qInfo("[Weather] music started — %lld track(s)", static_cast<long long>(tracks.size()));
     emit musicStateChanged();
+}
+
+void WeatherBackend::failMusicIpc(const QString &reason) {
+    if (m_musicIpcExhausted) return;
+    m_musicIpcExhausted = true;
+    if (m_musicConnect) m_musicConnect->stop();
+
+    qWarning("[Weather] music IPC unavailable after %d attempt(s): %s — "
+             "audio continues, duck/pause/volume control disabled",
+             m_musicIpcAttempts, qPrintable(reason));
+
+    // startMusic() runs from Component.onCompleted; a synchronous emit there is
+    // dropped while the Loader's item is still under construction. Sequence
+    // guards against a queued emit surviving a re-arm or a late connected().
+    const quint64 sequence = m_musicIpcSequence;
+    QTimer::singleShot(0, this, [this, reason, sequence]() {
+        if (m_musicIpcSequence == sequence && m_musicIpcExhausted)
+            emit musicIpcFailed(reason);
+    });
 }
 
 void WeatherBackend::duck_music(bool ducked, int ms) {
@@ -520,7 +598,16 @@ void WeatherBackend::applyMusicVolume() {
 }
 
 void WeatherBackend::stopMusic() {
-    if (m_musicConnect) m_musicConnect->stop();
+    // Clear retry state before abort(): the error it emits is teardown noise,
+    // not a failed connect, and the next startMusic() must begin from zero.
+    // Bumping the sequence also drops any failure emit queued for this run.
+    ++m_musicIpcSequence;
+    m_musicIpcAttempts = 0;
+    m_musicIpcExhausted = false;
+    if (m_musicConnect) {
+        m_musicConnect->stop();
+        m_musicConnect->setInterval(kMusicIpcBaseMs);
+    }
     if (m_musicIpc)     m_musicIpc->abort();
 
     if (m_music) {
