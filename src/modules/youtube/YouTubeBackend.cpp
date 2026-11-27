@@ -36,6 +36,9 @@ static const char *kPlaylistsFileName     = "youtube_playlists.txt";
 // Device-flow tokens carry ~10 min expiry claims; slack guards clock skew
 // and lets callers refresh instead of using a dead bearer.
 constexpr qint64 kAuthSlackS = ytauth::kAuthSlackS; // seconds (single source: util/YtAuthGate.h)
+// Guard rail beside YtSponsorEdl's segment cap: never parse a pathological
+// skipSegments body on the GUI thread. 1 MiB is far above a real 4-hex bucket.
+constexpr qsizetype kSponsorMaxResponseBytes = 1 << 20;
 
 static QString watchUrlFor(const QString &videoId) {
     return QStringLiteral("https://www.youtube.com/watch?v=") + videoId;
@@ -1022,13 +1025,20 @@ void YouTubeBackend::ensureSponsorCacheLoaded()
                     legacyDirty = true;
                     continue;
                 }
+                // Oversized legacy entry: drop it whole and self-heal the file
+                // instead of loading an unbounded cut list at startup.
+                const QJsonArray rowArray = rows.toArray();
+                if (rowArray.size() > yt::kMaxRawRowsPerGroup) {
+                    legacyDirty = true;
+                    continue;
+                }
                 // Duplicates keep the FIRST occurrence whole (payload, stamp
                 // and position), so the legacy prune stays deterministic.
                 if (m_sponsorCache.contains(vid)) {
                     legacyDirty = true;
                     continue;
                 }
-                m_sponsorCache.insert(vid, yt::segmentsFromRows(rows.toArray()));
+                m_sponsorCache.insert(vid, yt::segmentsFromRows(rowArray));
                 // Keep the ORIGINAL stamp (0 = pre-stamp legacy entry) through
                 // the prune; re-stamping happens only AFTER ordering, below.
                 m_sponsorFetchedAt.insert(vid, static_cast<qint64>(
@@ -1331,8 +1341,22 @@ void YouTubeBackend::requestSponsorSegments(const QString &videoId)
             reply->deleteLater();
             return;
         }
+        const QByteArray body = reply->readAll();
+        if (body.size() > kSponsorMaxResponseBytes) {
+            // Fail closed before JSON parsing: keep any cut list already cached
+            // for this video, and negative-cache the oversize answer so a
+            // pathological endpoint cannot be re-parsed on every play.
+            qWarning("[Youtube] sponsor oversize vid=%s bytes=%lld",
+                     qPrintable(videoId), static_cast<long long>(body.size()));
+            m_sponsorStartMs.remove(videoId);
+            m_sponsorFetching.remove(videoId);
+            m_sponsorFailedAt.insert(videoId, QDateTime::currentMSecsSinceEpoch());
+            ytlru::capFailures(m_sponsorFailedAt, kSponsorFailedAtMaxEntries);
+            reply->deleteLater();
+            return;
+        }
         QJsonParseError pe;
-        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll(), &pe);
+        const QJsonDocument doc = QJsonDocument::fromJson(body, &pe);
         const QVector<yt::Segment> segs =
             doc.isArray() ? yt::sponsorSegmentsFromJson(doc.array(), videoId)
                           : QVector<yt::Segment>{};

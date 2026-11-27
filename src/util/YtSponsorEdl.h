@@ -8,6 +8,11 @@
 // one virtual timeline; skip = ranges omitted; mark = boundary cuts whose
 // segment "title" param becomes an OSC chapter title. See THANKS.md.
 //
+// Bounds (YT-SPONSEG-EDL-ALLOC-01): one oversized response is rejected whole
+// instead of being cached, lookups are binary searches over sorted copies, and
+// the emitted EDL body is capped. Small responses keep the original byte-for-
+// byte output — the bounds only change behaviour past the guard rails.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <QString>
@@ -20,6 +25,14 @@
 #include <algorithm>
 
 namespace yt {
+
+// A 4-hex-prefix bucket is tiny in practice; 2000 accepted segments is far
+// above any real response. The raw-row guard stops an oversized bucket before
+// a single Segment is allocated. 1 MiB of EDL text is well beyond a real cut
+// list (2000 cuts at ~150 B each) but keeps a raw buildEdl caller bounded.
+static constexpr int       kMaxSegmentsPerResponse = 2000;
+static constexpr qsizetype kMaxRawRowsPerGroup     = 4 * kMaxSegmentsPerResponse;
+static constexpr qsizetype kMaxEdlBodyLen          = 1 << 20; // 1 MiB
 
 struct Segment {
     QString category; // sponsor, selfpromo, intro, outro, intermission, preview, filler, interaction
@@ -38,9 +51,14 @@ struct Segment {
 };
 
 // Parse a bare array of segment rows ({category, segmentType, segment:[s,e]}).
+// An oversized row set is rejected before allocation; the caller self-heals
+// such a legacy cache entry, and a live response is treated as "no cuts".
 inline QVector<Segment> segmentsFromRows(const QJsonArray &rows)
 {
     QVector<Segment> out;
+    if (rows.size() > kMaxRawRowsPerGroup)
+        return out;
+    out.reserve(rows.size());
     for (const QJsonValue &s : rows) {
         if (!s.isObject())
             continue;
@@ -72,7 +90,9 @@ inline QVector<Segment> segmentsFromRows(const QJsonArray &rows)
 
 // Parse one "skipSegments" response array for a hash-prefix collision group,
 // keeping only rows for the exact videoId (Red collision doctrine), dropping
-// degenerate ranges ("full" arrives as [0,0]) and sorting by start.
+// degenerate ranges ("full" arrives as [0,0]) and sorting by start. A response
+// above the accepted-row bound is discarded wholesale: no partial cut list is
+// ever served or cached from it.
 inline QVector<Segment> sponsorSegmentsFromJson(const QJsonArray &payload,
                                                 const QString &videoId)
 {
@@ -85,6 +105,8 @@ inline QVector<Segment> sponsorSegmentsFromJson(const QJsonArray &payload,
             continue;
         out += segmentsFromRows(group.value(QStringLiteral("segments")).toArray());
     }
+    if (out.size() > kMaxSegmentsPerResponse)
+        return QVector<Segment>();
     std::sort(out.begin(), out.end(), [](const Segment &a, const Segment &b) {
         return a.start != b.start ? a.start < b.start : a.end < b.end;
     });
@@ -155,26 +177,54 @@ inline QString buildEdl(const QString &url,
     if (skip.isEmpty() && marks.isEmpty())
         return QString();
 
-    auto inSkip = [&skip](double t) {
-        for (const auto &r : skip)
-            if (t >= r.first && t <= r.second)
-                return true;
-        return false;
+    // Sorted copies keep the binary searches valid for a raw caller too. The
+    // prefix maximum of range ends handles nested/overlapping cut ranges: a
+    // lower_bound on starts alone could miss a longer earlier range.
+    QVector<QPair<double, double>> orderedSkip = skip;
+    std::sort(orderedSkip.begin(), orderedSkip.end(),
+              [](const QPair<double, double> &a, const QPair<double, double> &b) {
+                  return a.first != b.first ? a.first < b.first : a.second < b.second;
+              });
+    QVector<double> maxEnd(orderedSkip.size());
+    double runningEnd = -1.0;
+    for (qsizetype i = 0; i < orderedSkip.size(); ++i) {
+        runningEnd = qMax(runningEnd, orderedSkip.at(i).second);
+        maxEnd[i] = runningEnd;
+    }
+    auto inSkip = [&orderedSkip, &maxEnd](double t) {
+        auto it = std::upper_bound(orderedSkip.cbegin(), orderedSkip.cend(), t,
+                                   [](double v, const QPair<double, double> &r) {
+                                       return v < r.first;
+                                   });
+        if (it == orderedSkip.cbegin())
+            return false;
+        const qsizetype idx = (it - orderedSkip.cbegin()) - 1;
+        return maxEnd.at(idx) >= t;
     };
-    auto markTitle = [&marks](double segStart) {
-        for (const Segment &m : marks)
-            if (segStart >= m.start - 1e-6 && segStart < m.end - 1e-6)
-                return m.category;
+    QVector<Segment> orderedMarks = marks;
+    std::sort(orderedMarks.begin(), orderedMarks.end(),
+              [](const Segment &a, const Segment &b) {
+                  return a.start != b.start ? a.start < b.start : a.end < b.end;
+              });
+    auto markTitle = [&orderedMarks](double segStart) {
+        auto it = std::upper_bound(orderedMarks.cbegin(), orderedMarks.cend(),
+                                   segStart + 1e-6,
+                                   [](double v, const Segment &m) { return v < m.start; });
+        if (it == orderedMarks.cbegin())
+            return QString();
+        --it;
+        if (segStart >= it->start - 1e-6 && segStart < it->end - 1e-6)
+            return it->category;
         return QString();
     };
 
     QSet<double> ptSet;
-    for (const auto &r : skip) {
+    for (const auto &r : orderedSkip) {
         if (r.first > 1e-6)
             ptSet.insert(r.first);
         ptSet.insert(r.second);
     }
-    for (const Segment &m : marks) {
+    for (const Segment &m : orderedMarks) {
         if (m.start > 1e-6)
             ptSet.insert(m.start);
         ptSet.insert(m.end);
@@ -184,8 +234,11 @@ inline QString buildEdl(const QString &url,
 
     QString body;
     bool titles = false;
+    bool bodyCapped = false;
     double pos = 0.0;
     auto emitSeg = [&](double a, double b, bool open) {
+        if (bodyCapped)
+            return;
         if (inSkip(a + 0.001))
             return;
         const QString title = markTitle(a);
@@ -193,21 +246,30 @@ inline QString buildEdl(const QString &url,
             titles = true;
         if (!open && b - a <= 1e-9)
             return;
-        if (!body.isEmpty())
-            body += u';';
-        body += edlFile(url);
+        QString chunk;
+        chunk += edlFile(url);
         const bool hasStart = a > 1e-9;
         if (open) {
             if (hasStart)
-                body += u',' + fmtTime(a);
+                chunk += u',' + fmtTime(a);
         } else {
             if (hasStart)
-                body += u',' + fmtTime(a) + u',' + fmtTime(b - a);
+                chunk += u',' + fmtTime(a) + u',' + fmtTime(b - a);
             else
-                body += u',' + fmtTime(0.0) + u',' + fmtTime(b - a);
+                chunk += u',' + fmtTime(0.0) + u',' + fmtTime(b - a);
         }
         if (!title.isEmpty())
-            body += QStringLiteral(",title=") + edlValue(title);
+            chunk += QStringLiteral(",title=") + edlValue(title);
+        // Guard rail: stop emitting instead of growing an unbounded URI. The
+        // parse cap keeps production far below this; a raw caller cannot.
+        const qsizetype add = chunk.size() + (body.isEmpty() ? 0 : 1);
+        if (body.size() + add > kMaxEdlBodyLen) {
+            bodyCapped = true;
+            return;
+        }
+        if (!body.isEmpty())
+            body += u';';
+        body += chunk;
     };
     for (double p : points) {
         if (p > pos) {
