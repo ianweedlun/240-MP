@@ -235,6 +235,9 @@ int EmbyBackend::videoQualityMaxHeight() const {
 QNetworkRequest EmbyBackend::embyRequest(const QUrl &url) const {
     QNetworkRequest req(url);
     req.setRawHeader("Accept", "application/json");
+    // Idle-reset transfer timeout: a body that keeps progressing is fine, but
+    // a server that stops sending mid-response must not hang the library view.
+    req.setTransferTimeout(5000);
     // Emby's canonical auth header (Jellyfin renamed this to "Authorization").
     req.setRawHeader("X-Emby-Authorization", authHeaderValue(m_accessToken, m_deviceId).toLatin1());
     if (!m_accessToken.isEmpty())
@@ -800,14 +803,36 @@ void EmbyBackend::load_libraries() {
 
     QUrl url(m_serverUrl + "/Users/" + m_userId + "/Views");
     auto *reply = embyGet(url);
+    // Bound the body before it is buffered: finished() runs only after the
+    // whole reply is in memory, so the cap has to ride on downloadProgress.
+    static const qint64 kMaxBodyBytes = 64 * 1024 * 1024;
+    static const int kMaxItems = 10000;
+    connect(reply, &QNetworkReply::downloadProgress, this,
+            [this, reply](qint64 received, qint64) {
+                if (received <= kMaxBodyBytes
+                    || reply->property("bodycapRejected").toBool())
+                    return;
+                reply->setProperty("bodycapRejected", true);
+                reply->abort();
+                emit errorOccurred(QStringLiteral("LIBRARY LOAD REJECTED: payload exceeds ")
+                                   + QString::number(kMaxBodyBytes)
+                                   + QLatin1String(" bytes"));
+            });
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            emit errorOccurred("LOAD LIBRARIES FAILED: " + reply->errorString());
+            // The abort above already reported its own typed error.
+            if (!reply->property("bodycapRejected").toBool())
+                emit errorOccurred("LOAD LIBRARIES FAILED: " + reply->errorString());
             return;
         }
 
         QJsonArray items = QJsonDocument::fromJson(reply->readAll()).object()["Items"].toArray();
+        if (items.size() > kMaxItems) {
+            emit errorOccurred(QStringLiteral("LIBRARY LOAD REJECTED: item count exceeds ")
+                               + QString::number(kMaxItems));
+            return;
+        }
         // Honour the user's library filter (Settings → Libraries). Empty map ==
         // never configured, so show everything; otherwise hide explicitly-disabled ones.
         QJsonObject libEnabled = moduleConfig()["libraries"].toObject();
