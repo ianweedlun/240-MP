@@ -44,7 +44,10 @@ FocusScope {
     function teardown() {
         if (exiting) return
         exiting = true
-        plexBackend.stop_live_session(sessionId)
+        // Only release a real tuner session. On logout/app quit the context
+        // property may already be null, and an empty id would clear the
+        // timeline key without stopping the transcode.
+        if (plexBackend && sessionId !== "") plexBackend.stop_live_session(sessionId)
         mpvController.stop()
     }
 
@@ -124,6 +127,7 @@ FocusScope {
         onTriggered: plexBackend.update_live_timeline("playing")
     }
 
+    Component.onDestruction: teardown()
     Component.onCompleted: tune()
 
     // Black backdrop + loading text, shown until mpv's window takes over (mirrors
