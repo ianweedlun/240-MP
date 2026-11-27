@@ -39,6 +39,12 @@ jobs:
         run: |
           cmake --install build --prefix "${GITHUB_WORKSPACE}/install/usr/local"
 
+      # W7: -12.6% deploy-binary size on arm64, no code or runtime change.
+      # The tarball is the deploy payload, so both sides of the md5 gate see
+      # the same stripped bytes.
+      - name: Strip deploy binary
+        run: strip --strip-unneeded "${GITHUB_WORKSPACE}/install/usr/local/bin/240mp"
+
       - name: Create tarball with branch/commit naming
         run: |
           BRANCH="${GITHUB_REF#refs/heads/}"
