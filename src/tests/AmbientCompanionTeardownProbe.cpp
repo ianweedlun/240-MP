@@ -262,6 +262,12 @@ int main(int argc, char **argv)
 
     const QString src = wrapper.url().toString();
     bool skipFinalTeardown = false;
+    // A QML load failure (e.g. missing WorkerScript module on an older lane)
+    // leaves host null; keep the drive loops safe so the JSON verdict still
+    // reports the failed arm instead of segfaulting.
+    auto setSource = [host](const QVariant &v) {
+        if (host) host->setProperty("playerSource", v);
+    };
 
     // Loader instantiates Player -> Component.onCompleted -> startAudio -> fake mpv.
     if (host) host->setProperty("playerSource", src);
@@ -286,18 +292,18 @@ int main(int argc, char **argv)
         for (int i = 0; i < cycles; ++i) {
             mpv.fireEnded();
             pump(120);
-            host->setProperty("playerSource", QVariant(QString()));
+            setSource(QVariant(QString()));
             pump(150);
-            if (i < cycles - 1) { host->setProperty("playerSource", QVariant(src)); pump(300); }
+            if (i < cycles - 1) { setSource(QVariant(src)); pump(300); }
         }
         skipFinalTeardown = true;
     } else if (caseName == QStringLiteral("repeat-teardown")) {
         // Repeated load -> Loader source reset WITHOUT playbackEnded. This is
         // the exact path that leaks a companion child on the pre-fix view.
         for (int i = 0; i < cycles; ++i) {
-            host->setProperty("playerSource", QVariant(QString()));
+            setSource(QVariant(QString()));
             pump(450);
-            if (i < cycles - 1) { host->setProperty("playerSource", QVariant(src)); pump(300); }
+            if (i < cycles - 1) { setSource(QVariant(src)); pump(300); }
         }
         skipFinalTeardown = true;
     }

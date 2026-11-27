@@ -39,10 +39,14 @@ cmake --build build-test -j4
 ctest --test-dir build-test -R ambient-companion-teardown --output-on-failure
 ```
 
-Linux and macOS both run: the liveness check uses `kill(pid,0)` everywhere and
-adds a `/proc` zombie exclusion on Linux. `RUN_SERIAL` keeps the fake mpv PID
-registry and PATH stub isolated between arms. Each arm is a separate probe
-process, and the probe reaps any orphaned fixture child before exiting.
+Linux and macOS both run the gate on the CI x86 lane. The arm64 lane ships
+Qt 6.4 without the `QtQml.WorkerScript` module that `import QtQuick` needs
+there, so `ci.yml` excludes `ambient-companion-teardown` from that lane's
+ctest regex (same treatment as the other QML runtime smokes). The liveness
+check uses `kill(pid,0)` everywhere and adds a `/proc` zombie exclusion on
+Linux. `RUN_SERIAL` keeps the fake mpv PID registry and PATH stub isolated
+between arms. Each arm is a separate probe process, and the probe reaps any
+orphaned fixture child before exiting.
 
 Evidence per arm: `build-test/ambient-companion-teardown-evidence/<case>/`
 holds `result.json`, `stdout.txt`, `stderr.txt` and `verdict.json`.
