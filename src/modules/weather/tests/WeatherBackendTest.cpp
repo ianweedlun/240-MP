@@ -5,6 +5,8 @@
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QJsonDocument>
@@ -478,6 +480,59 @@ private slots:
             probe.close();
             QVERIFY(probe.remove());
         }
+    }
+
+    // WEATHER-MUSIC-IPC-BUFFER-LEAK-01: with no readyRead drain, every mpv
+    // acknowledgement stays in Qt's read buffer. Flood past the cap and assert
+    // the buffer drains, stays bounded, and the socket still works afterwards.
+    void musicIpcReadPolicyDrainsAndBoundsBuffer()
+    {
+        QLocalServer server;
+        const QString name = QStringLiteral("240mp-wx-readpolicy-%1")
+                                 .arg(QCoreApplication::applicationPid());
+        QVERIFY2(server.listen(name), qPrintable(server.errorString()));
+
+        QLocalSocket client;
+        // Connections fire in the order made, so this counter sees the bytes
+        // before the production drain consumes them.
+        qint64 peakAvailable = 0;
+        int drains = 0;
+        QObject::connect(&client, &QLocalSocket::readyRead, &client, [&]() {
+            ++drains;
+            peakAvailable = qMax(peakAvailable,
+                                static_cast<qint64>(client.bytesAvailable()));
+        });
+        WeatherBackend::configureIpcReadPolicy(&client);
+        QCOMPARE(client.readBufferSize(), 64 * 1024);
+
+        client.connectToServer(name);
+        QVERIFY(waitFor([&] {
+            return client.state() == QLocalSocket::ConnectedState;
+        }, 2000));
+        QVERIFY(waitFor([&] { return server.hasPendingConnections(); }, 2000));
+        QLocalSocket *peer = server.nextPendingConnection();
+        QVERIFY(peer != nullptr);
+
+        const QByteArray reply = QByteArray("{\"error\":\"success\"}\n");
+        QByteArray flood;
+        flood.reserve(reply.size() * 4000);
+        for (int i = 0; i < 4000; ++i) flood += reply;   // ~92 KiB > 64 KiB cap
+        peer->write(flood);
+        peer->flush();
+        QVERIFY(waitFor([&] { return peer->bytesToWrite() == 0; }, 5000));
+        settle(100);
+
+        QVERIFY(drains > 0);
+        QVERIFY2(peakAvailable <= 64 * 1024, "read buffer never exceeds the cap");
+        QCOMPARE(client.bytesAvailable(), 0);                       // drained
+        QVERIFY(client.state() == QLocalSocket::ConnectedState);     // usable
+
+        // A normal reply after the flood must still arrive and be drained.
+        const int before = drains;
+        peer->write(reply);
+        peer->flush();
+        QVERIFY(waitFor([&] { return drains > before; }, 2000));
+        QCOMPARE(client.bytesAvailable(), 0);
     }
 
     // Comment and blank lines in weather_location.txt must survive a location

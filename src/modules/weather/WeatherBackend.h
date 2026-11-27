@@ -94,6 +94,11 @@ public:
     // Pause/resume in place over mpv's IPC socket, so the current track survives
     // the toggle. Session-only: it deliberately does not write the setting.
     Q_INVOKABLE void toggleMusic();
+    // Bounded, self-draining read policy for the background-music IPC socket.
+    // mpv commands carry no request_id, so replies and events are read to
+    // completion and discarded — without this, Qt retains every reply for the
+    // lifetime of the process. Also the seam the drain regression test uses.
+    static void configureIpcReadPolicy(QLocalSocket *socket);
     // The music plays at full and lets the system mixer be the volume, so the
     // only thing left to move it here is ducking under the guide's preview.
     // A ducked track fades to silence and back; nothing else touches it.

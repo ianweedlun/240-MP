@@ -33,6 +33,11 @@ using namespace wxcodes;
 namespace {
 
 const char *kModuleId   = "com.240mp.weather";
+
+// Upper bound on the Qt read buffer of the background-music IPC socket. mpv
+// acknowledges every command and emits events; without a drain this buffer
+// grows for the whole life of the process (WEATHER-MUSIC-IPC-BUFFER-LEAK-01).
+const qint64 kMusicIpcReadBufferCap = 64 * 1024;
 const char *kForecastUrl = "https://api.open-meteo.com/v1/forecast";
 const char *kGeocodeUrl  = "https://geocoding-api.open-meteo.com/v1/search";
 const char *kNwsBaseUrl  = "https://api.weather.gov";
@@ -474,6 +479,7 @@ void WeatherBackend::startMusic() {
     // never listens used to keep this timer hot for the whole process.
     if (!m_musicIpc) {
         m_musicIpc = new QLocalSocket(this);
+        configureIpcReadPolicy(m_musicIpc);
         connect(m_musicIpc, &QLocalSocket::connected, this, [this]() {
             m_musicConnect->stop();
             // A listener that shows up after the last retry still wins.
@@ -584,6 +590,23 @@ void WeatherBackend::startMusicFade(double target, int ms) {
     const int steps = qMax(1, ms / m_musicFade->interval());
     m_musicFadeStep = (m_musicFadeTo - m_musicApplied) / steps;
     m_musicFade->start();
+}
+
+void WeatherBackend::configureIpcReadPolicy(QLocalSocket *socket)
+{
+    if (!socket) return;
+    socket->setReadBufferSize(kMusicIpcReadBufferCap);
+    // Parented to the socket, so the handler goes away with it on teardown.
+    QObject::connect(socket, &QLocalSocket::readyRead, socket, [socket]() {
+        // mpv replies and events are newline-delimited JSON. Every command we
+        // send is fire-and-forget — there is no request_id to correlate — so
+        // consume the lines and discard them. readLine's cap stops one
+        // unterminated line from pinning the buffer; the loop drains to empty.
+        while (socket->bytesAvailable() > 0) {
+            if (socket->readLine(kMusicIpcReadBufferCap).isEmpty())
+                break;
+        }
+    });
 }
 
 void WeatherBackend::applyMusicVolume() {
