@@ -442,6 +442,27 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-backend COMMAND weather-backend-tests)
 
+    # Permanent gate for the bounded weather music IPC connect sequence. A fake
+    # mpv stays alive but never opens its IPC socket, so the real backend must
+    # exhaust its retry bound, emit one failure signal, stop polling, and reset
+    # cleanly on stopMusic()/re-arm. Serial: the test owns a per-process TMPDIR
+    # and the mpv socket name.
+    add_executable(weather-music-ipc-retry-tests
+        src/modules/weather/tests/MusicIpcRetryTest.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(weather-music-ipc-retry-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-music-ipc-retry-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    target_include_directories(weather-music-ipc-retry-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-music-ipc-retry-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-music-ipc-retry COMMAND weather-music-ipc-retry-tests)
+    set_tests_properties(weather-music-ipc-retry PROPERTIES RUN_SERIAL TRUE)
+
     # Standalone probe: does a QTemporaryDir QFile write persist?
     add_executable(writefile-probe-tests
         src/modules/weather/tests/WriteFileProbeTest.cpp)
