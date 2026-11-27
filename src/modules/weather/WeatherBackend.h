@@ -283,6 +283,10 @@ private:
     // Shared by the connect timeout, the socket error handler and the deadline
     // check: stops the timer once, defers the emit, suppresses duplicates.
     void          failMusicIpc(const QString &reason);
+    // Write-side flood guard: a fade writes one command per timer tick, and a
+    // peer that stops reading lets QLocalSocket queue them without bound.
+    bool          m_musicVolumeDeferred = false;   // newest volume awaiting buffer room
+    bool          m_musicWriteDrainConnected = false;
     void          applyMusicVolume();
     void          startMusicFade(double target, int ms);
 

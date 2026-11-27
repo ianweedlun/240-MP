@@ -612,12 +612,40 @@ void WeatherBackend::configureIpcReadPolicy(QLocalSocket *socket)
 void WeatherBackend::applyMusicVolume() {
     if (!m_music || m_music->state() == QProcess::NotRunning) return;
     if (!m_musicIpc || m_musicIpc->state() != QLocalSocket::ConnectedState) return;
+
+    // A fade drives one write every 40 ms. Against a peer that stops reading,
+    // QLocalSocket keeps every command in its pending buffer, which grows with
+    // no bound. Cap what we queue: once the pending bytes reach the limit,
+    // remember the newest desired volume instead of queuing another command.
+    // bytesWritten() re-enters this method once the backlog drains, so the
+    // coalesced final value is delivered and later fades keep working.
+    static constexpr qint64 kPendingWriteCap = 64 * 1024;
+
     const QJsonObject cmd{
         { QStringLiteral("command"),
           QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
                       qRound(m_musicApplied) } }
     };
-    m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
+    const QByteArray payload = QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n";
+
+    if (m_musicIpc->bytesToWrite() + payload.size() > kPendingWriteCap) {
+        m_musicVolumeDeferred = true;
+        return;
+    }
+
+    // Connect lazily so this fix stays inside applyMusicVolume() and does not
+    // touch the IPC setup block. The context object keeps the connection
+    // scoped to this backend; it is made once for the socket's lifetime.
+    if (!m_musicWriteDrainConnected) {
+        connect(m_musicIpc, &QLocalSocket::bytesWritten, this, [this](qint64) {
+            if (m_musicVolumeDeferred) applyMusicVolume();
+        });
+        m_musicWriteDrainConnected = true;
+    }
+
+    // Clear before write(): bytesWritten() may be emitted synchronously.
+    m_musicVolumeDeferred = false;
+    m_musicIpc->write(payload);
 }
 
 void WeatherBackend::stopMusic() {
