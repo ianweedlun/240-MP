@@ -58,6 +58,10 @@ FocusScope {
         }
     }
 
+    // Companion audio is a separate looping mpv that outlives any teardown
+    // which does not fire playbackEnded; stop it whenever this view goes away.
+    Component.onDestruction: ambientModeBackend.stopAudio()
+
     Component.onCompleted: {
         if (videoPath === "" && videoPaths.length === 0) {
             goBack()
