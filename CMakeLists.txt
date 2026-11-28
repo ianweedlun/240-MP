@@ -1455,6 +1455,91 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME yt-sponsor-persistence COMMAND yt-sponsor-persistence-tests)
 
+    # YT-PLAYLIST-FETCH-FANOUT-UNBOUNDED-01: two-sided CTest gate. RED compiles
+    # the sha256-pinned pre-fix product text (QStringList dedup, unbounded id
+    # fanout, no row budget); GREEN compiles product text extracted verbatim
+    # from this tree at build time. The gate passes only when RED still shows
+    # the defect shape AND GREEN shows near-linear / bounded behavior, so
+    # neither a product regression nor tampering with the control can make it
+    # green. A second ctest drives the real YouTubeBackend retention path.
+    set(YT_FANOUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/yt-playlist-fanout)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/yt_playlist_entries_green.inc
+        COMMAND ${Python3_EXECUTABLE}
+            ${YT_FANOUT_DIR}/extract_yt_playlist_entries.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/YouTubeBackend.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/YouTubeBackend.h
+            ${CMAKE_CURRENT_BINARY_DIR}/yt_playlist_entries_green.inc
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/YouTubeBackend.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/modules/youtube/YouTubeBackend.h
+                ${YT_FANOUT_DIR}/extract_yt_playlist_entries.py
+        COMMENT "Extracting verbatim playlist-entry text for the fanout gate"
+        VERBATIM)
+    add_executable(yt-playlist-fanout-probe
+        ${YT_FANOUT_DIR}/YtPlaylistFanoutProbe.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/yt_playlist_entries_green.inc)
+    set_target_properties(yt-playlist-fanout-probe PROPERTIES
+        AUTOMOC OFF CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-playlist-fanout-probe PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR} ${YT_FANOUT_DIR})
+    target_link_libraries(yt-playlist-fanout-probe PRIVATE Qt6::Core)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # The timing arm must never inherit a sanitizer from the build config.
+        target_compile_options(yt-playlist-fanout-probe PRIVATE -O2 -Wall -Wextra
+            -fno-sanitize=address,undefined)
+        target_link_options(yt-playlist-fanout-probe PRIVATE
+            -fno-sanitize=address,undefined)
+    endif()
+    # Correctness/sanitizer arm: same probe, Linux only (RSS seam is /proc and
+    # the thresholds were calibrated there). No timing assertions on this arm.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(yt-playlist-fanout-probe-asan
+            ${YT_FANOUT_DIR}/YtPlaylistFanoutProbe.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/yt_playlist_entries_green.inc)
+        set_target_properties(yt-playlist-fanout-probe-asan PROPERTIES
+            AUTOMOC OFF CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+        target_include_directories(yt-playlist-fanout-probe-asan PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR} ${YT_FANOUT_DIR})
+        target_link_libraries(yt-playlist-fanout-probe-asan PRIVATE Qt6::Core)
+        target_compile_options(yt-playlist-fanout-probe-asan PRIVATE -O1 -g
+            -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(yt-playlist-fanout-probe-asan PRIVATE
+            -fsanitize=address,undefined)
+    endif()
+
+    add_executable(yt-playlist-fanout-retention-tests
+        src/modules/youtube/tests/YtPlaylistFanoutRetentionTest.cpp
+        src/modules/youtube/YouTubeBackend.cpp
+        src/modules/youtube/YtInnertubeResolver.cpp)
+    set_target_properties(yt-playlist-fanout-retention-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(yt-playlist-fanout-retention-tests PRIVATE src)
+    target_link_libraries(yt-playlist-fanout-retention-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test innertube-qt)
+    if(NOT MSVC)
+        target_compile_options(yt-playlist-fanout-retention-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME yt-playlist-retention-real COMMAND yt-playlist-fanout-retention-tests)
+    set_tests_properties(yt-playlist-retention-real PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+
+    set(YT_FANOUT_ASAN_ARGS "")
+    if(TARGET yt-playlist-fanout-probe-asan)
+        set(YT_FANOUT_ASAN_ARGS --probe-asan $<TARGET_FILE:yt-playlist-fanout-probe-asan>)
+    endif()
+    add_test(NAME yt-playlist-fanout-two-sided
+        COMMAND ${Python3_EXECUTABLE}
+            ${YT_FANOUT_DIR}/run_yt_playlist_fanout_case.py
+            --case two-sided
+            --probe $<TARGET_FILE:yt-playlist-fanout-probe>
+            ${YT_FANOUT_ASAN_ARGS}
+            --retention-tests $<TARGET_FILE:yt-playlist-fanout-retention-tests>
+            --pre-fix-dir ${YT_FANOUT_DIR}
+            --out ${CMAKE_CURRENT_BINARY_DIR}/yt-playlist-fanout-evidence.json)
+    set_tests_properties(yt-playlist-fanout-two-sided PROPERTIES
+        TIMEOUT 300 RUN_SERIAL TRUE
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
     # OAuth credential-expiry gate (issue #28): pure clock math for refresh-
     # before-expiry semantics. No processes, no network.
     add_executable(yt-auth-gate-tests
