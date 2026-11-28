@@ -632,6 +632,65 @@ void YouTubeBackend::browsePlaylist(const QString &playlistId, const QString &cu
     });
 }
 
+// Keep the total cached rows across m_playlists under the global budget before
+// a fresh fetch replaces one playlist's rows. Eviction is deterministic:
+// oldest fetchedMs first, playlistId as the tiebreak. Entries are cleared (not
+// erased) so they stay listed and are refetched next load (fetchOk=false makes
+// them stale). The playlist being stored and the one whose videos were asked
+// for are protected, so an in-flight emit cannot lose its target. Nothing is
+// mutated while iterating: ids are gathered first, then re-found with an end()
+// check before touching the hash.
+bool YouTubeBackend::evictPlaylistRowsToFit(const QString &keepId, int &incomingRows)
+{
+    incomingRows = qBound(0, incomingRows, qMin(kMaxPlaylistItems, kMaxRetainedPlaylistRows));
+
+    // keepId's old rows get replaced, not added, so they must not count here.
+    int projected = 0;
+    for (auto it = m_playlists.constBegin(); it != m_playlists.constEnd(); ++it) {
+        if (it.key() != keepId)
+            projected += it->videos.size();
+    }
+    if (projected + incomingRows <= kMaxRetainedPlaylistRows)
+        return incomingRows > 0;
+
+    QSet<QString> protectedIds{keepId};
+    if (!m_emitPlaylistVideosWhenDone.isEmpty())
+        protectedIds.insert(m_emitPlaylistVideosWhenDone);
+
+    QStringList evictable;
+    for (auto it = m_playlists.constBegin(); it != m_playlists.constEnd(); ++it) {
+        if (it->videos.isEmpty() || protectedIds.contains(it.key()))
+            continue;
+        evictable << it.key();
+    }
+    std::sort(evictable.begin(), evictable.end(),
+              [this](const QString &a, const QString &b) {
+                  const auto ia = m_playlists.constFind(a);
+                  const auto ib = m_playlists.constFind(b);
+                  const qint64 ta = ia != m_playlists.constEnd() ? ia->fetchedMs : 0;
+                  const qint64 tb = ib != m_playlists.constEnd() ? ib->fetchedMs : 0;
+                  return ta != tb ? ta < tb : a < b;
+              });
+
+    for (const QString &id : evictable) {
+        if (projected + incomingRows <= kMaxRetainedPlaylistRows)
+            break;
+        auto it = m_playlists.find(id);
+        if (it == m_playlists.end())   // defensive: entry gone since collection
+            continue;
+        projected -= it->videos.size();
+        it->videos.clear();
+        it->fetchOk   = false;         // stale -> refetch; never serve empty rows
+        it->fetchedMs = 0;
+    }
+
+    // Protected entries alone can still fill the budget. Shrink this fetch
+    // rather than break the cap. Zero means "keep the previous cached rows".
+    if (projected + incomingRows > kMaxRetainedPlaylistRows)
+        incomingRows = qMax(0, kMaxRetainedPlaylistRows - projected);
+    return incomingRows > 0;
+}
+
 // Rebuild the exact yt-dlp --flat-playlist output shape the playlist model
 // consumed: id/title/channel with tombstones dropped and flat-entry defaults
 // (no publish date, not a short). Playlist order is browse order, exactly
@@ -667,11 +726,17 @@ void YouTubeBackend::assemblePlaylistFromBrowse(const QString &playlistId, const
         videos.append(v);
     }
     if (!videos.isEmpty()) {
-        PlaylistEntry &entry = m_playlists[playlistId];
-        entry.fetchedTitle = title;
-        entry.videos       = videos;
-        entry.fetchOk      = true;
-        entry.fetchedMs    = QDateTime::currentMSecsSinceEpoch();
+        int rowsToStore = videos.size();
+        if (evictPlaylistRowsToFit(playlistId, rowsToStore) && rowsToStore > 0) {
+            if (rowsToStore < videos.size())
+                videos = videos.mid(0, rowsToStore);
+            PlaylistEntry &entry = m_playlists[playlistId];
+            entry.fetchedTitle = title;
+            entry.videos       = videos;
+            entry.fetchOk      = true;
+            entry.fetchedMs    = QDateTime::currentMSecsSinceEpoch();
+        }
+        // No room under the global budget: keep any previously cached videos.
     }
     // On failure: keep any previously cached videos (stale beats empty)
 
