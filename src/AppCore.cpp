@@ -142,6 +142,14 @@ void AppCore::scan_for_modules() {
             qDebug("[AppCore] Module disabled: %s", qPrintable(m.name));
             continue;
         }
+        // Enabled in config but not built at startup (its gate was off when the
+        // app launched): no backend exists, so the row would open a dead view.
+        // The enable flag applies on next launch; skip the row until then.
+        if (!m_backends.contains(m.id)) {
+            qWarning("[AppCore] Module enabled but not loaded this session: %s (restart to load)",
+                     qPrintable(m.name));
+            continue;
+        }
         // entry_point is a path relative to APP_ROOT
         QString entryPoint = QStringLiteral("modules/%1/%2").arg(m.folder, m.entryQml);
         QVariantMap entry;
@@ -185,7 +193,7 @@ void AppCore::scan_for_modules() {
 
 QVariantList AppCore::menuEntriesForModule(const QString &moduleId) const {
     auto it = m_backends.find(moduleId);
-    if (it == m_backends.end()) return {};
+    if (it == m_backends.end() || !it.value()) return {};
     if (it.value()->metaObject()->indexOfMethod(
             QMetaObject::normalizedSignature("get_menu_entries()")) < 0) {
         return {};
@@ -367,6 +375,7 @@ bool AppCore::save_setting(const QString &moduleId, const QString &key, const QV
                                   Q_ARG(QVariant, value));
     }
     emit moduleSettingChanged(moduleId, key, value);
+    emit restartRequiredChanged();
     return true;
 }
 
@@ -394,6 +403,33 @@ bool AppCore::is_module_enabled(const QString &moduleId) const {
     return false;
 }
 
+// Pure comparison of the on-disk module enable state against the backends
+// that are actually loaded this session. Reads config.json fresh each call.
+//
+// A module is "enabled but has no backend" when config.json enables it but
+// no backend is registered for it this session; "disabled but still
+// running" when a backend is registered but config.json disables it.
+// Either direction means the on-disk flag cannot be honored until a
+// restart, so this is the single predicate Settings.qml's banner binds to.
+bool AppCore::moduleStateChangedSinceBoot() const {
+    const QJsonObject modulesConfig = loadConfig()["modules"].toObject();
+    for (const auto &m : m_modules) {
+        const bool enabled = isModuleEnabled(m, modulesConfig);
+        const bool hasBackend = m_backends.contains(m.id) && m_backends.value(m.id) != nullptr;
+        if (enabled != hasBackend) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Q_INVOKABLE entry point for the Settings banner. Derived from disk on
+// every call, so a settings write that flips a module flag shows up here
+// without a view rebuild (AppCore::restartRequiredChanged notifies the
+// QML binding, see save_setting).
+Q_INVOKABLE bool AppCore::restart_required() const {
+    return moduleStateChangedSinceBoot();
+}
 QString AppCore::module_entry_point(const QString &moduleId) const {
     for (const auto &m : m_modules) {
         if (m.id == moduleId)
@@ -463,7 +499,12 @@ void AppCore::registerModule(const QString &moduleId, const QString &contextProp
     // a null registration acting as unregister) must sever its connections,
     // otherwise the old backend keeps firing into the re-emission slots.
     QObject *previous = m_backends.value(moduleId);
-    m_backends[moduleId] = backend;
+    // A null backend is an unregister: drop the entry rather than store a null
+    // that every lookup would then have to guard.
+    if (backend)
+        m_backends[moduleId] = backend;
+    else
+        m_backends.remove(moduleId);
     if (ctx)
         ctx->setContextProperty(contextProperty, backend);
     if (previous && previous != backend)

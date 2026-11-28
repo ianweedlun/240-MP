@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
+# W7 footprint A/B: -Os beats CMake's default -O3 on both lab x86 (binary
+# -29.1%) and the arm64 CI target (-17.7%), with no W0 latency regression.
+string(REPLACE "-O3" "-Os" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+
 # Strip qDebug(...) calls in Release builds to reduce CPU/disk noise on Pi
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DQT_NO_DEBUG_OUTPUT")
 
@@ -233,6 +237,14 @@ if(APPLE AND NOT DEFINED ENV{CI})
 endif()
 
 # ── Install rules ──────────────────────────────────────────────────────────────
+# Docs/reference payloads and an unused splash. Nothing at runtime opens these
+# (repo-wide grep, including deploy/RC workflows, finds no reference), and the
+# QML engine loads only the view files, so exclude them from installed trees.
+set(240MP_INSTALL_EXCLUDES
+    PATTERN "openapi.json" EXCLUDE
+    PATTERN "jellyfin-openapi-stable.json" EXCLUDE
+    PATTERN "boot-splash.tga" EXCLUDE
+)
 if(APPLE)
     install(TARGETS 240mp BUNDLE DESTINATION . COMPONENT Runtime)
 
@@ -270,7 +282,8 @@ if(APPLE)
         "${CMAKE_SOURCE_DIR}/assets"
         "${CMAKE_SOURCE_DIR}/scripts"
         DESTINATION "240mp.app/Contents/Resources"
-        COMPONENT Runtime)
+        COMPONENT Runtime
+        ${240MP_INSTALL_EXCLUDES})
 
     # Icon lives under packaging/macos (not assets/) so it ships alongside the
     # other macOS packaging inputs; installed at the same relative path so it
@@ -319,7 +332,8 @@ else()
         "${CMAKE_SOURCE_DIR}/assets"
         "${CMAKE_SOURCE_DIR}/scripts"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/240mp"
-        COMPONENT Runtime)
+        COMPONENT Runtime
+        ${240MP_INSTALL_EXCLUDES})
 endif()
 
 # ── Tests (opt-in) ─────────────────────────────────────────────────────────────
@@ -428,6 +442,38 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME weather-backend COMMAND weather-backend-tests)
 
+    # Permanent gate for the bounded weather music IPC connect sequence. A fake
+    # mpv stays alive but never opens its IPC socket, so the real backend must
+    # exhaust its retry bound, emit one failure signal, stop polling, and reset
+    # cleanly on stopMusic()/re-arm. Serial: the test owns a per-process TMPDIR
+    # and the mpv socket name.
+    add_executable(weather-music-ipc-retry-tests
+        src/modules/weather/tests/MusicIpcRetryTest.cpp
+        src/modules/weather/WeatherBackend.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvBasicOptions.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(weather-music-ipc-retry-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(weather-music-ipc-retry-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test)
+    target_include_directories(weather-music-ipc-retry-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(weather-music-ipc-retry-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME weather-music-ipc-retry COMMAND weather-music-ipc-retry-tests)
+    set_tests_properties(weather-music-ipc-retry PROPERTIES RUN_SERIAL TRUE)
+
+    # Standalone probe: does a QTemporaryDir QFile write persist?
+    add_executable(writefile-probe-tests
+        src/modules/weather/tests/WriteFileProbeTest.cpp)
+    set_target_properties(writefile-probe-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(writefile-probe-tests PRIVATE Qt6::Core Qt6::Test)
+    target_include_directories(writefile-probe-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(writefile-probe-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME writefile-probe COMMAND writefile-probe-tests)
+
     # AppCore -> weather module proxy (issue #53): app-level views load outside
     # the weather module's QQml scope where the module-scope "weatherBackend"
     # context property is null. The location reads are proxied through appCore,
@@ -474,6 +520,25 @@ if(BUILD_TESTS)
         target_compile_options(appcore-setting-order-tests PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME appcore-setting-order COMMAND appcore-setting-order-tests)
+
+    # restart_required(): pure module-flag vs backend comparison used by the
+    # Settings restart banner. No QML engine, no network, no active backend,
+    # no DisplayHandoff: the comparison reads config.json versus m_backends.
+    # QGuiApplication for offscreen Qt.
+    add_executable(appcore-restart-required-tests
+        src/AppCore.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvBasicOptions.cpp
+        src/tests/AppCoreRestartRequiredTest.cpp)
+    set_target_properties(appcore-restart-required-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(appcore-restart-required-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::Network Qt6::Test)
+    target_include_directories(appcore-restart-required-tests PRIVATE src)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(appcore-restart-required-tests PRIVATE -Wall -Wextra)
+    endif()
+    enable_testing()
+    add_test(NAME appcore-restart-required COMMAND appcore-restart-required-tests)
 
     # T1 M-3: re-registering the same backend/module id must not multiply
     # AppCore's signal fan-out. Real AppCore + probe backend, QSignalSpy on
@@ -800,6 +865,49 @@ if(BUILD_TESTS)
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     endforeach()
 
+    # AMBIENT-GHOST-AUDIO-01 checked-in two-sided gate. Compiles the SHIPPED
+    # AmbientModeBackend/MpvLocator/ConfigFile (no paraphrase) and loads the
+    # actual ambient Player.qml offscreen with a compiled fake mpv on PATH.
+    # The negative arm uses a pinned verbatim pre-fix view fixture, so the gate
+    # fails if the destructor cleanup is removed from the product view. Both
+    # arms assert child-PID liveness + view-driven stopAudio count (never RSS).
+    # See src/tests/README-ambient-companion-teardown.md. RUN_SERIAL keeps the
+    # fake mpv PID registry and PATH stub isolated between arms.
+    add_executable(ambient-companion-fake-mpv
+        src/tests/ambient_companion_fake_mpv.cpp)
+    set_target_properties(ambient-companion-fake-mpv PROPERTIES AUTOMOC OFF)
+    add_executable(ambient-companion-teardown-probe
+        src/tests/AmbientCompanionTeardownProbe.cpp
+        src/modules/ambient_mode/AmbientModeBackend.cpp
+        src/util/ConfigFile.cpp
+        src/util/MpvLocator.cpp)
+    set_target_properties(ambient-companion-teardown-probe PROPERTIES AUTOMOC ON)
+    target_include_directories(ambient-companion-teardown-probe PRIVATE
+        src
+        src/modules/ambient_mode)
+    target_link_libraries(ambient-companion-teardown-probe PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(ambient-companion-teardown-probe PRIVATE -Wall -Wextra)
+    endif()
+    foreach(ambient_case teardown-product teardown-prefix control-ended
+                         control-direct-stop control-empty-audio control-video-only
+                         control-repeat repeat-teardown-product repeat-teardown-prefix)
+        add_test(NAME ambient-companion-teardown-${ambient_case}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/run_ambient_companion_teardown_case.py
+                --ctest-case ${ambient_case}
+                --probe $<TARGET_FILE:ambient-companion-teardown-probe>
+                --fake-mpv $<TARGET_FILE:ambient-companion-fake-mpv>
+                --product-view ${CMAKE_CURRENT_SOURCE_DIR}/modules/ambient_mode/views/Player.qml
+                --prefix-view ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/ambient-teardown/prefix/Player.qml
+                --repo-root ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(ambient-companion-teardown-${ambient_case} PROPERTIES
+            TIMEOUT 120
+            RUN_SERIAL TRUE
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    endforeach()
+
     # Plex playback-decision logic (header-only — links nothing else).
     add_executable(plex-playback-decision
         src/modules/plex/tests/PlaybackDecisionTest.cpp)
@@ -809,6 +917,65 @@ if(BUILD_TESTS)
         target_compile_options(plex-playback-decision PRIVATE -Wall -Wextra)
     endif()
     add_test(NAME plex-playback-decision COMMAND plex-playback-decision)
+
+    # PLEX-JWT-REFRESH-LATCH-01: auth watchdog regression suite. The same cases
+    # build against product source (GREEN) or a pinned pre-fix tree (RED) via
+    # -DPLEXJWT_SOURCE_ROOT=<dir>. RED must fail the recovery cases; GREEN must
+    # pass all of them. Never gate on wall-clock RSS here.
+    set(PLEXJWT_BACKEND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/plex/PlexBackend.cpp")
+    if(PLEXJWT_SOURCE_ROOT)
+        set(PLEXJWT_BACKEND_SRC "${PLEXJWT_SOURCE_ROOT}/src/modules/plex/PlexBackend.cpp")
+    endif()
+    add_executable(plex-jwt-refresh-regression-tests
+        src/tests/plex/PlexJwtRefreshRegressionTest.cpp
+        src/tests/plex/PlexAuthFixture.cpp
+        ${PLEXJWT_BACKEND_SRC}
+        src/util/ConfigFile.cpp)
+    set_target_properties(plex-jwt-refresh-regression-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    if(PLEXJWT_SOURCE_ROOT)
+        target_include_directories(plex-jwt-refresh-regression-tests PRIVATE
+            ${PLEXJWT_SOURCE_ROOT} src)
+    else()
+        target_include_directories(plex-jwt-refresh-regression-tests PRIVATE src)
+    endif()
+    target_link_libraries(plex-jwt-refresh-regression-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test OpenSSL::Crypto)
+    if(NOT MSVC)
+        target_compile_options(plex-jwt-refresh-regression-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME plex-jwt-refresh-regression COMMAND plex-jwt-refresh-regression-tests)
+    set_tests_properties(plex-jwt-refresh-regression PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+
+    # Consumer Control drain starvation regression: the shipped slot body is
+    # lifted verbatim from src/input/InputManager.cpp at build time (see the
+    # generator) so the test follows the product code instead of a paraphrase.
+    # Linux only: evdev plus the read() wrapper used by the EINTR case.
+    if(UNIX AND NOT APPLE)
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/extract_consumer_ctrl_drain.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/input/InputManager.cpp
+                ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/input/InputManager.cpp
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/tests/extract_consumer_ctrl_drain.py
+            COMMENT "Extracting Consumer Control drain functions for regression tests"
+            VERBATIM)
+        add_executable(consumer-control-drain-tests
+            src/tests/ConsumerControlDrainTest.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/consumer_ctrl_drain.inc)
+        set_target_properties(consumer-control-drain-tests PROPERTIES AUTOMOC ON)
+        target_include_directories(consumer-control-drain-tests PRIVATE
+            ${CMAKE_CURRENT_BINARY_DIR})
+        target_link_libraries(consumer-control-drain-tests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(consumer-control-drain-tests PRIVATE -Wall -Wextra)
+            target_link_options(consumer-control-drain-tests PRIVATE -Wl,--wrap=read)
+        endif()
+        add_test(NAME consumer-control-drain COMMAND consumer-control-drain-tests)
+        set_tests_properties(consumer-control-drain PROPERTIES TIMEOUT 30)
+    endif()
 endif()
 # OFF by default: the normal build and the release pipeline are unaffected, and
 # an upstream PR is not forced to adopt a test framework. QtCore only — these
@@ -1236,6 +1403,52 @@ if(BUILD_TESTS)
         media-auth-clobber-fixed
         media-auth-clobber-controls
         PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+
+    # NFC-PN532-ZEROLEN-FRAME-OOB-01: checked-in two-sided regression for a
+    # zero-length information frame (00 FF 00 00 00 00). readFrame() is in an
+    # anonymous namespace, so the test TU compiles the real product source
+    # instead of a copy; only SerialPort.cpp is linked beside it. QT_FORCE_ASSERTS
+    # is mandatory: pre-fix the empty payload.at(0) must abort, not degrade into
+    # a silent empty Data frame. Controls live in their own ctest entry so they
+    # stay green in both arms. Point PN532_SOURCE_ROOT at a pinned pre-fix tree
+    # to replay the RED arm after the guard lands.
+    set(PN532_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+        "Source root whose Pn532SerialDriver.cpp is compiled into the zero-length-frame regression")
+    add_executable(pn532-zerolen-frame-tests
+        src/tests/Pn532ZeroLengthFrameTest.cpp
+        src/modules/nfc_reader/SerialPort.cpp)
+    set_target_properties(pn532-zerolen-frame-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(pn532-zerolen-frame-tests PRIVATE
+        src
+        "${PN532_SOURCE_ROOT}/src/modules/nfc_reader")
+    target_compile_definitions(pn532-zerolen-frame-tests PRIVATE
+        QT_FORCE_ASSERTS
+        PN532_SERIAL_DRIVER_CPP="${PN532_SOURCE_ROOT}/src/modules/nfc_reader/Pn532SerialDriver.cpp")
+    target_link_libraries(pn532-zerolen-frame-tests PRIVATE Qt6::Core Qt6::Test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_library(PN532_UTIL_LIBRARY NAMES util)
+        if(PN532_UTIL_LIBRARY)
+            target_link_libraries(pn532-zerolen-frame-tests PRIVATE ${PN532_UTIL_LIBRARY})
+        endif()
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(pn532-zerolen-frame-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME pn532-zerolen-frame
+        COMMAND pn532-zerolen-frame-tests zeroLengthFrameReturnsNone)
+    add_test(NAME pn532-zerolen-controls
+        COMMAND pn532-zerolen-frame-tests
+            ackFrameStillRecognized
+            nackFrameStillRecognized
+            validDataFrameRecognized
+            badLcsReturnsNone
+            truncatedFrameReturnsNone
+            extendedLengthDesyncReturnsNone
+            errorFrameRecognized
+            wrongDcsLiteralFrameReturnsNone)
+    set_tests_properties(pn532-zerolen-frame pn532-zerolen-controls
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
     # Backend wiring gate for the same cache: list warm, focus warm and press
     # must not reach either resolver, including after a backend restart.

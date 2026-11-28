@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QEventLoop>
 #include <QSslError>
 #include <QUrlQuery>
 #include <QCoreApplication>
@@ -23,7 +24,53 @@
 #include <openssl/pem.h>
 #include <openssl/bio.h>
 
-static const QString PLEX_TV = QStringLiteral("https://plex.tv");
+// Test seam: the regression suite repoints auth traffic at a loopback fixture.
+// Mutable only through setPlexTvUrlForTests(); production never calls it.
+static QString PLEX_TV = QStringLiteral("https://plex.tv");
+
+// PLEX-RESPONSE-BODY-CAP-01: one no-progress deadline and two parse caps for
+// Plex replies. setTransferTimeout() restarts on every arriving byte, so a
+// slow-but-progressing library load is not cut off; a peer that goes silent is.
+// The byte cap is checked from Content-Length and from the running byte count,
+// so close-delimited and underestimated bodies are bounded too. The item cap
+// keeps a huge library from building and flattening a model on the GUI thread.
+static constexpr int kPlexTransferTimeoutMs = 5000;
+static constexpr qint64 kPlexMaxResponseBytes = 64LL * 1024 * 1024;
+static constexpr int kPlexMaxMetadataItems = 10000;
+
+// PLEX-JWT-REFRESH-LATCH-01: hard TOTAL deadline for the two-hop auth exchange.
+// The transport deadline above is inactivity-based — Qt restarts it on every
+// byte — so a peer trickling one byte every few seconds keeps the refresh
+// single-flight guard latched forever. 15 s is 3x the no-progress deadline:
+// enough for a slow-but-progressing exchange, short enough to bound a trickle.
+static constexpr int kPlexAuthWatchdogMs = 15000;
+static constexpr int kPlexAuthWatchdogTestMinMs = 300;
+static constexpr int kPlexAuthWatchdogTestMaxMs = 60000;
+
+// errorOccurred() carries a QString for QML; the uppercase token is the typed
+// part. Callers compose the human context ("LOAD LIBRARY FAILED: " + token).
+enum class PlexError {
+    TransferTimeout,
+    ResponseTooLarge,
+    ItemLimitExceeded,
+};
+
+static QString plexErrorText(PlexError error) {
+    switch (error) {
+    case PlexError::TransferTimeout:   return QStringLiteral("PLEX TRANSFER TIMEOUT");
+    case PlexError::ResponseTooLarge:  return QStringLiteral("PLEX RESPONSE TOO LARGE");
+    case PlexError::ItemLimitExceeded: return QStringLiteral("PLEX ITEM LIMIT EXCEEDED");
+    }
+    return QStringLiteral("PLEX ERROR");
+}
+
+// The transport deadline surfaces as QNetworkReply::TimeoutError; map it to
+// the typed reason so callers never emit a bare "Operation timed out".
+static QString plexNetworkErrorText(QNetworkReply *reply) {
+    return reply->error() == QNetworkReply::TimeoutError
+        ? plexErrorText(PlexError::TransferTimeout)
+        : reply->errorString();
+}
 
 // Auth logging helpers.  plex.tv issues JWTs while PMS only accepts opaque
 // per-server tokens, so "which kind of token did we end up with" is the single
@@ -63,8 +110,23 @@ PlexBackend::PlexBackend(const QString &appRoot, const QString &dataRoot, QObjec
     , m_nam(new QNetworkAccessManager(this))
     , m_pollTimer(new QTimer(this))
 {
+    m_authWatchdog.setSingleShot(true);
+    connect(&m_authWatchdog, &QTimer::timeout, this, &PlexBackend::onAuthWatchdogTimeout);
     m_pollTimer->setInterval(2000);
     connect(m_pollTimer, &QTimer::timeout, this, &PlexBackend::pollPinTick);
+}
+
+PlexBackend::~PlexBackend() {
+    m_authWatchdog.stop();
+    // No callback during teardown. QPointer + this-context connections keep a
+    // late finished lambda from touching a destroyed backend.
+}
+
+void PlexBackend::setPlexTvUrlForTests(const QString &url) { PLEX_TV = url; }
+
+void PlexBackend::setAuthWatchdogMsForTests(int ms) {
+    m_authWatchdogMs = qBound(kPlexAuthWatchdogTestMinMs, ms,
+                              kPlexAuthWatchdogTestMaxMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +186,8 @@ QString PlexBackend::clientId() const {
 
 QNetworkRequest PlexBackend::plexRequest(const QUrl &url, const QString &token) const {
     QNetworkRequest req(url);
+    // Single choke point for GET/POST/PUT/DELETE and the JSON POST variant.
+    req.setTransferTimeout(kPlexTransferTimeoutMs);
     req.setRawHeader("Accept", "application/json");
     req.setRawHeader("X-Plex-Client-Identifier", clientId().toLatin1());
     req.setRawHeader("X-Plex-Product", "240-MP");
@@ -189,6 +253,63 @@ QNetworkReply *PlexBackend::plexPostJson(const QUrl &url, const QString &token,
     auto *reply = m_nam->post(req, body);
     ignoreSslErrors(reply);
     return reply;
+}
+
+QByteArray PlexBackend::readCappedReply(QNetworkReply *reply, bool *ok) {
+    QByteArray body;
+    if (ok) *ok = false;
+    if (!reply) return {};
+
+    bool rejected = false;
+    bool finished = false;
+    QEventLoop loop;
+
+    auto reject = [&]() {
+        if (rejected || finished) return;
+        rejected = true;
+        reply->abort();
+        reply->close();
+        emit errorOccurred(plexErrorText(PlexError::ResponseTooLarge));
+        loop.quit();
+    };
+
+    // Drain in bounded chunks: one readyRead can carry megabytes, and a single
+    // giant read() would itself stall the GUI thread. Reading also releases
+    // Qt's ~3 MiB reply buffer so the server keeps sending instead of hanging.
+    auto drain = [&]() {
+        while (!rejected && !finished && reply->bytesAvailable() > 0) {
+            const QByteArray chunk = reply->read(qMin<qint64>(reply->bytesAvailable(), 256 * 1024));
+            if (chunk.isEmpty()) break;
+            if (static_cast<qint64>(body.size()) + chunk.size() > kPlexMaxResponseBytes) {
+                reject();
+                return;
+            }
+            body += chunk;
+        }
+    };
+
+    // Loop as context: every connection dies with it on return, so a late
+    // signal from an aborted reply can never touch these stack locals.
+    connect(reply, &QNetworkReply::metaDataChanged, &loop, [&]() {
+        if (rejected || finished) return;
+        const qint64 declared =
+            reply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+        if (declared > kPlexMaxResponseBytes) reject();
+    });
+    connect(reply, &QNetworkReply::readyRead, &loop, [&]() { drain(); });
+    connect(reply, &QNetworkReply::finished, &loop, [&]() {
+        finished = true;
+        loop.quit();
+    });
+
+    // Small replies can already be buffered by the time the handlers attach.
+    drain();
+    if (!rejected && !reply->isFinished())
+        loop.exec();
+    if (!rejected) drain();  // bytes delivered just before finished()
+
+    if (ok) *ok = !rejected;
+    return rejected ? QByteArray{} : body;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,25 +441,40 @@ QString PlexBackend::jwtUserIdClaim(const QString &jwt) {
 // ---------------------------------------------------------------------------
 
 void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
-    if (m_refreshInFlight) { callback(false); return; }
+    // A second caller gets the historical immediate false. Leave guard,
+    // generation and watchdog untouched: the first exchange still owns them.
+    if (m_refreshInFlight) {
+        qDebug("[PlexBackend] JWT refresh already in flight; rejecting concurrent call");
+        callback(false);
+        return;
+    }
+
+    ++m_refreshGeneration;
+    const quint64 gen = m_refreshGeneration;
     m_refreshInFlight = true;
+    m_refreshCallback = std::move(callback);
+    m_authReply = nullptr;
+    m_authWatchdog.start(m_authWatchdogMs);
 
     // Step 1: get nonce
     auto *nonceReply = plexGet(QUrl(PLEX_TV + "/api/v2/auth/nonce"), {});
-    connect(nonceReply, &QNetworkReply::finished, this, [this, nonceReply, callback]() {
+    m_authReply = nonceReply;
+    connect(nonceReply, &QNetworkReply::finished, this,
+            [this, nonceReply, gen]() {
         nonceReply->deleteLater();
+        if (gen != m_refreshGeneration) return; // watchdog already finalized
+        if (m_authReply == nonceReply) m_authReply = nullptr;
+
         if (nonceReply->error() != QNetworkReply::NoError) {
             qWarning("[PlexBackend] JWT refresh: nonce request failed");
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
         QString nonce = QJsonDocument::fromJson(nonceReply->readAll())
                         .object()["nonce"].toString();
         if (nonce.isEmpty()) {
             qWarning("[PlexBackend] JWT refresh: empty nonce");
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
 
@@ -349,8 +485,7 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
         if (!pkey || kid.isEmpty()) {
             qWarning("[PlexBackend] JWT refresh: no private key or key ID");
             if (pkey) EVP_PKEY_free(pkey);
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
         QString deviceJwt = buildDeviceJwt(pkey, kid, nonce);
@@ -362,20 +497,24 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
         auto *tokenReply = plexPostJson(
             QUrl(PLEX_TV + "/api/v2/auth/token"), {},
             QJsonDocument(body).toJson(QJsonDocument::Compact));
-        connect(tokenReply, &QNetworkReply::finished, this, [this, tokenReply, callback]() {
+        m_authReply = tokenReply;
+        connect(tokenReply, &QNetworkReply::finished, this,
+                [this, tokenReply, gen]() {
             tokenReply->deleteLater();
-            m_refreshInFlight = false;
+            if (gen != m_refreshGeneration) return; // watchdog already finalized
+            if (m_authReply == tokenReply) m_authReply = nullptr;
+
             if (tokenReply->error() != QNetworkReply::NoError) {
                 qWarning("[PlexBackend] JWT refresh: token exchange failed: %s",
                          qPrintable(tokenReply->errorString()));
-                callback(false);
+                finishRefresh(gen, false);
                 return;
             }
             QString newJwt = QJsonDocument::fromJson(tokenReply->readAll())
                              .object()["auth_token"].toString();
             if (newJwt.isEmpty()) {
                 qWarning("[PlexBackend] JWT refresh: empty token in response");
-                callback(false);
+                finishRefresh(gen, false);
                 return;
             }
             qint64 exp = jwtExpClaim(newJwt);
@@ -386,9 +525,31 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
             if (!uid.isEmpty()) a["account_user_id"] = uid;
             saveAuth(a);
             qDebug("[PlexBackend] JWT refreshed, exp=%lld", static_cast<long long>(exp));
-            callback(true);
+            finishRefresh(gen, true);
         });
     });
+}
+
+void PlexBackend::finishRefresh(quint64 gen, bool ok) {
+    if (gen != m_refreshGeneration) return; // stale exchange, already finalized
+    m_authWatchdog.stop();
+    m_authReply = nullptr;
+    m_refreshInFlight = false;               // ALWAYS before the callback
+    auto cb = std::move(m_refreshCallback);
+    m_refreshCallback = nullptr;
+    if (cb) cb(ok);                          // exactly once
+}
+
+void PlexBackend::onAuthWatchdogTimeout() {
+    if (!m_refreshInFlight) return;
+    ++m_refreshGeneration;                   // invalidate both finished lambdas
+    if (auto *r = m_authReply.data()) {
+        m_authReply = nullptr;
+        r->abort();                          // finished fires, sees stale gen
+        r->deleteLater();
+    }
+    qWarning("[PlexBackend] JWT refresh timed out after %d ms", m_authWatchdogMs);
+    finishRefresh(m_refreshGeneration, false); // guard clear + callback(false)
 }
 
 void PlexBackend::checkAndRefreshOnStartup(std::function<void()> callback) {
@@ -479,6 +640,7 @@ void PlexBackend::handle498(std::function<void()> retryOp) {
     if (m_refreshInFlight) {
         // A refresh is already running; once it finishes it will call the retry
         // via the original invoker. This call is a no-op to avoid stacking retries.
+        qDebug("[PlexBackend] concurrent 498 dropped while JWT refresh in flight");
         return;
     }
     refreshJwt([this, retryOp](bool ok) {
@@ -1620,20 +1782,32 @@ void PlexBackend::load_library_all(const QString &sectionId) {
     QUrl url(uri + "/library/sections/" + sectionId + "/all");
     QUrlQuery q; q.addQueryItem("sort","titleSort"); url.setQuery(q);
     auto *reply = plexGet(url, token);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, sectionId]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 498) {
-                handle498([this, sectionId]{ load_library_all(sectionId); }); return;
-            }
-            emit errorOccurred("LOAD LIBRARY FAILED: " + reply->errorString()); return;
+
+    // Stream and cap before parsing: on rejection a typed errorOccurred has
+    // already gone out and the reply is aborted, so no partial model is built.
+    bool bodyOk = false;
+    const QByteArray body = readCappedReply(reply, &bodyOk);
+    reply->deleteLater();
+    if (!bodyOk) return;
+
+    if (reply->error() != QNetworkReply::NoError) {
+        if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 498) {
+            handle498([this, sectionId]{ load_library_all(sectionId); }); return;
         }
-        QJsonArray metadata = QJsonDocument::fromJson(reply->readAll())
-                              .object()["MediaContainer"].toObject()["Metadata"].toArray();
-        QVariantList items;
-        for (const auto &mv : metadata) items.append(formatItem(mv.toObject()));
-        flattenSeasons(items, [this](const QVariantList &flat) { emit itemsLoaded(flat); });
-    });
+        emit errorOccurred("LOAD LIBRARY FAILED: " + plexNetworkErrorText(reply)); return;
+    }
+    QJsonArray metadata = QJsonDocument::fromJson(body)
+                          .object()["MediaContainer"].toObject()["Metadata"].toArray();
+    // O(1) check before the expensive formatItem/flattenSeasons pass, which is
+    // what blocked the GUI thread for ~2 s on the 12,000-item known-bad body.
+    if (metadata.size() > kPlexMaxMetadataItems) {
+        emit errorOccurred("LOAD LIBRARY FAILED: " +
+                           plexErrorText(PlexError::ItemLimitExceeded));
+        return;
+    }
+    QVariantList items;
+    for (const auto &mv : metadata) items.append(formatItem(mv.toObject()));
+    flattenSeasons(items, [this](const QVariantList &flat) { emit itemsLoaded(flat); });
 }
 
 void PlexBackend::load_collections(const QString &sectionId) {

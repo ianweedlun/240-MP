@@ -5,6 +5,7 @@
 #include <QVariantList>
 #include <QJsonObject>
 #include <QStringList>
+#include <QElapsedTimer>
 #include <functional>
 
 class QNetworkAccessManager;
@@ -67,6 +68,12 @@ public:
 
     bool musicPlaying() const;
 
+    // Read-only view of the current music-IPC connect sequence. Lets a status
+    // UI (or a C++ test) tell "still retrying" from "gave up" without reaching
+    // into the timers. Both reset on every startMusic() re-arm.
+    int  musicIpcAttempts() const { return m_musicIpcAttempts; }
+    bool musicIpcExhausted() const { return m_musicIpcExhausted; }
+
     // Absolute path to weather_location.txt, so the setup screen can say exactly
     // where to put it.
     Q_INVOKABLE QString location_file_path() const;
@@ -87,6 +94,11 @@ public:
     // Pause/resume in place over mpv's IPC socket, so the current track survives
     // the toggle. Session-only: it deliberately does not write the setting.
     Q_INVOKABLE void toggleMusic();
+    // Bounded, self-draining read policy for the background-music IPC socket.
+    // mpv commands carry no request_id, so replies and events are read to
+    // completion and discarded — without this, Qt retains every reply for the
+    // lifetime of the process. Also the seam the drain regression test uses.
+    static void configureIpcReadPolicy(QLocalSocket *socket);
     // The music plays at full and lets the system mixer be the volume, so the
     // only thing left to move it here is ducking under the guide's preview.
     // A ducked track fades to silence and back; nothing else touches it.
@@ -112,6 +124,12 @@ public:
 signals:
     void dataChanged();
     void musicStateChanged();
+    // Background-music IPC could not be established within the retry budget.
+    // reason ∈ {refused, no_server, access, timeout, socket, unknown}.
+    // Emitted at most once per startMusic() sequence, deferred to the next
+    // event-loop turn. Audio keeps playing; only duck/pause/volume control is
+    // lost, so callers must not swap the view or stop mpv on this.
+    void musicIpcFailed(const QString &reason);
     // reason ∈ {missing, unreadable, empty, notfound, network}
     void locationError(const QString &reason);
     void fetchError(const QString &message);
@@ -249,6 +267,12 @@ private:
     QProcess     *m_music       = nullptr;
     QLocalSocket *m_musicIpc    = nullptr;
     QTimer       *m_musicConnect = nullptr;
+    // Connect budget for this startMusic() sequence. The sequence id
+    // invalidates a failure emit queued just before a re-arm or a late connect.
+    int           m_musicIpcAttempts = 0;
+    bool          m_musicIpcExhausted = false;
+    quint64       m_musicIpcSequence = 0;
+    QElapsedTimer m_musicIpcDeadline;
     QString       m_musicSocketPath;
     bool          m_musicPaused = false;
     double        m_musicApplied = 100.0;
@@ -256,6 +280,13 @@ private:
     double        m_musicFadeTo  = 100.0;
     double        m_musicFadeStep = 0.0;
     QTimer       *m_musicFade    = nullptr;
+    // Shared by the connect timeout, the socket error handler and the deadline
+    // check: stops the timer once, defers the emit, suppresses duplicates.
+    void          failMusicIpc(const QString &reason);
+    // Write-side flood guard: a fade writes one command per timer tick, and a
+    // peer that stops reading lets QLocalSocket queue them without bound.
+    bool          m_musicVolumeDeferred = false;   // newest volume awaiting buffer room
+    bool          m_musicWriteDrainConnected = false;
     void          applyMusicVolume();
     void          startMusicFade(double target, int ms);
 

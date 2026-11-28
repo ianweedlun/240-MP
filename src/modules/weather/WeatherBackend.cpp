@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QLocalSocket>
 #include <QProcess>
@@ -32,6 +33,11 @@ using namespace wxcodes;
 namespace {
 
 const char *kModuleId   = "com.240mp.weather";
+
+// Upper bound on the Qt read buffer of the background-music IPC socket. mpv
+// acknowledges every command and emits events; without a drain this buffer
+// grows for the whole life of the process (WEATHER-MUSIC-IPC-BUFFER-LEAK-01).
+const qint64 kMusicIpcReadBufferCap = 64 * 1024;
 const char *kForecastUrl = "https://api.open-meteo.com/v1/forecast";
 const char *kGeocodeUrl  = "https://geocoding-api.open-meteo.com/v1/search";
 const char *kNwsBaseUrl  = "https://api.weather.gov";
@@ -70,6 +76,28 @@ const char *kNwsUserAgent = "240-MP/" APP_VERSION " (https://github.com/anthonyc
 
 // Open-Meteo publishes data roughly every 15 minutes.
 constexpr int kRefreshMs = 10 * 60 * 1000;
+
+// The music IPC peer is mpv, which creates its socket a beat after launch.
+// Keep the early attempts quick, then back off and give up: an unresponsive
+// peer used to be retried every 100 ms for the life of the process.
+constexpr int kMusicIpcMaxAttempts   = 10;
+constexpr int kMusicIpcBaseMs        = 100;
+constexpr int kMusicIpcMaxIntervalMs = 2000;
+constexpr int kMusicIpcDeadlineMs    = 10000;
+
+// Stable vocabulary for musicIpcFailed(reason). Teardown errors never reach
+// here (stopMusic() halts the retry timer before abort()), but keep the mapping
+// total so a new Qt enum value cannot turn into a blank status line.
+QString musicIpcErrorReason(QLocalSocket::LocalSocketError error) {
+    switch (error) {
+    case QLocalSocket::UnknownSocketError:     return QStringLiteral("unknown");
+    case QLocalSocket::ConnectionRefusedError: return QStringLiteral("refused");
+    case QLocalSocket::ServerNotFoundError:    return QStringLiteral("no_server");
+    case QLocalSocket::SocketAccessError:      return QStringLiteral("access");
+    case QLocalSocket::SocketTimeoutError:     return QStringLiteral("timeout");
+    default:                                   return QStringLiteral("socket");
+    }
+}
 
 // Played when the user has no weather_music.txt, so the module sounds right
 // with zero setup. Written the way a user would write them — spaces and all —
@@ -333,6 +361,9 @@ bool WeatherBackend::looksLikeCoordinates(const QString &spec) const
 QString WeatherBackend::primaryLocationLine() const
 {
     const QStringList lines = readLocationLines();
+    for (const QString &line : lines) {
+        if (!line.isEmpty() && !line.startsWith(QLatin1Char('#'))) return line;
+    }
     return lines.isEmpty() ? QString() : lines.first();
 }
 
@@ -444,29 +475,86 @@ void WeatherBackend::startMusic() {
     m_music->start(bin, args);
 
     // mpv creates the socket a beat after launch, so a single connect attempt
-    // loses the race. Same retry shape as MpvController.
+    // loses the race. Retry with backoff, but never indefinitely: a peer that
+    // never listens used to keep this timer hot for the whole process.
     if (!m_musicIpc) {
         m_musicIpc = new QLocalSocket(this);
+        configureIpcReadPolicy(m_musicIpc);
         connect(m_musicIpc, &QLocalSocket::connected, this, [this]() {
             m_musicConnect->stop();
+            // A listener that shows up after the last retry still wins.
+            m_musicIpcAttempts = 0;
+            m_musicIpcExhausted = false;
+            ++m_musicIpcSequence;
             m_musicApplied = m_musicDucked ? 0.0 : 100.0;
             applyMusicVolume();
+        });
+        // Count failures rather than timer ticks. The isActive() gate also
+        // suppresses the error abort() emits in stopMusic(): teardown stops
+        // the timer first, so that error belongs to no retry sequence.
+        connect(m_musicIpc, &QLocalSocket::errorOccurred, this,
+                [this](QLocalSocket::LocalSocketError error) {
+            if (!m_musicConnect || !m_musicConnect->isActive()) return;
+
+            ++m_musicIpcAttempts;
+            if (m_musicIpcAttempts >= kMusicIpcMaxAttempts) {
+                failMusicIpc(musicIpcErrorReason(error));
+                return;
+            }
+            // 100 ms x5, then 200/400/800/1600 ms, capped at 2 s.
+            const int step = qMax(0, m_musicIpcAttempts - 5);
+            m_musicConnect->setInterval(qMin(kMusicIpcMaxIntervalMs,
+                                             kMusicIpcBaseMs << qMin(step, 5)));
         });
     }
     if (!m_musicConnect) {
         m_musicConnect = new QTimer(this);
-        m_musicConnect->setInterval(100);
+        m_musicConnect->setInterval(kMusicIpcBaseMs);
         connect(m_musicConnect, &QTimer::timeout, this, [this]() {
+            if (m_musicIpcExhausted) return;
+            // Belt-and-braces for a peer that accepts but leaves us wedged in
+            // ConnectingState, where the state guard below would keep waiting.
+            if (m_musicIpcDeadline.elapsed() > kMusicIpcDeadlineMs) {
+                failMusicIpc(QStringLiteral("timeout"));
+                return;
+            }
             if (m_musicIpc->state() == QLocalSocket::ConnectedState
                 || m_musicIpc->state() == QLocalSocket::ConnectingState)
                 return;
             m_musicIpc->connectToServer(m_musicSocketPath);
         });
     }
+
+    // Every re-arm is a fresh sequence. Without this a second module visit
+    // inherits an exhausted counter and never tries to connect at all.
+    ++m_musicIpcSequence;
+    m_musicIpcAttempts = 0;
+    m_musicIpcExhausted = false;
+    m_musicIpcDeadline.restart();
+    m_musicConnect->setInterval(kMusicIpcBaseMs);
     m_musicConnect->start();
 
     qInfo("[Weather] music started — %lld track(s)", static_cast<long long>(tracks.size()));
     emit musicStateChanged();
+}
+
+void WeatherBackend::failMusicIpc(const QString &reason) {
+    if (m_musicIpcExhausted) return;
+    m_musicIpcExhausted = true;
+    if (m_musicConnect) m_musicConnect->stop();
+
+    qWarning("[Weather] music IPC unavailable after %d attempt(s): %s — "
+             "audio continues, duck/pause/volume control disabled",
+             m_musicIpcAttempts, qPrintable(reason));
+
+    // startMusic() runs from Component.onCompleted; a synchronous emit there is
+    // dropped while the Loader's item is still under construction. Sequence
+    // guards against a queued emit surviving a re-arm or a late connected().
+    const quint64 sequence = m_musicIpcSequence;
+    QTimer::singleShot(0, this, [this, reason, sequence]() {
+        if (m_musicIpcSequence == sequence && m_musicIpcExhausted)
+            emit musicIpcFailed(reason);
+    });
 }
 
 void WeatherBackend::duck_music(bool ducked, int ms) {
@@ -504,19 +592,73 @@ void WeatherBackend::startMusicFade(double target, int ms) {
     m_musicFade->start();
 }
 
+void WeatherBackend::configureIpcReadPolicy(QLocalSocket *socket)
+{
+    if (!socket) return;
+    socket->setReadBufferSize(kMusicIpcReadBufferCap);
+    // Parented to the socket, so the handler goes away with it on teardown.
+    QObject::connect(socket, &QLocalSocket::readyRead, socket, [socket]() {
+        // mpv replies and events are newline-delimited JSON. Every command we
+        // send is fire-and-forget — there is no request_id to correlate — so
+        // consume the lines and discard them. readLine's cap stops one
+        // unterminated line from pinning the buffer; the loop drains to empty.
+        while (socket->bytesAvailable() > 0) {
+            if (socket->readLine(kMusicIpcReadBufferCap).isEmpty())
+                break;
+        }
+    });
+}
+
 void WeatherBackend::applyMusicVolume() {
     if (!m_music || m_music->state() == QProcess::NotRunning) return;
     if (!m_musicIpc || m_musicIpc->state() != QLocalSocket::ConnectedState) return;
+
+    // A fade drives one write every 40 ms. Against a peer that stops reading,
+    // QLocalSocket keeps every command in its pending buffer, which grows with
+    // no bound. Cap what we queue: once the pending bytes reach the limit,
+    // remember the newest desired volume instead of queuing another command.
+    // bytesWritten() re-enters this method once the backlog drains, so the
+    // coalesced final value is delivered and later fades keep working.
+    static constexpr qint64 kPendingWriteCap = 64 * 1024;
+
     const QJsonObject cmd{
         { QStringLiteral("command"),
           QJsonArray{ QStringLiteral("set_property"), QStringLiteral("volume"),
                       qRound(m_musicApplied) } }
     };
-    m_musicIpc->write(QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n");
+    const QByteArray payload = QJsonDocument(cmd).toJson(QJsonDocument::Compact) + "\n";
+
+    if (m_musicIpc->bytesToWrite() + payload.size() > kPendingWriteCap) {
+        m_musicVolumeDeferred = true;
+        return;
+    }
+
+    // Connect lazily so this fix stays inside applyMusicVolume() and does not
+    // touch the IPC setup block. The context object keeps the connection
+    // scoped to this backend; it is made once for the socket's lifetime.
+    if (!m_musicWriteDrainConnected) {
+        connect(m_musicIpc, &QLocalSocket::bytesWritten, this, [this](qint64) {
+            if (m_musicVolumeDeferred) applyMusicVolume();
+        });
+        m_musicWriteDrainConnected = true;
+    }
+
+    // Clear before write(): bytesWritten() may be emitted synchronously.
+    m_musicVolumeDeferred = false;
+    m_musicIpc->write(payload);
 }
 
 void WeatherBackend::stopMusic() {
-    if (m_musicConnect) m_musicConnect->stop();
+    // Clear retry state before abort(): the error it emits is teardown noise,
+    // not a failed connect, and the next startMusic() must begin from zero.
+    // Bumping the sequence also drops any failure emit queued for this run.
+    ++m_musicIpcSequence;
+    m_musicIpcAttempts = 0;
+    m_musicIpcExhausted = false;
+    if (m_musicConnect) {
+        m_musicConnect->stop();
+        m_musicConnect->setInterval(kMusicIpcBaseMs);
+    }
     if (m_musicIpc)     m_musicIpc->abort();
 
     if (m_music) {
@@ -567,9 +709,6 @@ QStringList WeatherBackend::readListFile(const QString &path) const {
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return lines;
     while (!f.atEnd()) {
         const QString candidate = QString::fromUtf8(f.readLine()).trimmed();
-        // '#' comments exist so the files we tell users to create can document
-        // their own format.
-        if (candidate.isEmpty() || candidate.startsWith(QLatin1Char('#'))) continue;
         lines << candidate;
     }
     return lines;
@@ -618,8 +757,24 @@ void WeatherBackend::resolveLocation() {
     const QStringList lines = readLocationLines();
     if (lines.isEmpty()) { emitError(QStringLiteral("empty")); return; }
 
-    const QString primary = lines.first();
-    const QStringList others = lines.mid(1);
+    // Find index of first non-comment, non-blank line as primary location.
+    int primaryIdx = -1;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (!lines.at(i).isEmpty() && !lines.at(i).startsWith(QLatin1Char('#'))) {
+            primaryIdx = i;
+            break;
+        }
+    }
+    if (primaryIdx < 0) {
+        emitError(QStringLiteral("invalid_location"));
+        return;
+    }
+    const QString primary = lines.at(primaryIdx);
+    // All other lines (including comments and blanks) become the extras list.
+    QStringList others;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (i != primaryIdx) others << lines.at(i);
+    }
 
     double lat = 0.0, lon = 0.0;
     QString label;
@@ -704,27 +859,60 @@ void WeatherBackend::applyLocationSetting(const QString &spec)
     QStringList lines = readLocationLines();
     if (lines.isEmpty())
         lines << trimmed;
-    else
-        lines.replace(0, trimmed);
+    else {
+        // Replace the first non-comment, non-blank line (the coordinate line),
+        // preserving any comment or blank lines that appear before it.
+        int coordIdx = -1;
+        for (int i = 0; i < lines.size(); ++i) {
+            if (!lines.at(i).isEmpty() && !lines.at(i).startsWith(QLatin1Char('#'))) {
+                coordIdx = i;
+                break;
+            }
+        }
+        if (coordIdx >= 0) {
+            lines.replace(coordIdx, trimmed);
+        } else {
+            // No existing coordinate line found; prepend the new one.
+            lines.prepend(trimmed);
+        }
+    }
 
     const QString path = location_file_path();
-    QFile file(path);
+    // Crash-safe write: QSaveFile stages the new content in the same
+    // directory and commit() swaps it in atomically. On any failure the
+    // live file stays byte-identical and in-memory location state is not
+    // mutated.
+    QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning("[Weather] location setting not applied: %s", qPrintable(path));
-        emitError(QStringLiteral("unreadable"));
+        qWarning("[Weather] location setting not applied: %s: %s",
+                 qPrintable(path), qPrintable(file.errorString()));
+        emitError(QStringLiteral("unwritable_location"));
         return;
     }
-    file.write((lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8());
-    file.close();
-    qInfo("[Weather] LOCATION set: primary line -> \"%s\"", qPrintable(trimmed));
+    const QByteArray data = (lines.join(QLatin1Char('\n')) + QLatin1Char('\n')).toUtf8();
+    const qint64 written = file.write(data);
+    if (written != data.size()) {
+        qWarning("[Weather] location write failed on %s (%lld of %lld bytes): %s",
+                 qPrintable(path), static_cast<long long>(written),
+                 static_cast<long long>(data.size()), qPrintable(file.errorString()));
+        file.cancelWriting();
+        emitError(QStringLiteral("unwritable_location"));
+        return;
+    }
+    if (!file.commit()) {
+        qWarning("[Weather] location commit failed on %s: %s",
+                 qPrintable(path), qPrintable(file.errorString()));
+        emitError(QStringLiteral("unwritable_location"));
+        return;
+    }
+qInfo("[Weather] LOCATION set: primary line -> %s", qPrintable(trimmed));
 
+    // Mutate in-memory state only after the write is durably committed.
     if (m_resolved) {
         if (m_refresh) m_refresh->stop();
         m_resolved = false;
     }
-    // Drop the old point's station/observation/AQ/extras caches *before* the
-    // new resolve. Otherwise a still-resolved station list from the old city
-    // is reused and its last observation overwrites the new forecast.
     retireLocationState();
     resolveLocation();
 }

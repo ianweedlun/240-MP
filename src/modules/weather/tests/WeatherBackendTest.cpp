@@ -5,6 +5,8 @@
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QJsonDocument>
@@ -233,9 +235,13 @@ private:
     FakeWeatherServer m_server;
 
     void writeFile(const QString &name, const QString &content) {
-        QFile f(m_dir.filePath(name));
-        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
-        f.write(content.toUtf8());
+        const QString path = m_dir.filePath(name);
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+        const QByteArray bytes = content.toUtf8();
+        f.write(bytes);
+        // QFile is closed by its destructor at end of scope; flush explicitly.
+        f.close();
     }
 
     void writeConfig(const QString &units) {
@@ -403,8 +409,220 @@ private slots:
                 const double mb = pressure.split(QLatin1Char(' ')).first().toDouble();
                 QVERIFY(mb > 1000.0 && mb < 1020.0);
             }
-            wb.stop();
+
         }
+
+    }
+
+    // Notebook hypothesis #4: a failed write must not change the file and must
+    // surface "unwritable_location" instead of silently promoting an
+    // unwritten change. Make the data root read-only so QSaveFile cannot stage
+    // a rewrite. This is filesystem-level and platform-neutral; RLIMIT_FSIZE
+    // behaves differently between our lab host and the CI runners.
+    void setLocationWriteFailureLeavesFileUnchanged()
+    {
+        writeLocation(QStringLiteral("38.8, -77.0, OLD"));
+        WeatherBackend wb(QString(), m_dir.path());
+
+        QFile beforeFile(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(beforeFile.open(QIODevice::ReadOnly));
+        const QByteArray fileBefore = beforeFile.readAll();
+        beforeFile.close();
+
+        struct RestorePermissions {
+            QString path;
+            QFile::Permissions perms;
+            ~RestorePermissions() { QFile::setPermissions(path, perms); }
+        } restore{m_dir.path(), QFile::permissions(m_dir.path())};
+
+        const QString probePath = m_dir.filePath(QStringLiteral("write-probe.txt"));
+        {
+            QFile probe(probePath);
+            QVERIFY(probe.open(QIODevice::WriteOnly));
+            probe.close();
+            QVERIFY(probe.remove());
+        }
+
+        // Owner keeps read/execute so the backend can still read the seed;
+        // only the write bit goes away, which blocks QSaveFile staging.
+        QVERIFY(QFile::setPermissions(
+            m_dir.path(),
+            QFile::ReadOwner | QFile::ReadGroup | QFile::ReadOther |
+                QFile::ExeOwner | QFile::ExeGroup | QFile::ExeOther));
+        {
+            QFile probe(probePath);
+            QVERIFY(!probe.open(QIODevice::WriteOnly));
+        }
+
+        struct Recorder {
+            QStringList reasons;
+            void record(const QString &r) { reasons << r; }
+            bool wasEmitted(const QString &r) const { return reasons.contains(r); }
+        };
+        Recorder recorder;
+        QObject::connect(&wb, &WeatherBackend::locationError,
+                         [&recorder](const QString &r) { recorder.record(r); });
+
+        wb.setLocation(QStringLiteral("10.0000, 20.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        QVERIFY(recorder.wasEmitted(QStringLiteral("unwritable_location")));
+        QFile afterFile(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(afterFile.open(QIODevice::ReadOnly));
+        QCOMPARE(afterFile.readAll(), fileBefore);
+        afterFile.close();
+
+        // Green arm: once writable again, the same directory accepts writes.
+        QVERIFY(QFile::setPermissions(m_dir.path(), restore.perms));
+        {
+            QFile probe(probePath);
+            QVERIFY(probe.open(QIODevice::WriteOnly));
+            probe.close();
+            QVERIFY(probe.remove());
+        }
+    }
+
+    // WEATHER-MUSIC-IPC-BUFFER-LEAK-01: with no readyRead drain, every mpv
+    // acknowledgement stays in Qt's read buffer. Flood past the cap and assert
+    // the buffer drains, stays bounded, and the socket still works afterwards.
+    void musicIpcReadPolicyDrainsAndBoundsBuffer()
+    {
+        QLocalServer server;
+        const QString name = QStringLiteral("240mp-wx-readpolicy-%1")
+                                 .arg(QCoreApplication::applicationPid());
+        QVERIFY2(server.listen(name), qPrintable(server.errorString()));
+
+        QLocalSocket client;
+        // Connections fire in the order made, so this counter sees the bytes
+        // before the production drain consumes them.
+        qint64 peakAvailable = 0;
+        int drains = 0;
+        QObject::connect(&client, &QLocalSocket::readyRead, &client, [&]() {
+            ++drains;
+            peakAvailable = qMax(peakAvailable,
+                                static_cast<qint64>(client.bytesAvailable()));
+        });
+        WeatherBackend::configureIpcReadPolicy(&client);
+        QCOMPARE(client.readBufferSize(), 64 * 1024);
+
+        client.connectToServer(name);
+        QVERIFY(waitFor([&] {
+            return client.state() == QLocalSocket::ConnectedState;
+        }, 2000));
+        QVERIFY(waitFor([&] { return server.hasPendingConnections(); }, 2000));
+        QLocalSocket *peer = server.nextPendingConnection();
+        QVERIFY(peer != nullptr);
+
+        const QByteArray reply = QByteArray("{\"error\":\"success\"}\n");
+        QByteArray flood;
+        flood.reserve(reply.size() * 4000);
+        for (int i = 0; i < 4000; ++i) flood += reply;   // ~92 KiB > 64 KiB cap
+        peer->write(flood);
+        peer->flush();
+        QVERIFY(waitFor([&] { return peer->bytesToWrite() == 0; }, 5000));
+        settle(100);
+
+        QVERIFY(drains > 0);
+        QVERIFY2(peakAvailable <= 64 * 1024, "read buffer never exceeds the cap");
+        QCOMPARE(client.bytesAvailable(), 0);                       // drained
+        QVERIFY(client.state() == QLocalSocket::ConnectedState);     // usable
+
+        // A normal reply after the flood must still arrive and be drained.
+        const int before = drains;
+        peer->write(reply);
+        peer->flush();
+        QVERIFY(waitFor([&] { return drains > before; }, 2000));
+        QCOMPARE(client.bytesAvailable(), 0);
+    }
+
+    // Comment and blank lines in weather_location.txt must survive a location
+    // update: only the first non-comment, non-blank line (the coordinate) is
+    // replaced, so a comment sitting before it is preserved on write-back.
+    void commentsInLocationFileSurviveUpdate()
+    {
+        const QString seed =
+            QStringLiteral("# documented list\n")
+            + QStringLiteral("\n")
+            + QStringLiteral("42.3601, -71.0589, BOSTON\n")
+            + QStringLiteral("# extra note\n")
+            + QStringLiteral("40.7128, -74.0060, NYC\n");
+        writeFile(QStringLiteral("weather_location.txt"), seed);
+
+        WeatherBackend wb(QString(), m_dir.path());
+        {
+            QFileInfo fi(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            qInfo("[DBG] after-writeFile exists=%d bytes=%lld",
+                  fi.exists() ? 1 : 0, fi.size());
+            QFile probe(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(probe.open(QIODevice::ReadOnly));
+            qInfo("[DBG] after-writeFile probeSize=%lld", (long long)probe.size());
+        }
+        {
+            qInfo("[DBG] m_dir.path=%s", qUtf8Printable(m_dir.path()));
+            QFile probe(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(probe.open(QIODevice::ReadOnly));
+            qInfo("[DBG] seed-after-ctor bytes=%lld", (long long)probe.size());
+            qInfo("[DBG] seed-after-ctor content=%s", qUtf8Printable(probe.readAll()));
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        wb.setLocation(QStringLiteral("5.0000, 6.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        QFile after(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        const QString afterText = QString::fromUtf8(after.readAll());
+
+        // DEBUG dump of the file right after setLocation, before assertions.
+        {
+            QFile dbg(m_dir.filePath(QStringLiteral("weather_location.txt")));
+            QVERIFY(dbg.open(QIODevice::ReadOnly));
+            qInfo("[DBG] comments file bytes=%lld", (long long)dbg.size());
+            qInfo("[DBG] comments file content=%s", qUtf8Printable(dbg.readAll()));
+        }
+        QVERIFY(afterText.contains(QStringLiteral("# documented list")));
+        QVERIFY(afterText.contains(QStringLiteral("# extra note")));
+        QVERIFY(afterText.contains(QStringLiteral("40.7128, -74.0060, NYC")));
+        QCOMPARE(afterText,
+                 QStringLiteral("# documented list\n"
+                                "\n"
+                                "5.0000, 6.0000, NEW\n"
+                                "# extra note\n"
+                                "40.7128, -74.0060, NYC\n"));
+    }
+
+    // A successful update rewrites the primary line and keeps the extra
+    // locations and comments in order.
+    void successfulUpdateKeepsExtrasAndComments()
+    {
+        const QString seed =
+            QStringLiteral("42.3601, -71.0589, BOSTON\n")
+            + QStringLiteral("# note about NYC\n")
+            + QStringLiteral("40.7128, -74.0060, NYC\n")
+            + QStringLiteral("34.0522, -118.2437, LA\n");
+        writeFile(QStringLiteral("weather_location.txt"), seed);
+
+        WeatherBackend wb(QString(), m_dir.path());
+        wb.setLocation(QStringLiteral("5.0000, 6.0000, NEW"));
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+        QFile after(m_dir.filePath(QStringLiteral("weather_location.txt")));
+        QVERIFY(after.open(QIODevice::ReadOnly));
+        const QString afterText = QString::fromUtf8(after.readAll());
+
+        QVERIFY(afterText.contains(QStringLiteral("40.7128, -74.0060, NYC")));
+        QVERIFY(afterText.contains(QStringLiteral("34.0522, -118.2437, LA")));
+        QVERIFY(afterText.contains(QStringLiteral("# note about NYC")));
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate path = %s", qUtf8Printable(m_dir.filePath(QStringLiteral("weather_location.txt"))));
+        bool af2 = after.open(QIODevice::ReadOnly);
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate after.open() = %d", af2 ? 1 : 0);
+        const QString afterText2 = af2 ? QString::fromUtf8(after.readAll()) : QStringLiteral("(open failed)");
+        qInfo("[DBG] commentsInLocationFileSurviveUpdate afterText2 = %s", qUtf8Printable(afterText2));
+        QCOMPARE(afterText,
+                 QStringLiteral("5.0000, 6.0000, NEW\n"
+                                "# note about NYC\n"
+                                "40.7128, -74.0060, NYC\n"
+                                "34.0522, -118.2437, LA\n"));
     }
 };
 

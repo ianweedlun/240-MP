@@ -218,8 +218,77 @@ Window {
     // loading it here just registers it with Qt's fontconfig-backed font
     // database; Qt's own missing-glyph fallback then picks it up for every
     // existing font.family: root.globalFont binding with no further changes.
-    FontLoader {
-        id: unifontLoader; source: "assets/fonts/unifont.otf"
+    //
+    // W2: registering a 5.1 MB OTF is synchronous work on the cold-start path.
+    // No app-owned copy contains CJK text (all of it is ASCII) and server
+    // titles arrive over the network long after startup, so the first frame
+    // cannot need the fallback. Defer registration until a frame containing
+    // the loaded module view has swapped. The font ends up in the same
+    // fontconfig-backed database, so every root.globalFont binding keeps its
+    // missing-glyph fallback exactly as before, only a frame later.
+    property bool _unifontRequested: false
+    function requestUnifont() {
+        if (_unifontRequested || !_startupNavigated) return
+        _unifontRequested = true
+        logState("font", "unifont-deferred after-first-frame")
+        unifontDeferred.active = true
+    }
+    Loader {
+        id: unifontDeferred
+        active: false
+        sourceComponent: Component {
+            FontLoader {
+                source: "assets/fonts/unifont.otf"
+                property bool _readyLogged: false
+                function noteReady() {
+                    if (_readyLogged || status !== FontLoader.Ready) return
+                    _readyLogged = true
+                    logState("font", "unifont-ready name=" + name)
+                }
+                Component.onCompleted: noteReady()
+                onStatusChanged: noteReady()
+            }
+        }
+    }
+    Connections {
+        target: root
+        function onFrameSwapped() { root.requestUnifont() }
+    }
+
+    // Emoji supplement for server-supplied titles (YouTube, Plex, Jellyfin,
+    // Emby, weather). The shipped subset is a monochrome outline font whose
+    // internal family is named "Noto Color Emoji": Qt resolves that family in
+    // its automatic glyph fallback, so every font.family: root.globalFont
+    // binding picks up emoji without changing any view. Deferring the 1 MB
+    // FontLoader keeps the file read off the cold-start path. Outline glyphs
+    // matter: mpv/libass reads the same directory via FONTCONFIG_FILE and
+    // cannot fall back to CBDT/CBLC color-bitmap fonts.
+    property bool _emojiRequested: false
+    function requestEmoji() {
+        if (_emojiRequested || !_startupNavigated) return
+        _emojiRequested = true
+        emojiDeferred.active = true
+    }
+    Loader {
+        id: emojiDeferred
+        active: false
+        sourceComponent: Component {
+            FontLoader {
+                source: "assets/fonts/Symbola-emoji-subset.ttf"
+                property bool _readyLogged: false
+                function noteReady() {
+                    if (_readyLogged || status !== FontLoader.Ready) return
+                    _readyLogged = true
+                    logState("font", "emoji-ready")
+                }
+                Component.onCompleted: noteReady()
+                onStatusChanged: noteReady()
+            }
+        }
+    }
+    Connections {
+        target: root
+        function onFrameSwapped() { root.requestEmoji() }
     }
     property string globalFont: font.name;
 

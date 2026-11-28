@@ -16,10 +16,8 @@ name: CRT agent validation
 # or "CI green" as validation.
 
 on:
-  push:
-    branches: [dev, 'feature/**']
-    paths-ignore: ['**.md','**.yml','docs/crt-validation-cases.md']
-  # Owner dispatch to replay an ad-hoc case after a push with no code change.
+  # 2026-11-28 owner ruling: push-triggered CRT is retired. The visual gate is
+  # event-driven from the local trigger engine after CI success for the same SHA.
   workflow_dispatch:
     inputs:
       case:

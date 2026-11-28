@@ -41,4 +41,11 @@ public:
     virtual QString pollUid(bool &ok) = 0;
 
     virtual void close() = 0;
+
+    // Interrupt an in-flight blocking call so a wedged worker can be joined
+    // instead of orphaned. Only PC/SC can block indefinitely: SCardCancel makes
+    // a pending SCardGetStatusChange return SCARD_E_CANCELLED. Serial reads are
+    // bounded, so the default is a no-op. Called from the backend thread, so an
+    // override must be safe to call cross-thread.
+    virtual void cancel() {}
 };

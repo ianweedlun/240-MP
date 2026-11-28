@@ -29,6 +29,12 @@ public:
 public slots:
     void start();
 
+public:
+    // Interrupt blocking driver calls (SCardCancel) so a wedged worker can be
+    // joined. Safe to call from the backend thread; each driver's cancel() is
+    // documented as cross-thread-safe.
+    void cancel();
+
 signals:
     void sampled(bool readerConnected, const QString &uid, const QString &deviceName);
 

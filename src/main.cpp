@@ -17,6 +17,8 @@
 #include <QThread>
 #include <QRegularExpression>
 
+#include <memory>
+
 #include "AppCore.h"
 #include "modules/local_files/LocalFilesBackend.h"
 #include "modules/plex/PlexBackend.h"
@@ -209,31 +211,75 @@ int main(int argc, char *argv[]) {
     // enumeration IS the KMS plane vo=drm draws to. Hand it to AppCore once.
     appCore.setDisplayGeometry(screenGeo.width(), screenGeo.height());
 
-    LocalFilesBackend   localFiles(appRoot, dataRoot);
-    PlexBackend         plexBackend(appRoot, dataRoot);
-    JellyfinBackend     jellyfinBackend(appRoot, dataRoot);
-    EmbyBackend         embyBackend(appRoot, dataRoot);
-    AmbientModeBackend  ambientMode(dataRoot);
-    NfcReaderBackend    nfcReader(appRoot, dataRoot, &appCore);
-    YouTubeBackend      youtubeBackend(appRoot, dataRoot);
-    WeatherBackend      weatherBackend(appRoot, dataRoot);
+    // Module gating: the per-module "enabled" flag in config.json (manifest
+    // default when unset) decides what is built, read once at startup, so a
+    // change in Settings takes effect on the next launch. A backend is built
+    // when enabled; it reaches QML only when enabled. virtual_channels takes
+    // plex/jellyfin/emby by reference, so those are built (not exposed) whenever
+    // virtual_channels is on. Owned by unique_ptr, declared in the old stack
+    // order, so destruction still runs in reverse declaration order.
+    auto enabled = [&appCore](const QString &id) { return appCore.is_module_enabled(id); };
+    const bool vcOn       = enabled(QStringLiteral("com.240mp.virtual_channels"));
+    const bool buildPlex     = enabled(QStringLiteral("com.240mp.plex"))     || vcOn;
+    const bool buildJellyfin = enabled(QStringLiteral("com.240mp.jellyfin")) || vcOn;
+    const bool buildEmby     = enabled(QStringLiteral("com.240mp.emby"))     || vcOn;
+    std::unique_ptr<LocalFilesBackend>     localFiles;
+    std::unique_ptr<PlexBackend>           plexBackend;
+    std::unique_ptr<JellyfinBackend>       jellyfinBackend;
+    std::unique_ptr<EmbyBackend>           embyBackend;
+    std::unique_ptr<AmbientModeBackend>    ambientMode;
+    std::unique_ptr<NfcReaderBackend>      nfcReader;
+    std::unique_ptr<YouTubeBackend>        youtubeBackend;
+    std::unique_ptr<WeatherBackend>        weatherBackend;
+
+    if (enabled(QStringLiteral("com.240mp.local_files")))
+        localFiles = std::make_unique<LocalFilesBackend>(appRoot, dataRoot);
+    if (buildPlex)
+        plexBackend = std::make_unique<PlexBackend>(appRoot, dataRoot);
+    if (buildJellyfin)
+        jellyfinBackend = std::make_unique<JellyfinBackend>(appRoot, dataRoot);
+    if (buildEmby)
+        embyBackend = std::make_unique<EmbyBackend>(appRoot, dataRoot);
+    if (enabled(QStringLiteral("com.240mp.ambient_mode")))
+        ambientMode = std::make_unique<AmbientModeBackend>(dataRoot);
+    if (enabled(QStringLiteral("com.240mp.nfc_reader")))
+        nfcReader = std::make_unique<NfcReaderBackend>(appRoot, dataRoot, &appCore);
+    if (enabled(QStringLiteral("com.240mp.youtube")))
+        youtubeBackend = std::make_unique<YouTubeBackend>(appRoot, dataRoot);
+    if (enabled(QStringLiteral("com.240mp.weather")))
+        weatherBackend = std::make_unique<WeatherBackend>(appRoot, dataRoot);
+
+    // DisplayHandoff is a core singleton: always live. Declared before the
+    // backends below that hold a pointer to it, so it outlives them.
     DisplayHandoff      displayHandoff;
-    RetroArchBackend    retroArchBackend(appRoot, dataRoot, &displayHandoff);
-    ScriptsBackend      scriptsBackend(appRoot, dataRoot, &displayHandoff);
-    VirtualChannelsBackend virtualChannels(appRoot, dataRoot,
-                                          &plexBackend, &jellyfinBackend, &embyBackend);
+
+    // RetroArch is also the InputManager game observer; scripts and
+    // virtual_channels are built alongside it as well (kept from the draft
+    // gate; conservative, since the observer is nullable anyway).
+    std::unique_ptr<RetroArchBackend>      retroArch;
+    std::unique_ptr<ScriptsBackend>        scriptsBackend;
+    std::unique_ptr<VirtualChannelsBackend> virtualChannels;
+    if (enabled(QStringLiteral("com.240mp.retroarch"))
+        || enabled(QStringLiteral("com.240mp.scripts"))
+        || enabled(QStringLiteral("com.240mp.virtual_channels")))
+        retroArch = std::make_unique<RetroArchBackend>(appRoot, dataRoot, &displayHandoff);
+    if (enabled(QStringLiteral("com.240mp.scripts")))
+        scriptsBackend = std::make_unique<ScriptsBackend>(appRoot, dataRoot, &displayHandoff);
+    if (enabled(QStringLiteral("com.240mp.virtual_channels")))
+        virtualChannels = std::make_unique<VirtualChannelsBackend>(
+            appRoot, dataRoot,
+            plexBackend.get(), jellyfinBackend.get(), embyBackend.get());
+
     MpvController       mpvController(appRoot, dataRoot, &appCore, &displayHandoff);
     InputManager        inputManager(dataRoot, &appCore);
     inputManager.setDisplayHandoff(&displayHandoff);
-    inputManager.setGameObserver(&retroArchBackend);
-
-    // App-wide volume (#34): one number for the whole shell, backed by the system
-    // mixer so it means the same thing in every view and in every child process.
-    // Non-owned by InputManager, which routes every volume key through it.
+    // Nullable observer: no RetroArch backend means no game-window tracking.
+    inputManager.setGameObserver(retroArch.get());
     VolumeManager       volumeManager(dataRoot);
     inputManager.setVolumeManager(&volumeManager);
     IdleTracker         idleTracker(60);   // disabled until Main.qml applies the saved setting
     UpdateManager       updateManager(appRoot, dataRoot);
+
 
     // Playback follows the UI's display: mpv gets a --fs-screen* arg derived
     // from this on macOS / desktop Linux (no-op at index 0 and on headless).
@@ -263,29 +309,36 @@ int main(int argc, char *argv[]) {
     // null wrappers and their exit cleanup threw TypeError.
     QQmlApplicationEngine engine;
     QQmlContext *ctx = engine.rootContext();
-    appCore.registerModule("com.240mp.local_files",  "localFilesBackend",  &localFiles,  ctx);
-    appCore.registerModule("com.240mp.plex",         "plexBackend",        &plexBackend, ctx);
-    appCore.registerModule("com.240mp.jellyfin",     "jellyfinBackend",    &jellyfinBackend, ctx);
-    appCore.registerModule("com.240mp.emby",         "embyBackend",        &embyBackend, ctx);
-    appCore.registerModule("com.240mp.ambient_mode", "ambientModeBackend", &ambientMode, ctx);
-    appCore.registerModule("com.240mp.nfc_reader",   "nfcReaderBackend",   &nfcReader,   ctx);
-    appCore.registerModule("com.240mp.youtube",      "youtubeBackend",     &youtubeBackend, ctx);
-    appCore.registerModule("com.240mp.weather",      "weatherBackend",     &weatherBackend, ctx);
-    appCore.registerModule("com.240mp.retroarch",    "retroarchBackend",   &retroArchBackend, ctx);
-    appCore.registerModule("com.240mp.scripts",      "scriptsBackend",     &scriptsBackend, ctx);
-    appCore.registerModule("com.240mp.virtual_channels", "virtualChannelsBackend", &virtualChannels, ctx);
+    // Built-but-disabled backends (dependencies) register as null, so QML never
+    // sees them and their background work stays off.
+    auto exposed = [&enabled](const char *id, QObject *obj) -> QObject * {
+        return enabled(QString::fromLatin1(id)) ? obj : nullptr;
+    };
+    appCore.registerModule("com.240mp.local_files",  "localFilesBackend",  exposed("com.240mp.local_files", localFiles.get()), ctx);
+    appCore.registerModule("com.240mp.plex",         "plexBackend",        exposed("com.240mp.plex", plexBackend.get()), ctx);
+    appCore.registerModule("com.240mp.jellyfin",     "jellyfinBackend",    exposed("com.240mp.jellyfin", jellyfinBackend.get()), ctx);
+    appCore.registerModule("com.240mp.emby",         "embyBackend",        exposed("com.240mp.emby", embyBackend.get()), ctx);
+    appCore.registerModule("com.240mp.ambient_mode", "ambientModeBackend", exposed("com.240mp.ambient_mode", ambientMode.get()), ctx);
+    appCore.registerModule("com.240mp.nfc_reader",   "nfcReaderBackend",   exposed("com.240mp.nfc_reader", nfcReader.get()), ctx);
+    appCore.registerModule("com.240mp.youtube",      "youtubeBackend",     exposed("com.240mp.youtube", youtubeBackend.get()), ctx);
+    appCore.registerModule("com.240mp.weather",      "weatherBackend",     exposed("com.240mp.weather", weatherBackend.get()), ctx);
+    appCore.registerModule("com.240mp.retroarch",    "retroarchBackend",   exposed("com.240mp.retroarch", retroArch.get()), ctx);
+    appCore.registerModule("com.240mp.scripts",      "scriptsBackend",     exposed("com.240mp.scripts", scriptsBackend.get()), ctx);
+    appCore.registerModule("com.240mp.virtual_channels", "virtualChannelsBackend", exposed("com.240mp.virtual_channels", virtualChannels.get()), ctx);
 
     // YouTube resolve telemetry: which resolver served a pair (innertube /
     // ytdlp / cache / negative-cache) and how long it took. Lands in the Pi
     // state log as
     // `yt-resolve vid=… source=… ms=…`; AppCore::note_state is compiled out of
     // release builds, so the cost is one signal emission.
-    QObject::connect(&youtubeBackend, &YouTubeBackend::resolveTelemetry, &appCore,
-                     [&appCore](const QString &videoId, const QString &source, qint64 ms) {
-                         appCore.note_state("yt-resolve",
-                                            QStringLiteral("vid=%1 source=%2 ms=%3")
-                                                .arg(videoId, source).arg(ms));
-                     });
+    if (youtubeBackend) {
+        QObject::connect(youtubeBackend.get(), &YouTubeBackend::resolveTelemetry, &appCore,
+                         [&appCore](const QString &videoId, const QString &source, qint64 ms) {
+                             appCore.note_state("yt-resolve",
+                                                QStringLiteral("vid=%1 source=%2 ms=%3")
+                                                    .arg(videoId, source).arg(ms));
+                         });
+    }
 
     // Idle SponsorBlock fill: the Pi is on all day, so confirm segment windows
     // while nobody is pressing keys. Driven by idleSeconds, NOT by the
@@ -293,13 +346,16 @@ int main(int argc, char *argv[]) {
     // OFF and still want the cache filled. Any input activity stops it at once,
     // so a foreground press never queues behind a background fetch.
     constexpr int kIdleFillAfterSec = 60;
-    QObject::connect(&idleTracker, &IdleTracker::idleSecondsChanged, &youtubeBackend,
-                     [&idleTracker, &youtubeBackend]() {
-                         if (idleTracker.idleSeconds() >= kIdleFillAfterSec)
-                             youtubeBackend.setIdleFillActive(true);
-                     });
-    QObject::connect(&idleTracker, &IdleTracker::activityDetected, &youtubeBackend,
-                     [&youtubeBackend]() { youtubeBackend.setIdleFillActive(false); });
+    if (youtubeBackend) {
+        YouTubeBackend *yt = youtubeBackend.get();
+        QObject::connect(&idleTracker, &IdleTracker::idleSecondsChanged, yt,
+                         [&idleTracker, yt]() {
+                             if (idleTracker.idleSeconds() >= kIdleFillAfterSec)
+                                 yt->setIdleFillActive(true);
+                         });
+        QObject::connect(&idleTracker, &IdleTracker::activityDetected, yt,
+                         [yt]() { yt->setIdleFillActive(false); });
+    }
 
     ctx->setContextProperty("idleTracker",   &idleTracker);
     ctx->setContextProperty("appCore",       &appCore);

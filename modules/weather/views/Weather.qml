@@ -28,6 +28,9 @@ FocusScope {
     property int  screenTimeMs: 10000
 
     property bool twelveHour: false
+    // IPC failure is control-only — mpv keeps playing. Shown as one transient
+    // status-bar row rather than ejecting the user into the Setup screen.
+    property string musicStatusLine: ""
 
     readonly property bool isPreview: !!(navParams && navParams.previewMode)
     readonly property string wxModuleId:
@@ -136,6 +139,13 @@ FocusScope {
         onTriggered: weatherRoot.advance(1)
     }
 
+    // Failure is one-shot per music start; clear the row after a short read.
+    Timer {
+        id: musicStatusClear
+        interval: 5000
+        onTriggered: weatherRoot.musicStatusLine = ""
+    }
+
     Connections {
         target: weatherBackend
         function onLocationError(reason) {
@@ -147,6 +157,12 @@ FocusScope {
             // missing" would be absurd.
             weatherBackend.stopMusic()
             weatherRoot.replaceWith("Setup.qml", { reason: reason })
+        }
+        function onMusicIpcFailed(reason) {
+            // Not locationError: that swaps to Setup and stops music. Here the
+            // audio is fine and only IPC control (duck/pause/volume) is gone.
+            weatherRoot.musicStatusLine = "MUSIC CONTROLS UNAVAILABLE — " + reason
+            musicStatusClear.restart()
         }
     }
 
@@ -220,6 +236,9 @@ FocusScope {
         // duplicated the screen's rows (a rotating DEWPOINT under a static
         // DEWPOINT) and drew the rotating line through the footer area.
         // Status bar keeps its one fixed row: location-local date + clock.
-        lines: []
+        // One exception: a music-IPC failure adds a single transient line so
+        // the user knows duck/pause/volume control is unavailable. Audio is
+        // still playing, so the wording deliberately does not say otherwise.
+        lines: musicStatusLine.length > 0 ? [musicStatusLine] : []
     }
 }

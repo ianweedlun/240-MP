@@ -42,6 +42,12 @@ constexpr int kEvdevKeyBase = 0x02000000;
 // key, so it never generates a QKeyEvent at all. Distinct base, same QHash.
 constexpr int kMouseButtonBase = 0x03000000;
 
+// A level-triggered notifier can re-fire while the fd still has data, so the
+// drain slot only needs to process a bounded slice per activation. Without a
+// budget a writer faster than the slot keeps ::read() returning full events and
+// the GUI thread never gets the event loop back.
+constexpr int kConsumerDrainBudget = 256;
+
 // Analog stick thresholds (of ±32768). Engage above one, release below the
 // other — the gap prevents flutter when the stick rests near the threshold.
 constexpr Sint16 kAxisEngage  = 16384;
@@ -478,7 +484,11 @@ void InputManager::openConsumerControlDevice() {
 
 void InputManager::onConsumerControlReadable() {
     struct input_event ev;
+    int processed = 0;
     for (;;) {
+        if (processed >= kConsumerDrainBudget)
+            break;   // let the event loop run; the notifier re-arms on leftover data
+        ++processed;
         const ssize_t n = ::read(m_consumerFd, &ev, sizeof(ev));
         if (n != ssize_t(sizeof(ev))) {
             if (n < 0 && errno == EINTR)

@@ -34,6 +34,11 @@ static constexpr int kHoldRepeatDelayMs    = 400;
 static constexpr int kHoldRepeatIntervalMs = 100;
 static constexpr int kHoldEndGraceMs       = 250;   // #133: max gap between a release and the next press
 
+// MPV-IPC-READLINE-UNBOUNDED: mpv event lines are small. 64 KiB is ample
+// headroom while bounding QIODevice's read buffer against an unterminated peer
+// line, which otherwise grows 1:1 with the bytes written.
+static constexpr qint64 kMaxIpcLineBytes = 64 * 1024;
+
 MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
                              AppCore *appCore, DisplayHandoff *handoff,
                              QObject *parent)
@@ -101,6 +106,10 @@ MpvController::MpvController(const QString &appRoot, const QString &dataRoot,
            m_hasChannelOsdScript ? "found" : "NOT FOUND");
 
     m_ipc = new QLocalSocket(this);
+    // Bound the read side: without this, a peer that never sends a newline
+    // grows the socket buffer without limit and starves the GUI thread on the
+    // eventual parse. Oversize input is rejected in onIpcReadyRead().
+    m_ipc->setReadBufferSize(kMaxIpcLineBytes);
     connect(m_ipc, &QLocalSocket::connected, this, [this] {
         m_connectTimer->stop();
         m_lastIpcEventMs = QDateTime::currentMSecsSinceEpoch();
@@ -908,8 +917,24 @@ void MpvController::tryConnectIpc() {
 }
 
 void MpvController::onIpcReadyRead() {
+    // A buffer full of unterminated data can never become a line: drop the peer
+    // instead of retaining it. canReadLine() is false for this case, so the
+    // loop below would otherwise never get a chance to reject it.
+    if (!m_ipc->canReadLine() && m_ipc->bytesAvailable() >= kMaxIpcLineBytes) {
+        qWarning("[MpvController] IPC line exceeds %lld bytes — closing socket",
+                 static_cast<long long>(kMaxIpcLineBytes));
+        m_ipc->close();
+        return;
+    }
     while (m_ipc->canReadLine()) {
-        const QByteArray line = m_ipc->readLine().trimmed();
+        QByteArray rawLine = m_ipc->readLine(kMaxIpcLineBytes + 1);
+        if (rawLine.size() > kMaxIpcLineBytes || !rawLine.endsWith('\n')) {
+            qWarning("[MpvController] IPC line exceeds %lld bytes — closing socket",
+                     static_cast<long long>(kMaxIpcLineBytes));
+            m_ipc->close();
+            return;
+        }
+        const QByteArray line = rawLine.trimmed();
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         if (obj.isEmpty()) continue;
         // Window-size replies (Auto Fit display reads) echo our integer

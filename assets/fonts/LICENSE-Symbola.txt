@@ -1,0 +1,19 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: https://dn-works.com/ufas/
+Upstream-Contact: George Douros <g1951d@teilar.gr>
+Comment:
+ Upstream has changed the font license since the packaged version was published.
+
+Files: *
+Copyright:
+ 2007-2015 George Douros
+License: Douros-Free-Font
+ Fonts are free for any use; they may be opened, edited,
+ modified, regenerated, packaged and redistributed.
+
+Files: debian/*
+Copyright:
+ 2007-2017 Alex Myczko <tar@debian.org>
+ 2015 Andrew Shadura <andrewsh@debian.org>
+License: GPL
+ Licensed under the GPL, see `/usr/share/common-licenses/GPL'.

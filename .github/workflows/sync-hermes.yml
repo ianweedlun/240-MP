@@ -3,6 +3,8 @@ on:
   push:
     branches: [dev]
     paths: ['.hermes.md', '.github/workflows/sync-hermes.yml']
+  # Allow a manual retry when a transient remote rejection interrupts the loop.
+  workflow_dispatch:
 
 permissions:
   contents: write
