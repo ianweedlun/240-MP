@@ -335,6 +335,11 @@ private:
     void         browsePlaylist(const QString &playlistId, const QString &cursor,
                                 int page, const QVariantList &acc);
     void         assemblePlaylistFromBrowse(const QString &playlistId, const QVariantList &rows);
+    // Retention bound: clear stale playlists' cached rows before a fresh fetch
+    // is stored, so the total across m_playlists never exceeds the budget.
+    // incomingRows is by reference and is shrunk (possibly to 0) when even
+    // eviction cannot fit; false means no row can be kept this time.
+    bool         evictPlaylistRowsToFit(const QString &keepId, int &incomingRows);
     void         finishPlaylistAggregate();
     QVariantList buildPlaylistList() const;
 
@@ -430,6 +435,11 @@ private:
     static constexpr int    kMaxFeedItems    = 100;
     static constexpr int    kMaxHistoryItems = 100;
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
+    // Global retention ceiling across ALL playlists. Without it a user-editable
+    // file with N distinct ids retains N * kMaxPlaylistItems rows for the whole
+    // session; this keeps the total flat no matter how many ids are read.
+    // Must stay >= kMaxPlaylistItems so one full fetch always fits on its own.
+    static constexpr int    kMaxRetainedPlaylistRows = 2000;
     static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // browse walks are cheap; keep it parallel
     static constexpr int    kMaxPlaylistFileIds = 50;            // caps distinct ids from a user-editable playlist file
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
