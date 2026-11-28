@@ -431,6 +431,7 @@ private:
     static constexpr int    kMaxHistoryItems = 100;
     static constexpr int    kMaxPlaylistItems = 500;             // caps infinite Mix/Radio lists
     static constexpr int    kMaxConcurrentPlaylistFetches = 2;   // browse walks are cheap; keep it parallel
+    static constexpr int    kMaxPlaylistFileIds = 50;            // caps distinct ids from a user-editable playlist file
     static constexpr int kPlaylistFetchTimeoutMs = 60000;
     static constexpr qint64 kUrlSafetyMarginS   = yturl::kSafetyMarginS; // buffer+launch slack
     static constexpr int    kUrlCacheMaxEntries = 80;

@@ -484,8 +484,10 @@ QList<YouTubeBackend::PlaylistFileRef> YouTubeBackend::readPlaylistEntries(QStri
         return {};
     }
     QList<PlaylistFileRef> refs;
-    QStringList seen;
-    while (!f.atEnd()) {
+    QSet<QString> seen;
+    // A user-editable file must not be able to queue an unbounded number of
+    // fetches. Keep the first kMaxPlaylistFileIds distinct ids in file order.
+    while (!f.atEnd() && seen.size() < kMaxPlaylistFileIds) {
         const QString line = QString::fromUtf8(f.readLine()).trimmed();
         if (line.isEmpty() || line.startsWith('#'))
             continue;
@@ -500,7 +502,7 @@ QList<YouTubeBackend::PlaylistFileRef> YouTubeBackend::readPlaylistEntries(QStri
         const QString id = playlistIdFromToken(token);
         if (id.isEmpty() || seen.contains(id))
             continue;
-        seen << id;
+        seen.insert(id);
         refs.append({id, name});
     }
     if (refs.isEmpty() && error)
