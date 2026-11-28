@@ -3,6 +3,7 @@
 #include <QVariant>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QPointer>
 #include <QTimer>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -14,6 +15,14 @@ class PlexBackend : public QObject {
     Q_OBJECT
 public:
     explicit PlexBackend(const QString &appRoot, const QString &dataRoot, QObject *parent = nullptr);
+    ~PlexBackend() override;
+
+    // Test-only seams for PLEX-JWT-REFRESH-LATCH-01. The URL setter redirects
+    // plex.tv auth traffic at a loopback fixture; the watchdog setter clamps
+    // to [300, 60000] ms so a test can never disable the watchdog. Neither has
+    // a production caller.
+    static void setPlexTvUrlForTests(const QString &url);
+    void setAuthWatchdogMsForTests(int ms);
 
     // Sync — no HTTP
     Q_INVOKABLE QString  get_auth_state();
@@ -189,6 +198,8 @@ signals:
     void errorOccurred(const QString &message);
 
 private:
+    friend class PlexJwtRefreshRegressionTest;
+    friend struct Rig;
     void startTranscode(const QString &ratingKey, const QString &partKey,
                         const QString &sessionId, const QString &audioId,
                         const QString &subtitleId, int offsetMs);
@@ -312,6 +323,11 @@ private:
     void checkAndRefreshOnStartup(std::function<void()> callback);
     void migrateLegacyToken(std::function<void()> callback);
     void refreshJwt(std::function<void(bool ok)> callback);
+    // Single finalizer for every auth terminal branch. gen is checked before
+    // touching any state, so a watchdog abort cannot be double-finalized by a
+    // late finished signal.
+    void finishRefresh(quint64 gen, bool ok);
+    void onAuthWatchdogTimeout();
 
     // 498 retry
     void handle498(std::function<void()> retryOp);
@@ -326,6 +342,15 @@ private:
     QString m_pendingPinId;
     QString m_clientId;          // cached after first load
     bool    m_refreshInFlight  = false;
+    // PLEX-JWT-REFRESH-LATCH-01: generation invalidates late finished lambdas,
+    // QPointer auto-nulls an aborted reply, and the watchdog is the hard total
+    // deadline for the two-hop exchange (the 5 s transport deadline is only
+    // inactivity-based and resets on every arriving byte).
+    quint64 m_refreshGeneration = 0;
+    QPointer<QNetworkReply> m_authReply;
+    QTimer  m_authWatchdog;
+    std::function<void(bool)> m_refreshCallback;
+    int     m_authWatchdogMs = 15000;
     bool    m_deviceVerified   = false; // set after first successful plex.tv check per session
     bool    m_serverAuthRetried = false; // guards the one-shot token re-fetch on a PMS 401
 

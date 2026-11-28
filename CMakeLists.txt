@@ -918,6 +918,35 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME plex-playback-decision COMMAND plex-playback-decision)
 
+    # PLEX-JWT-REFRESH-LATCH-01: auth watchdog regression suite. The same cases
+    # build against product source (GREEN) or a pinned pre-fix tree (RED) via
+    # -DPLEXJWT_SOURCE_ROOT=<dir>. RED must fail the recovery cases; GREEN must
+    # pass all of them. Never gate on wall-clock RSS here.
+    set(PLEXJWT_BACKEND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/plex/PlexBackend.cpp")
+    if(PLEXJWT_SOURCE_ROOT)
+        set(PLEXJWT_BACKEND_SRC "${PLEXJWT_SOURCE_ROOT}/src/modules/plex/PlexBackend.cpp")
+    endif()
+    add_executable(plex-jwt-refresh-regression-tests
+        src/tests/plex/PlexJwtRefreshRegressionTest.cpp
+        src/tests/plex/PlexAuthFixture.cpp
+        ${PLEXJWT_BACKEND_SRC}
+        src/util/ConfigFile.cpp)
+    set_target_properties(plex-jwt-refresh-regression-tests PROPERTIES
+        AUTOMOC ON CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    if(PLEXJWT_SOURCE_ROOT)
+        target_include_directories(plex-jwt-refresh-regression-tests PRIVATE
+            ${PLEXJWT_SOURCE_ROOT} src)
+    else()
+        target_include_directories(plex-jwt-refresh-regression-tests PRIVATE src)
+    endif()
+    target_link_libraries(plex-jwt-refresh-regression-tests PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test OpenSSL::Crypto)
+    if(NOT MSVC)
+        target_compile_options(plex-jwt-refresh-regression-tests PRIVATE -Wall -Wextra)
+    endif()
+    add_test(NAME plex-jwt-refresh-regression COMMAND plex-jwt-refresh-regression-tests)
+    set_tests_properties(plex-jwt-refresh-regression PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+
     # Consumer Control drain starvation regression: the shipped slot body is
     # lifted verbatim from src/input/InputManager.cpp at build time (see the
     # generator) so the test follows the product code instead of a paraphrase.

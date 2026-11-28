@@ -24,7 +24,9 @@
 #include <openssl/pem.h>
 #include <openssl/bio.h>
 
-static const QString PLEX_TV = QStringLiteral("https://plex.tv");
+// Test seam: the regression suite repoints auth traffic at a loopback fixture.
+// Mutable only through setPlexTvUrlForTests(); production never calls it.
+static QString PLEX_TV = QStringLiteral("https://plex.tv");
 
 // PLEX-RESPONSE-BODY-CAP-01: one no-progress deadline and two parse caps for
 // Plex replies. setTransferTimeout() restarts on every arriving byte, so a
@@ -35,6 +37,15 @@ static const QString PLEX_TV = QStringLiteral("https://plex.tv");
 static constexpr int kPlexTransferTimeoutMs = 5000;
 static constexpr qint64 kPlexMaxResponseBytes = 64LL * 1024 * 1024;
 static constexpr int kPlexMaxMetadataItems = 10000;
+
+// PLEX-JWT-REFRESH-LATCH-01: hard TOTAL deadline for the two-hop auth exchange.
+// The transport deadline above is inactivity-based — Qt restarts it on every
+// byte — so a peer trickling one byte every few seconds keeps the refresh
+// single-flight guard latched forever. 15 s is 3x the no-progress deadline:
+// enough for a slow-but-progressing exchange, short enough to bound a trickle.
+static constexpr int kPlexAuthWatchdogMs = 15000;
+static constexpr int kPlexAuthWatchdogTestMinMs = 300;
+static constexpr int kPlexAuthWatchdogTestMaxMs = 60000;
 
 // errorOccurred() carries a QString for QML; the uppercase token is the typed
 // part. Callers compose the human context ("LOAD LIBRARY FAILED: " + token).
@@ -99,8 +110,23 @@ PlexBackend::PlexBackend(const QString &appRoot, const QString &dataRoot, QObjec
     , m_nam(new QNetworkAccessManager(this))
     , m_pollTimer(new QTimer(this))
 {
+    m_authWatchdog.setSingleShot(true);
+    connect(&m_authWatchdog, &QTimer::timeout, this, &PlexBackend::onAuthWatchdogTimeout);
     m_pollTimer->setInterval(2000);
     connect(m_pollTimer, &QTimer::timeout, this, &PlexBackend::pollPinTick);
+}
+
+PlexBackend::~PlexBackend() {
+    m_authWatchdog.stop();
+    // No callback during teardown. QPointer + this-context connections keep a
+    // late finished lambda from touching a destroyed backend.
+}
+
+void PlexBackend::setPlexTvUrlForTests(const QString &url) { PLEX_TV = url; }
+
+void PlexBackend::setAuthWatchdogMsForTests(int ms) {
+    m_authWatchdogMs = qBound(kPlexAuthWatchdogTestMinMs, ms,
+                              kPlexAuthWatchdogTestMaxMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,25 +441,40 @@ QString PlexBackend::jwtUserIdClaim(const QString &jwt) {
 // ---------------------------------------------------------------------------
 
 void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
-    if (m_refreshInFlight) { callback(false); return; }
+    // A second caller gets the historical immediate false. Leave guard,
+    // generation and watchdog untouched: the first exchange still owns them.
+    if (m_refreshInFlight) {
+        qDebug("[PlexBackend] JWT refresh already in flight; rejecting concurrent call");
+        callback(false);
+        return;
+    }
+
+    ++m_refreshGeneration;
+    const quint64 gen = m_refreshGeneration;
     m_refreshInFlight = true;
+    m_refreshCallback = std::move(callback);
+    m_authReply = nullptr;
+    m_authWatchdog.start(m_authWatchdogMs);
 
     // Step 1: get nonce
     auto *nonceReply = plexGet(QUrl(PLEX_TV + "/api/v2/auth/nonce"), {});
-    connect(nonceReply, &QNetworkReply::finished, this, [this, nonceReply, callback]() {
+    m_authReply = nonceReply;
+    connect(nonceReply, &QNetworkReply::finished, this,
+            [this, nonceReply, gen]() {
         nonceReply->deleteLater();
+        if (gen != m_refreshGeneration) return; // watchdog already finalized
+        if (m_authReply == nonceReply) m_authReply = nullptr;
+
         if (nonceReply->error() != QNetworkReply::NoError) {
             qWarning("[PlexBackend] JWT refresh: nonce request failed");
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
         QString nonce = QJsonDocument::fromJson(nonceReply->readAll())
                         .object()["nonce"].toString();
         if (nonce.isEmpty()) {
             qWarning("[PlexBackend] JWT refresh: empty nonce");
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
 
@@ -444,8 +485,7 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
         if (!pkey || kid.isEmpty()) {
             qWarning("[PlexBackend] JWT refresh: no private key or key ID");
             if (pkey) EVP_PKEY_free(pkey);
-            m_refreshInFlight = false;
-            callback(false);
+            finishRefresh(gen, false);
             return;
         }
         QString deviceJwt = buildDeviceJwt(pkey, kid, nonce);
@@ -457,20 +497,24 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
         auto *tokenReply = plexPostJson(
             QUrl(PLEX_TV + "/api/v2/auth/token"), {},
             QJsonDocument(body).toJson(QJsonDocument::Compact));
-        connect(tokenReply, &QNetworkReply::finished, this, [this, tokenReply, callback]() {
+        m_authReply = tokenReply;
+        connect(tokenReply, &QNetworkReply::finished, this,
+                [this, tokenReply, gen]() {
             tokenReply->deleteLater();
-            m_refreshInFlight = false;
+            if (gen != m_refreshGeneration) return; // watchdog already finalized
+            if (m_authReply == tokenReply) m_authReply = nullptr;
+
             if (tokenReply->error() != QNetworkReply::NoError) {
                 qWarning("[PlexBackend] JWT refresh: token exchange failed: %s",
                          qPrintable(tokenReply->errorString()));
-                callback(false);
+                finishRefresh(gen, false);
                 return;
             }
             QString newJwt = QJsonDocument::fromJson(tokenReply->readAll())
                              .object()["auth_token"].toString();
             if (newJwt.isEmpty()) {
                 qWarning("[PlexBackend] JWT refresh: empty token in response");
-                callback(false);
+                finishRefresh(gen, false);
                 return;
             }
             qint64 exp = jwtExpClaim(newJwt);
@@ -481,9 +525,31 @@ void PlexBackend::refreshJwt(std::function<void(bool ok)> callback) {
             if (!uid.isEmpty()) a["account_user_id"] = uid;
             saveAuth(a);
             qDebug("[PlexBackend] JWT refreshed, exp=%lld", static_cast<long long>(exp));
-            callback(true);
+            finishRefresh(gen, true);
         });
     });
+}
+
+void PlexBackend::finishRefresh(quint64 gen, bool ok) {
+    if (gen != m_refreshGeneration) return; // stale exchange, already finalized
+    m_authWatchdog.stop();
+    m_authReply = nullptr;
+    m_refreshInFlight = false;               // ALWAYS before the callback
+    auto cb = std::move(m_refreshCallback);
+    m_refreshCallback = nullptr;
+    if (cb) cb(ok);                          // exactly once
+}
+
+void PlexBackend::onAuthWatchdogTimeout() {
+    if (!m_refreshInFlight) return;
+    ++m_refreshGeneration;                   // invalidate both finished lambdas
+    if (auto *r = m_authReply.data()) {
+        m_authReply = nullptr;
+        r->abort();                          // finished fires, sees stale gen
+        r->deleteLater();
+    }
+    qWarning("[PlexBackend] JWT refresh timed out after %d ms", m_authWatchdogMs);
+    finishRefresh(m_refreshGeneration, false); // guard clear + callback(false)
 }
 
 void PlexBackend::checkAndRefreshOnStartup(std::function<void()> callback) {
@@ -574,6 +640,7 @@ void PlexBackend::handle498(std::function<void()> retryOp) {
     if (m_refreshInFlight) {
         // A refresh is already running; once it finishes it will call the retry
         // via the original invoker. This call is a no-op to avoid stacking retries.
+        qDebug("[PlexBackend] concurrent 498 dropped while JWT refresh in flight");
         return;
     }
     refreshJwt([this, retryOp](bool ok) {
